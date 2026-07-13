@@ -5,9 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from cdy_agent.models import Skill
-from cdy_agent.skills.filesystem.skill import get_skill as get_filesystem_skill
 from cdy_agent.skills.notes.skill import get_skill as get_notes_skill
-from cdy_agent.skills.shell.skill import get_skill as get_shell_skill
 from cdy_agent.skills.todo.skill import get_skill as get_todo_skill
 
 
@@ -19,16 +17,7 @@ def load_skills() -> list[Skill]:
     auto-discovery registry can be added in a later milestone.
     """
 
-    return [
-        skill
-        for skill in (
-            get_todo_skill(),
-            get_notes_skill(),
-            get_filesystem_skill(),
-            get_shell_skill(),
-        )
-        if skill.enabled
-    ]
+    return [skill for skill in (get_todo_skill(), get_notes_skill()) if skill.enabled]
 
 
 def load_tools(skills: Iterable[Skill] | None = None) -> list[object]:

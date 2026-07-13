@@ -1,5 +1,6 @@
 """CDY Agent package."""
 
-__all__ = ["__version__"]
+from .agent import Agent, AgentConfig
+from .skills import Skill, SkillRegistry
 
-__version__ = "0.1.0"
+__all__ = ["Agent", "AgentConfig", "Skill", "SkillRegistry"]
