@@ -1,0 +1,25 @@
+[project]
+name = "cdy-agent"
+version = "0.1.0"
+description = "A minimal skill-based AI agent built with the OpenAI Agents SDK."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai-agents>=0.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+cdy-agent = "cdy_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
