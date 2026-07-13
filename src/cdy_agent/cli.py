@@ -1,30 +1,27 @@
-"""Command-line entrypoint for the CDY Agent MVP."""
+"""Command line interface for CDY Agent."""
 
 from __future__ import annotations
 
-import argparse
-import asyncio
+from pathlib import Path
+from typing import Annotated
 
-from cdy_agent.openai_sdk import Runner
+import typer
 
-from cdy_agent.agent import create_agent
+from .agent import Agent, AgentConfig
 
-
-async def run_prompt(prompt: str) -> str:
-    """Run a single prompt through the agent and return the final output."""
-
-    result = await Runner.run(create_agent(), prompt)
-    return result.final_output
+app = typer.Typer(help="Run the CDY personal AI agent.")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the CDY skill-based AI agent.")
-    parser.add_argument("prompt", nargs="+", help="Natural-language task for the agent")
-    args = parser.parse_args()
-
-    prompt = " ".join(args.prompt)
-    print(asyncio.run(run_prompt(prompt)))
+@app.command()
+def run(
+    task: Annotated[str, typer.Argument(help="The task to ask the agent to handle.")],
+    model: Annotated[str, typer.Option(help="OpenAI model name.")] = "gpt-5.6",
+    skills_dir: Annotated[Path, typer.Option(help="Directory containing skill folders.")] = Path("skills"),
+) -> None:
+    """Run one agent task."""
+    agent = Agent(config=AgentConfig(model=model), skill_roots=[skills_dir])
+    typer.echo(agent.run(task))
 
 
 if __name__ == "__main__":
-    main()
+    app()

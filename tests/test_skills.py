@@ -1,40 +1,30 @@
-import asyncio
+from pathlib import Path
 
-from cdy_agent.skills.notes import tools as notes_tools
-from cdy_agent.skills.todo import tools as todo_tools
-
-
-def call_tool(tool, **kwargs):
-    return asyncio.run(tool.on_invoke_tool(None, kwargs))
+from cdy_agent.skills import SkillRegistry
 
 
-def test_todo_skill_lifecycle():
-    todo_tools.reset_todos()
-
-    created = call_tool(todo_tools.add_todo, title="写项目计划", due_date="2026-07-15", priority="high")
-    assert created["id"] == 1
-    assert created["done"] is False
-
-    visible = call_tool(todo_tools.list_todos)
-    assert [item["title"] for item in visible] == ["写项目计划"]
-
-    completed = call_tool(todo_tools.complete_todo, todo_id=1)
-    assert completed["done"] is True
-
-    assert call_tool(todo_tools.list_todos) == []
-
-
-def test_notes_skill_create_and_search():
-    notes_tools.reset_notes()
-
-    created = call_tool(
-        notes_tools.create_note,
-        title="Agent MVP",
-        content="先实现 todo 和 notes skills",
-        tags=["agent", "mvp"],
+def test_discovers_skill_and_builds_tool_schema(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill.\n---\n\nUse this skill for demos.",
+        encoding="utf-8",
     )
-    assert created["id"] == 1
 
-    matches = call_tool(notes_tools.search_notes, query="mvp")
-    assert len(matches) == 1
-    assert matches[0]["title"] == "Agent MVP"
+    registry = SkillRegistry([tmp_path / "skills"])
+
+    schemas = registry.tool_schemas()
+
+    assert schemas[0]["name"] == "skill_demo"
+    assert "Demo skill" in schemas[0]["description"]
+
+
+def test_instruction_only_skill_returns_instructions(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "plan"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("Plan carefully.", encoding="utf-8")
+
+    registry = SkillRegistry([tmp_path / "skills"])
+    registry.discover()
+
+    assert registry.execute_tool("skill_plan", {"task": "anything"}) == "Plan carefully."
