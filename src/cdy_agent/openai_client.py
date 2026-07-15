@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import os
+
 from openai import OpenAI
+
+
+class MissingAPIKeyError(RuntimeError):
+    """Raised when the default OpenAI client has no configured API key."""
 
 
 def generate_reply(
@@ -16,7 +22,13 @@ def generate_reply(
     if not normalized_prompt:
         raise ValueError("Prompt must not be empty.")
 
-    active_client = client if client is not None else OpenAI()
+    if client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key or not api_key.strip():
+            raise MissingAPIKeyError("OPENAI_API_KEY is required.")
+        active_client = OpenAI()
+    else:
+        active_client = client
     response = active_client.responses.create(
         model=model,
         input=normalized_prompt,

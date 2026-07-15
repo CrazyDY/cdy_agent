@@ -10,6 +10,7 @@ from openai import (
 from typer.testing import CliRunner
 
 from cdy_agent import cli
+from cdy_agent import openai_client
 from cdy_agent.cli import app
 
 
@@ -80,7 +81,7 @@ REQUEST = httpx.Request("POST", "https://api.openai.com/v1/responses")
         ),
         (
             OpenAIError("Missing credentials"),
-            "Check OPENAI_API_KEY",
+            "OpenAI client error: Missing credentials",
         ),
         (
             APIConnectionError(request=REQUEST),
@@ -123,3 +124,18 @@ def test_ask_reports_expected_errors(
     assert result.exit_code == 1
     assert result.stdout == ""
     assert expected_message in result.stderr
+
+
+def test_ask_reports_missing_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_generate_reply(prompt: str, *, model: str) -> str:
+        raise openai_client.MissingAPIKeyError("OPENAI_API_KEY is required.")
+
+    monkeypatch.setattr(cli, "generate_reply", fake_generate_reply)
+
+    result = runner.invoke(app, ["ask", "Hello"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Check OPENAI_API_KEY" in result.stderr

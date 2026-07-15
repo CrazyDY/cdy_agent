@@ -14,7 +14,7 @@ from openai import (
 )
 
 from .config import resolve_model
-from .openai_client import generate_reply
+from .openai_client import MissingAPIKeyError, generate_reply
 
 
 app = typer.Typer(help="Run the CDY local personal AI assistant.")
@@ -44,6 +44,8 @@ def ask(
     """Send one prompt and print one model reply."""
     try:
         reply = generate_reply(prompt, model=resolve_model(model))
+    except MissingAPIKeyError:
+        _fail("OpenAI authentication failed. Check OPENAI_API_KEY.")
     except AuthenticationError:
         _fail("OpenAI authentication failed. Check OPENAI_API_KEY.")
     except APIConnectionError:
@@ -56,8 +58,6 @@ def ask(
     except APIError as exc:
         _fail(f"OpenAI request failed: {exc}")
     except OpenAIError as exc:
-        if "Missing credentials" in str(exc):
-            _fail("OpenAI authentication failed. Check OPENAI_API_KEY.")
         _fail(f"OpenAI client error: {exc}")
     except (ValueError, RuntimeError) as exc:
         _fail(str(exc))
