@@ -1,1 +1,0 @@
-"""Notes skill package."""

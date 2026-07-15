@@ -1,1 +1,0 @@
-"""Shell skill package."""
