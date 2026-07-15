@@ -29,6 +29,7 @@ def test_ask_outputs_reply_and_uses_environment_model(
 ) -> None:
     calls: list[tuple[str, str, str]] = []
     monkeypatch.setenv("CDY_AGENT_MODEL", "env-model")
+    monkeypatch.delenv("CDY_AGENT_API_MODE", raising=False)
 
     def fake_generate_reply(
         prompt: str,
@@ -54,6 +55,7 @@ def test_ask_model_option_overrides_environment(
 ) -> None:
     calls: list[tuple[str, str]] = []
     monkeypatch.setenv("CDY_AGENT_MODEL", "env-model")
+    monkeypatch.delenv("CDY_AGENT_API_MODE", raising=False)
 
     def fake_generate_reply(
         prompt: str,
@@ -101,12 +103,25 @@ def test_ask_uses_chat_completions_mode_from_environment(
 def test_ask_reports_invalid_api_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    calls: list[str] = []
     monkeypatch.setenv("CDY_AGENT_API_MODE", "legacy")
+
+    def fake_generate_reply(
+        prompt: str,
+        *,
+        model: str,
+        api_mode: str,
+    ) -> str:
+        calls.append(api_mode)
+        return "Model reply"
+
+    monkeypatch.setattr(cli, "generate_reply", fake_generate_reply)
 
     result = runner.invoke(app, ["ask", "Hello"])
 
     assert result.exit_code == 1
     assert result.stdout == ""
+    assert calls == []
     assert "CDY_AGENT_API_MODE" in result.stderr
     assert "responses" in result.stderr
     assert "chat_completions" in result.stderr
