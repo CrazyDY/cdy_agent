@@ -13,7 +13,7 @@ from openai import (
     RateLimitError,
 )
 
-from .config import resolve_model
+from .config import resolve_api_mode, resolve_model
 from .openai_client import MissingAPIKeyError, generate_reply
 
 
@@ -43,7 +43,11 @@ def ask(
 ) -> None:
     """Send one prompt and print one model reply."""
     try:
-        reply = generate_reply(prompt, model=resolve_model(model))
+        reply = generate_reply(
+            prompt,
+            model=resolve_model(model),
+            api_mode=resolve_api_mode(),
+        )
     except MissingAPIKeyError:
         _fail("OpenAI authentication failed. Check OPENAI_API_KEY.")
     except AuthenticationError:

@@ -27,11 +27,16 @@ def test_cli_help_describes_local_personal_assistant() -> None:
 def test_ask_outputs_reply_and_uses_environment_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, str]] = []
     monkeypatch.setenv("CDY_AGENT_MODEL", "env-model")
 
-    def fake_generate_reply(prompt: str, *, model: str) -> str:
-        calls.append((prompt, model))
+    def fake_generate_reply(
+        prompt: str,
+        *,
+        model: str,
+        api_mode: str,
+    ) -> str:
+        calls.append((prompt, model, api_mode))
         return "Model reply"
 
     monkeypatch.setattr(cli, "generate_reply", fake_generate_reply)
@@ -41,17 +46,22 @@ def test_ask_outputs_reply_and_uses_environment_model(
     assert result.exit_code == 0
     assert result.stdout == "Model reply\n"
     assert result.stderr == ""
-    assert calls == [("Hello", "env-model")]
+    assert calls == [("Hello", "env-model", "responses")]
 
 
 def test_ask_model_option_overrides_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[str] = []
+    calls: list[tuple[str, str]] = []
     monkeypatch.setenv("CDY_AGENT_MODEL", "env-model")
 
-    def fake_generate_reply(prompt: str, *, model: str) -> str:
-        calls.append(model)
+    def fake_generate_reply(
+        prompt: str,
+        *,
+        model: str,
+        api_mode: str,
+    ) -> str:
+        calls.append((model, api_mode))
         return "Model reply"
 
     monkeypatch.setattr(cli, "generate_reply", fake_generate_reply)
@@ -62,7 +72,44 @@ def test_ask_model_option_overrides_environment(
     )
 
     assert result.exit_code == 0
-    assert calls == ["cli-model"]
+    assert calls == [("cli-model", "responses")]
+
+
+def test_ask_uses_chat_completions_mode_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setenv("CDY_AGENT_API_MODE", "chat_completions")
+
+    def fake_generate_reply(
+        prompt: str,
+        *,
+        model: str,
+        api_mode: str,
+    ) -> str:
+        calls.append(api_mode)
+        return "Model reply"
+
+    monkeypatch.setattr(cli, "generate_reply", fake_generate_reply)
+
+    result = runner.invoke(app, ["ask", "Hello"])
+
+    assert result.exit_code == 0
+    assert calls == ["chat_completions"]
+
+
+def test_ask_reports_invalid_api_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_API_MODE", "legacy")
+
+    result = runner.invoke(app, ["ask", "Hello"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "CDY_AGENT_API_MODE" in result.stderr
+    assert "responses" in result.stderr
+    assert "chat_completions" in result.stderr
 
 
 REQUEST = httpx.Request("POST", "https://api.openai.com/v1/responses")
@@ -114,7 +161,12 @@ def test_ask_reports_expected_errors(
     error: Exception,
     expected_message: str,
 ) -> None:
-    def fake_generate_reply(prompt: str, *, model: str) -> str:
+    def fake_generate_reply(
+        prompt: str,
+        *,
+        model: str,
+        api_mode: str,
+    ) -> str:
         raise error
 
     monkeypatch.setattr(cli, "generate_reply", fake_generate_reply)
@@ -129,7 +181,12 @@ def test_ask_reports_expected_errors(
 def test_ask_reports_missing_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_generate_reply(prompt: str, *, model: str) -> str:
+    def fake_generate_reply(
+        prompt: str,
+        *,
+        model: str,
+        api_mode: str,
+    ) -> str:
         raise openai_client.MissingAPIKeyError("OPENAI_API_KEY is required.")
 
     monkeypatch.setattr(cli, "generate_reply", fake_generate_reply)
