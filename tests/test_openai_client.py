@@ -139,6 +139,28 @@ def test_generate_reply_rejects_missing_api_key_before_sdk_factory(
     assert factory_calls == []
 
 
+def test_generate_reply_rejects_invalid_api_mode_before_sdk_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
+    factory_calls: list[bool] = []
+
+    def fake_openai_factory() -> FakeClient:
+        factory_calls.append(True)
+        return FakeClient(responses_output="unused")
+
+    monkeypatch.setattr(openai_client, "OpenAI", fake_openai_factory)
+
+    with pytest.raises(ValueError, match="Unsupported API mode"):
+        generate_reply(
+            "Hello",
+            model="test-model",
+            api_mode="legacy",
+        )
+
+    assert factory_calls == []
+
+
 def test_generate_reply_uses_chat_completions_mode() -> None:
     client = FakeClient(chat_output="Hello from DeepSeek.")
 

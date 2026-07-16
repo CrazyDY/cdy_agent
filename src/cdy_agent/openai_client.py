@@ -1,4 +1,4 @@
-"""Thin OpenAI Responses API boundary."""
+"""Thin OpenAI-compatible Responses and Chat Completions boundary."""
 
 from __future__ import annotations
 

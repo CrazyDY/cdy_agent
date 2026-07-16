@@ -176,6 +176,8 @@ def test_ask_reports_expected_errors(
     error: Exception,
     expected_message: str,
 ) -> None:
+    monkeypatch.delenv("CDY_AGENT_API_MODE", raising=False)
+
     def fake_generate_reply(
         prompt: str,
         *,
@@ -196,6 +198,8 @@ def test_ask_reports_expected_errors(
 def test_ask_reports_missing_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("CDY_AGENT_API_MODE", raising=False)
+
     def fake_generate_reply(
         prompt: str,
         *,
