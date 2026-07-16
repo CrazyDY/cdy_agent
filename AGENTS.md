@@ -26,7 +26,7 @@ Do not add real credentials to source files, tests, command examples, logs, or `
 
 ## Build, Test, and Development Commands
 
-The repository tracks `uv.lock`; prefer `uv` so contributors resolve the same dependency versions. Update the lockfile through `uv sync` or another appropriate `uv` command, never by editing it manually.
+The repository tracks `uv.lock`; prefer `uv` so contributors resolve the same dependency versions. Update the lockfile through `uv sync` or another appropriate `uv` command, never by editing it manually. For shared lockfile updates, pass `--default-index https://pypi.org/simple` unless a later approved repository policy changes the index.
 
 - `uv sync --extra dev` — create or update the environment with development dependencies.
 - `uv run pytest` — run the complete offline test suite.
