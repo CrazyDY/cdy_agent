@@ -51,6 +51,14 @@ class StoredConversation:
     messages: tuple[Message, ...]
 
 
+@dataclass(frozen=True)
+class ConversationSummary:
+    id: str
+    updated_at: str
+    message_count: int
+    preview: str
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -73,6 +81,29 @@ def _canonical_uuid(value: str) -> str:
     if str(parsed) != value:
         raise ConversationStoreError("Session ID must be a complete UUID.")
     return value
+
+
+def _require_timestamp(value: object) -> str:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise InvalidConversationStoreError(
+            "Stored conversation timestamp is invalid."
+        )
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as error:
+        raise InvalidConversationStoreError(
+            "Stored conversation timestamp is invalid."
+        ) from error
+    if parsed.tzinfo != timezone.utc:
+        raise InvalidConversationStoreError(
+            "Stored conversation timestamp is invalid."
+        )
+    return value
+
+
+def _preview(content: str) -> str:
+    collapsed = " ".join(content.split())
+    return collapsed if len(collapsed) <= 80 else collapsed[:79] + "…"
 
 
 class ConversationStore:
@@ -110,18 +141,17 @@ class ConversationStore:
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 else:
                     self._require_schema(connection)
-                row = connection.execute(
-                    "SELECT COUNT(*), MIN(sequence), MAX(sequence) "
-                    "FROM messages WHERE session_id = ?",
+                existing_session = connection.execute(
+                    "SELECT created_at, updated_at FROM sessions WHERE id = ?",
                     (session_id,),
                 ).fetchone()
-                assert row is not None
-                count, minimum, maximum = row
-                if count == 0:
-                    existing = connection.execute(
-                        "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
-                    ).fetchone()
-                    if existing is not None:
+                message_rows = connection.execute(
+                    "SELECT sequence, role, content FROM messages "
+                    "WHERE session_id = ? ORDER BY sequence",
+                    (session_id,),
+                ).fetchall()
+                if existing_session is None:
+                    if message_rows:
                         raise InvalidConversationStoreError(
                             "Stored conversation history is invalid."
                         )
@@ -131,11 +161,10 @@ class ConversationStore:
                     )
                     sequence = 0
                 else:
-                    if count % 2 or minimum != 0 or maximum != count - 1:
-                        raise InvalidConversationStoreError(
-                            "Stored conversation history is invalid."
-                        )
-                    sequence = count
+                    _require_timestamp(existing_session[0])
+                    _require_timestamp(existing_session[1])
+                    existing_messages = self._validated_messages(message_rows)
+                    sequence = len(existing_messages)
                     connection.execute(
                         "UPDATE sessions SET updated_at = ? WHERE id = ?",
                         (timestamp, session_id),
@@ -167,6 +196,8 @@ class ConversationStore:
                 ).fetchone()
                 if row is None:
                     raise ConversationNotFoundError("Conversation not found.")
+                created_at = _require_timestamp(row[0])
+                updated_at = _require_timestamp(row[1])
                 message_rows = connection.execute(
                     "SELECT sequence, role, content FROM messages "
                     "WHERE session_id = ? ORDER BY sequence",
@@ -179,7 +210,65 @@ class ConversationStore:
                 "Could not read conversation data."
             ) from error
         messages = self._validated_messages(message_rows)
-        return StoredConversation(session_id, row[0], row[1], messages)
+        return StoredConversation(session_id, created_at, updated_at, messages)
+
+    def list_summaries(self) -> tuple[ConversationSummary, ...]:
+        path = self._database_path(create=False)
+        if path is None:
+            return ()
+        try:
+            with sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True) as connection:
+                self._require_schema(connection)
+                rows = connection.execute(
+                    "SELECT id, created_at, updated_at FROM sessions "
+                    "ORDER BY updated_at DESC, id ASC"
+                ).fetchall()
+                summaries: list[ConversationSummary] = []
+                for session_id, created_at, updated_at in rows:
+                    _canonical_uuid(session_id)
+                    _require_timestamp(created_at)
+                    message_rows = connection.execute(
+                        "SELECT sequence, role, content FROM messages "
+                        "WHERE session_id = ? ORDER BY sequence",
+                        (session_id,),
+                    ).fetchall()
+                    messages = self._validated_messages(message_rows)
+                    summaries.append(
+                        ConversationSummary(
+                            id=session_id,
+                            updated_at=_require_timestamp(updated_at),
+                            message_count=len(messages),
+                            preview=_preview(messages[0].content),
+                        )
+                    )
+                return tuple(summaries)
+        except ConversationStoreError:
+            raise
+        except sqlite3.Error as error:
+            raise InvalidConversationStoreError(
+                "Could not read conversation data."
+            ) from error
+
+    def delete(self, session_id: str) -> None:
+        session_id = _canonical_uuid(session_id)
+        path = self._database_path(create=False)
+        if path is None:
+            raise ConversationNotFoundError("Conversation not found.")
+        try:
+            with sqlite3.connect(path) as connection:
+                connection.execute("PRAGMA foreign_keys = ON")
+                self._require_schema(connection)
+                cursor = connection.execute(
+                    "DELETE FROM sessions WHERE id = ?", (session_id,)
+                )
+                if cursor.rowcount != 1:
+                    raise ConversationNotFoundError("Conversation not found.")
+        except ConversationStoreError:
+            raise
+        except sqlite3.Error as error:
+            raise ConversationStoreError(
+                "Could not delete conversation data."
+            ) from error
 
     def _database_path(self, *, create: bool) -> Path | None:
         data_directory = self.workspace / DATA_DIRECTORY
