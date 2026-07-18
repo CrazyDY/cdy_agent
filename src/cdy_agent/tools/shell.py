@@ -79,9 +79,12 @@ def _limited_output(output: str) -> tuple[str, bool]:
 class ShellTool:
     workspace: Path
     runner: Runner = subprocess.run
-    name: str = "shell"
-    description: str = "Run an allowlisted command in the workspace."
+    name: str = field(default="shell", init=False)
+    description: str = field(
+        default="Run an allowlisted command in the workspace.", init=False
+    )
     parameters: dict[str, Any] = field(
+        init=False,
         default_factory=lambda: {
             "type": "object",
             "properties": {
@@ -96,7 +99,7 @@ class ShellTool:
             "additionalProperties": False,
         }
     )
-    requires_confirmation: bool = True
+    requires_confirmation: bool = field(default=True, init=False)
 
     def __post_init__(self) -> None:
         self.workspace = self.workspace.resolve()

@@ -1,9 +1,16 @@
 import subprocess
+from inspect import signature
 from pathlib import Path
 
 import pytest
 
 from cdy_agent.tools.shell import MAX_OUTPUT_CHARS, ShellTool
+
+
+def test_shell_constructor_cannot_disable_confirmation(tmp_path: Path) -> None:
+    assert tuple(signature(ShellTool).parameters) == ("workspace", "runner")
+    with pytest.raises(TypeError):
+        ShellTool(tmp_path, requires_confirmation=False)  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize(
@@ -119,8 +126,8 @@ def test_shell_maps_nonzero_exit_to_command_failed(tmp_path: Path) -> None:
 
 
 def test_shell_truncates_stdout_and_stderr_independently(tmp_path: Path) -> None:
-    stdout = "a" * (MAX_OUTPUT_CHARS + 1)
-    stderr = "b" * MAX_OUTPUT_CHARS
+    stdout = "a" * MAX_OUTPUT_CHARS
+    stderr = "b" * (MAX_OUTPUT_CHARS + 1)
 
     def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 0, stdout, stderr)
@@ -128,8 +135,8 @@ def test_shell_truncates_stdout_and_stderr_independently(tmp_path: Path) -> None
     result = ShellTool(tmp_path, runner=runner).execute({"argv": ["ls"]})
     assert result.data == {
         "returncode": 0,
-        "stdout": "a" * MAX_OUTPUT_CHARS,
-        "stderr": stderr,
-        "stdout_truncated": True,
-        "stderr_truncated": False,
+        "stdout": stdout,
+        "stderr": "b" * MAX_OUTPUT_CHARS,
+        "stdout_truncated": False,
+        "stderr_truncated": True,
     }
