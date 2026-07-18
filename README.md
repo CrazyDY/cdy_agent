@@ -4,7 +4,7 @@ CDY Agent 是一个本地个人 AI 助理项目，通过渐进式开发学习实
 
 ## 当前阶段
 
-项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和进程内多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具。模型还可以从工作区发现并按需激活 Skills；带 Python 工具的 Skill 在当前进程首次加载前需要用户明确授权。持久化会话和长期记忆将在后续阶段加入。
+项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具。模型还可以从工作区发现并按需激活 Skills；带 Python 工具的 Skill 在当前进程首次加载前需要用户明确授权。`chat` 会话现在按 workspace 持久化，长期记忆仍属于后续工作。
 
 ## 配置
 
@@ -37,7 +37,7 @@ uv run cdy-agent ask "读取 README.md 并总结"
 uv run cdy-agent ask "检查仓库状态" --workspace .
 ```
 
-启动进程内多轮会话：
+启动多轮会话：
 
 ```powershell
 uv run cdy-agent chat
@@ -45,7 +45,25 @@ uv run cdy-agent chat --model gpt-5.6-luna
 uv run cdy-agent chat --workspace .
 ```
 
-在会话中输入 `/exit`、`/quit`，或发送 EOF 即可退出。会话历史只保留在当前进程中。
+在会话中输入 `/exit`、`/quit`，或发送 EOF 即可退出。
+
+```powershell
+# 开始并持久化一个新会话
+uv run cdy-agent chat --workspace .
+
+# 查看会话，再用完整 ID 恢复或删除
+uv run cdy-agent sessions list --workspace .
+uv run cdy-agent chat --resume 52c809c6-6e55-4ff1-9220-e4f90a4f6774 --workspace .
+uv run cdy-agent sessions delete 52c809c6-6e55-4ff1-9220-e4f90a4f6774 --workspace .
+```
+
+### 持久化会话
+
+`chat` 只在模型成功回复后保存完整的用户/助手轮次。直接退出、模型失败或保存失败不会留下空会话或半个轮次；保存失败的助手回复不会显示。
+
+会话数据库位于 `<workspace>/.cdy-agent/cdy-agent.sqlite3`。`sessions list` 不会为了空结果创建数据库。恢复和删除必须使用完整会话 ID，删除操作默认拒绝并需要用户确认。
+
+`ask` 仍然是无状态命令。首版不提供自动恢复、重命名、搜索、导出、分页、摘要或长期记忆。
 
 ### 本地工具与安全边界
 
