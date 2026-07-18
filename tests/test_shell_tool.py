@@ -43,6 +43,11 @@ def test_shell_rejects_disallowed_commands(tmp_path: Path, argv: list[str]) -> N
         ["sed", "--expression=1e id", "file"],
         ["git", "diff", "--ext-diff"],
         ["git", "-c", "diff.external=id", "diff"],
+        ["sed", "-e", "s/.*/touch owned/e", "file"],
+        ["sed", "s|x|y|e", "file"],
+        ["sed", "p\ne touch owned", "file"],
+        ["sed", "-f", "commands.sed", "file"],
+        ["sed", "--file=commands.sed", "file"],
     ],
 )
 def test_shell_rejects_execution_delegation_without_runner(
@@ -85,9 +90,19 @@ def test_shell_invokes_runner_without_shell(tmp_path: Path) -> None:
     )
 
     assert result.ok is True
+    environment = calls[0].pop("env")
+    assert isinstance(environment, dict)
+    assert environment["GIT_PAGER"] == "cat"
+    assert environment["PAGER"] == "cat"
+    assert "GIT_EXTERNAL_DIFF" not in environment
+    assert "RIPGREP_CONFIG_PATH" not in environment
+    assert "PATH" in environment
     assert calls == [
         {
-            "argv": ["git", "status", "--short"],
+            "argv": [
+                "git", "--no-pager", "-c", "core.fsmonitor=false",
+                "status", "--short",
+            ],
             "cwd": tmp_path.resolve(),
             "shell": False,
             "capture_output": True,
@@ -106,7 +121,7 @@ def test_shell_metacharacters_are_plain_arguments(tmp_path: Path) -> None:
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     ShellTool(tmp_path, runner=runner).execute({"argv": ["rg", "|", "."]})
-    assert calls == [["rg", "|", "."]]
+    assert calls == [["rg", "--no-config", "|", "."]]
 
 
 def test_shell_uses_default_timeout(tmp_path: Path) -> None:
@@ -181,8 +196,51 @@ def test_shell_confirmation_names_exact_argv_and_workspace(tmp_path: Path) -> No
     description = ShellTool(tmp_path).confirmation_description(
         {"argv": ["rg", "x y", "."]}
     )
-    assert repr(["rg", "x y", "."]) in description
+    assert repr(["rg", "--no-config", "x y", "."]) in description
     assert str(tmp_path.resolve()) in description
+
+
+@pytest.mark.parametrize(
+    ("user_argv", "effective_argv"),
+    [
+        (["rg", "x"], ["rg", "--no-config", "x"]),
+        (
+            ["git", "status", "--short"],
+            ["git", "--no-pager", "-c", "core.fsmonitor=false", "status", "--short"],
+        ),
+        (
+            ["git", "diff", "--", "file"],
+            [
+                "git", "--no-pager", "-c", "core.fsmonitor=false", "diff",
+                "--no-ext-diff", "--no-textconv", "--", "file",
+            ],
+        ),
+    ],
+)
+def test_shell_confirmation_and_execution_use_effective_argv(
+    tmp_path: Path, user_argv: list[str], effective_argv: list[str]
+) -> None:
+    calls: list[list[str]] = []
+    tool = ShellTool(
+        tmp_path,
+        runner=lambda argv, **kwargs: calls.append(argv)
+        or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    assert repr(effective_argv) in tool.confirmation_description({"argv": user_argv})
+    assert tool.execute({"argv": user_argv}).ok
+    assert calls == [effective_argv]
+
+
+@pytest.mark.parametrize("script", ["p", "1,3p", "s/x/y/g", "s|x|y|gi"])
+def test_shell_retains_safe_sed_scripts(tmp_path: Path, script: str) -> None:
+    calls: list[list[str]] = []
+    tool = ShellTool(
+        tmp_path,
+        runner=lambda argv, **kwargs: calls.append(argv)
+        or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    assert tool.execute({"argv": ["sed", "-e", script, "file"]}).ok
+    assert calls == [["sed", "-e", script, "file"]]
 
 
 def test_registry_rejects_disallowed_shell_before_confirmation(tmp_path: Path) -> None:

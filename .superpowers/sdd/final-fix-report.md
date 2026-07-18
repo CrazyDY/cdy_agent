@@ -45,3 +45,25 @@ Result: collection failed as expected because `MAX_OUTPUT_BYTES` did not exist. 
 - Path resolution retains the approved v1 `Path.resolve` semantics; no TOCTOU/openat expansion was introduced.
 - No provider abstraction, API mode, CLI, documentation, or limit changes beyond the requested fixes.
 - Existing untracked scratch review artifacts were not modified.
+
+## Second final fix wave
+
+### RED evidence
+
+Command:
+
+`UV_CACHE_DIR=/tmp/cdy-agent-final-fix-cache uv run pytest tests/test_shell_tool.py tests/test_filesystem_tools.py -q`
+
+Result: `10 failed, 60 passed`. Five newly covered sed execution forms reached the injected runner, git/rg execution still received raw argv, and confirmation still described raw rather than effective argv. The real registry create/overwrite confirmation test already passed.
+
+### GREEN evidence
+
+- Focused shell/filesystem suite: `74 passed in 0.06s`.
+- Full suite: `178 passed in 0.45s`.
+- Sed now rejects script files, multiline scripts, standalone `e`, and substitution `e` flags while retaining ordinary print and substitution scripts.
+- Git status/diff and rg use enforced, single-injection effective argv; confirmation describes exactly that argv.
+- The runner environment preserves `PATH`, removes `GIT_EXTERNAL_DIFF` and `RIPGREP_CONFIG_PATH`, and neutralizes git/general pagers.
+- Real registry create and explicit overwrite calls require confirmation; denial preserves the original and approval replaces it.
+- Both CLI help checks exited successfully.
+- The sandboxed build retry was network-denied; the approved retry built the sdist and wheel successfully.
+- `git diff --check` exited successfully.

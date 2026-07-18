@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -91,6 +92,15 @@ def _command_is_allowed(argv: list[str]) -> bool:
 
 
 def _sed_can_execute(arguments: list[str]) -> bool:
+    if any("\n" in argument or "\r" in argument for argument in arguments):
+        return True
+    if any(
+        argument in {"-f", "--file"}
+        or argument.startswith("--file=")
+        or (argument.startswith("-f") and argument != "-f")
+        for argument in arguments
+    ):
+        return True
     scripts: list[str] = []
     index = 0
     while index < len(arguments):
@@ -106,11 +116,53 @@ def _sed_can_execute(arguments: list[str]) -> bool:
         elif not argument.startswith("-") and not scripts:
             scripts.append(argument)
         index += 1
-    return any(
-        re.search(r"(?:^|[;}])\s*(?:\d+(?:,\d+)?\s*)?e(?:\s|$)", script)
-        is not None
-        for script in scripts
-    )
+    return any(_sed_script_can_execute(script) for script in scripts)
+
+
+def _sed_script_can_execute(script: str) -> bool:
+    for command in script.replace("}", ";").split(";"):
+        command = re.sub(r"^\s*\d+(?:,\d+)?\s*", "", command)
+        if re.match(r"^e(?:\s|$)", command):
+            return True
+        if command.startswith("s") and _sed_substitution_has_execute_flag(command):
+            return True
+    return False
+
+
+def _sed_substitution_has_execute_flag(command: str) -> bool:
+    if len(command) < 2 or command[1].isalnum() or command[1].isspace():
+        return False
+    delimiter = command[1]
+    delimiter_count = 0
+    escaped = False
+    for index, character in enumerate(command[2:], start=2):
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == delimiter:
+            delimiter_count += 1
+            if delimiter_count == 2:
+                return "e" in command[index + 1:].strip()
+    return False
+
+
+def _effective_argv(argv: list[str]) -> list[str]:
+    if argv[0] == "rg":
+        return ["rg", "--no-config", *argv[1:]]
+    if argv[0] == "git":
+        prefix = ["git", "--no-pager", "-c", "core.fsmonitor=false", argv[1]]
+        safety = ["--no-ext-diff", "--no-textconv"] if argv[1] == "diff" else []
+        return [*prefix, *safety, *argv[2:]]
+    return list(argv)
+
+
+def _sanitized_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    environment.pop("GIT_EXTERNAL_DIFF", None)
+    environment.pop("RIPGREP_CONFIG_PATH", None)
+    environment.update({"GIT_PAGER": "cat", "PAGER": "cat"})
+    return environment
 
 
 def _limited_output(output: str) -> tuple[str, bool]:
@@ -151,7 +203,12 @@ class ShellTool:
         self.workspace = self.workspace.resolve()
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
-        argv = arguments.get("argv", [])
+        validated = _validate_arguments(arguments)
+        argv = (
+            arguments.get("argv", [])
+            if isinstance(validated, ToolResult)
+            else _effective_argv(validated[0])
+        )
         return f"Run command {argv!r} in workspace {self.workspace}."
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
@@ -169,12 +226,13 @@ class ShellTool:
         validated = _validate_arguments(arguments)
         if isinstance(validated, ToolResult):
             return validated
-        argv, timeout = validated
-        if not _command_is_allowed(argv):
+        user_argv, timeout = validated
+        if not _command_is_allowed(user_argv):
             return ToolResult.failure(
                 "command_not_allowed", "Command is not in the allowlist."
             )
 
+        argv = _effective_argv(user_argv)
         try:
             completed = self.runner(
                 argv,
@@ -182,6 +240,7 @@ class ShellTool:
                 shell=False,
                 capture_output=True,
                 text=True,
+                env=_sanitized_environment(),
                 timeout=timeout,
                 check=False,
             )

@@ -233,6 +233,38 @@ def test_registry_rejects_bad_writes_before_confirmation(tmp_path: Path) -> None
     assert calls == []
 
 
+def test_registry_confirms_real_write_create_and_overwrite(tmp_path: Path) -> None:
+    from cdy_agent.tools.base import ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    target = tmp_path / "note.txt"
+    requests: list[object] = []
+    registry = ToolRegistry([WriteFileTool(tmp_path)])
+    created = registry.execute(
+        ToolCall("1", "write_file", '{"path":"note.txt","content":"old"}'),
+        lambda request: requests.append(request) or True,
+    )
+    assert created.ok and len(requests) == 1
+    denied = registry.execute(
+        ToolCall(
+            "2", "write_file",
+            '{"path":"note.txt","content":"denied","overwrite":true}',
+        ),
+        lambda request: requests.append(request) or False,
+    )
+    assert denied.code == "approval_denied"
+    assert target.read_text() == "old"
+    approved = registry.execute(
+        ToolCall(
+            "3", "write_file",
+            '{"path":"note.txt","content":"new","overwrite":true}',
+        ),
+        lambda request: requests.append(request) or True,
+    )
+    assert approved.ok
+    assert target.read_text() == "new"
+
+
 def test_write_file_maps_oserror_to_structured_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
