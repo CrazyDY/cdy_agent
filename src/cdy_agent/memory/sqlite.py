@@ -221,12 +221,13 @@ class ConversationStore:
                 self._require_schema(connection)
                 rows = connection.execute(
                     "SELECT id, created_at, updated_at FROM sessions "
-                    "ORDER BY updated_at DESC, id ASC"
+                    "ORDER BY id ASC"
                 ).fetchall()
-                summaries: list[ConversationSummary] = []
+                summaries: list[tuple[datetime, ConversationSummary]] = []
                 for session_id, created_at, updated_at in rows:
                     _canonical_uuid(session_id)
                     _require_timestamp(created_at)
+                    validated_updated_at = _require_timestamp(updated_at)
                     message_rows = connection.execute(
                         "SELECT sequence, role, content FROM messages "
                         "WHERE session_id = ? ORDER BY sequence",
@@ -234,14 +235,20 @@ class ConversationStore:
                     ).fetchall()
                     messages = self._validated_messages(message_rows)
                     summaries.append(
-                        ConversationSummary(
-                            id=session_id,
-                            updated_at=_require_timestamp(updated_at),
-                            message_count=len(messages),
-                            preview=_preview(messages[0].content),
+                        (
+                            datetime.fromisoformat(
+                                validated_updated_at[:-1] + "+00:00"
+                            ),
+                            ConversationSummary(
+                                id=session_id,
+                                updated_at=validated_updated_at,
+                                message_count=len(messages),
+                                preview=_preview(messages[0].content),
+                            ),
                         )
                     )
-                return tuple(summaries)
+                summaries.sort(key=lambda item: item[0], reverse=True)
+                return tuple(summary for _, summary in summaries)
         except ConversationStoreError:
             raise
         except sqlite3.Error as error:

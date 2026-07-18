@@ -102,6 +102,28 @@ def test_list_summaries_is_lazy_sorted_and_truncates_preview(tmp_path: Path) -> 
     assert len(summaries[0].preview) == 80
 
 
+def test_list_summaries_sorts_mixed_timestamp_precisions_chronologically(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    older = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
+    newer = "8eef1fd0-bcfa-45fe-99af-fbd6c9bd4027"
+    store.append_turn(older, Message("user", "older"), Message("assistant", "a"))
+    store.append_turn(newer, Message("user", "newer"), Message("assistant", "b"))
+    database = tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            ("2026-07-18T08:30:00Z", older),
+        )
+        connection.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            ("2026-07-18T08:30:00.900000Z", newer),
+        )
+
+    assert [item.id for item in store.list_summaries()] == [newer, older]
+
+
 def test_delete_removes_session_and_messages(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     session_id = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
@@ -112,6 +134,12 @@ def test_delete_removes_session_and_messages(tmp_path: Path) -> None:
     with pytest.raises(ConversationNotFoundError):
         store.load(session_id)
     assert store.list_summaries() == ()
+    database = tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
+    with sqlite3.connect(database) as connection:
+        message_count = connection.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,)
+        ).fetchone()[0]
+    assert message_count == 0
 
 
 def test_delete_missing_session_does_not_create_store(tmp_path: Path) -> None:
