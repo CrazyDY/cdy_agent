@@ -2,6 +2,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from cdy_agent.tools.base import ConfirmationRequest, ToolCall, ToolResult
 from cdy_agent.tools.registry import ToolRegistry
 
@@ -78,3 +80,92 @@ def test_registry_preflights_before_confirmation() -> None:
     )
     assert result.code == "invalid_arguments"
     assert requests == []
+
+
+def test_register_many_adds_valid_tools_in_order() -> None:
+    registry = ToolRegistry([EchoTool(name="first")])
+
+    result = registry.register_many([EchoTool(name="second"), EchoTool(name="third")])
+
+    assert result == ToolResult.success({"names": ["second", "third"]})
+    assert [item["name"] for item in registry.definitions] == ["first", "second", "third"]
+
+
+def test_register_many_is_atomic_on_name_conflict() -> None:
+    registry = ToolRegistry([EchoTool(name="existing")])
+
+    result = registry.register_many([EchoTool(name="new"), EchoTool(name="existing")])
+
+    assert result.code == "tool_name_conflict"
+    assert [item["name"] for item in registry.definitions] == ["existing"]
+
+
+def test_register_many_rejects_invalid_tool_without_mutation() -> None:
+    registry = ToolRegistry([EchoTool(name="existing")])
+    invalid = EchoTool(name="new")
+    invalid.parameters = []  # type: ignore[assignment]
+
+    result = registry.register_many([invalid])
+
+    assert result.code == "invalid_tools"
+    assert [item["name"] for item in registry.definitions] == ["existing"]
+
+
+def test_register_many_rejects_duplicate_candidates_atomically() -> None:
+    registry = ToolRegistry([EchoTool(name="existing")])
+
+    result = registry.register_many([EchoTool(name="new"), EchoTool(name="new")])
+
+    assert result.code == "tool_name_conflict"
+    assert [item["name"] for item in registry.definitions] == ["existing"]
+
+
+@pytest.mark.parametrize("name", ["", "Upper", "has-dash", "1starts_with_digit", "a" * 65])
+def test_register_many_rejects_invalid_tool_names(name: str) -> None:
+    registry = ToolRegistry([EchoTool(name="existing")])
+
+    result = registry.register_many([EchoTool(name=name)])
+
+    assert result.code == "invalid_tools"
+    assert [item["name"] for item in registry.definitions] == ["existing"]
+
+
+@pytest.mark.parametrize(
+    ("attribute", "invalid_value"),
+    [
+        ("description", ""),
+        ("description", None),
+        ("parameters", []),
+        ("requires_confirmation", 0),
+        ("preflight", None),
+        ("confirmation_description", None),
+        ("execute", None),
+    ],
+)
+def test_register_many_prevalidates_the_complete_tool_contract(
+    attribute: str, invalid_value: object
+) -> None:
+    registry = ToolRegistry([EchoTool(name="existing")])
+    invalid = EchoTool(name="new")
+    setattr(invalid, attribute, invalid_value)
+
+    result = registry.register_many([invalid])
+
+    assert result.code == "invalid_tools"
+    assert [item["name"] for item in registry.definitions] == ["existing"]
+
+
+@pytest.mark.parametrize("error_type", [TypeError, RuntimeError])
+def test_register_many_handles_failure_while_materializing_iterable(
+    error_type: type[Exception],
+) -> None:
+    registry = ToolRegistry([EchoTool(name="existing")])
+
+    def broken_tools() -> Any:
+        yield EchoTool(name="new")
+        raise error_type("factory failed")
+
+    result = registry.register_many(broken_tools())
+
+    assert result.code == "invalid_tools"
+    assert [item["name"] for item in registry.definitions] == ["existing"]
