@@ -30,7 +30,7 @@
 - 修改 `tests/test_cli.py`：覆盖 REPL 成功、退出、空输入、配置和错误行为。
 - 修改 `README.md`：用中文说明当前阶段与 `ask`、`chat` 用法。
 
-### 任务 1：标准消息与内存会话
+### Task 1：标准消息与内存会话
 
 **文件：**
 - 新建：`src/cdy_agent/conversation.py`
@@ -206,7 +206,7 @@ git add -- src/cdy_agent/conversation.py tests/test_conversation.py
 git commit -m "Add in-memory conversation state"
 ```
 
-### 任务 2：双 API 多轮请求边界
+### Task 2：双 API 多轮请求边界
 
 **文件：**
 - 修改：`src/cdy_agent/openai_client.py`
@@ -432,7 +432,7 @@ git add -- src/cdy_agent/openai_client.py tests/test_openai_client.py
 git commit -m "Support multi-turn API requests"
 ```
 
-### 任务 3：交互式 chat 命令
+### Task 3：交互式 chat 命令
 
 **文件：**
 - 修改：`src/cdy_agent/cli.py`
@@ -796,7 +796,7 @@ git add -- src/cdy_agent/cli.py tests/test_cli.py
 git commit -m "Add interactive multi-turn chat"
 ```
 
-### 任务 4：中文使用文档与阶段验收
+### Task 4：中文使用文档与阶段验收
 
 **文件：**
 - 修改：`README.md`
