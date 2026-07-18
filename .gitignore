@@ -3,4 +3,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 .worktrees/
+.superpowers/sdd/
 .env
