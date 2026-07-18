@@ -105,9 +105,17 @@ class ModelGateway:
             ]
 
         response = self.client.responses.create(**request)
+        try:
+            output_items = tuple(getattr(response, "output", ()))
+        except TypeError:
+            raise RuntimeError("OpenAI returned an unsupported response.") from None
         calls = tuple(
-            _tool_call(item.call_id, item.name, item.arguments)
-            for item in getattr(response, "output", ())
+            _tool_call(
+                getattr(item, "call_id", None),
+                getattr(item, "name", None),
+                getattr(item, "arguments", None),
+            )
+            for item in output_items
             if getattr(item, "type", None) == "function_call"
         )
         if calls:
@@ -151,12 +159,14 @@ class ModelGateway:
         response = self.client.chat.completions.create(**request)
         try:
             message = response.choices[0].message
-        except (AttributeError, IndexError):
+        except (AttributeError, IndexError, TypeError):
             return _final_response(None)
-        calls = tuple(
-            _tool_call(item.id, item.function.name, item.function.arguments)
-            for item in (getattr(message, "tool_calls", None) or ())
-        )
+        raw_calls = getattr(message, "tool_calls", None) or ()
+        try:
+            call_items = tuple(raw_calls)
+        except TypeError:
+            raise RuntimeError("OpenAI returned an unsupported response.") from None
+        calls = tuple(_chat_response_tool_call(item) for item in call_items)
         if calls:
             content = getattr(message, "content", None)
             if content is not None and not isinstance(content, str):
@@ -185,6 +195,15 @@ def _chat_tool_call(call: ToolCall) -> dict[str, Any]:
         "type": "function",
         "function": {"name": call.name, "arguments": call.arguments_json},
     }
+
+
+def _chat_response_tool_call(item: object) -> ToolCall:
+    function = getattr(item, "function", None)
+    return _tool_call(
+        getattr(item, "id", None),
+        getattr(function, "name", None),
+        getattr(function, "arguments", None),
+    )
 
 
 def _final_response(text: object) -> FinalResponse:

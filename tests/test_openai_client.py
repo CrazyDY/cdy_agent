@@ -514,6 +514,94 @@ def test_gateway_rejects_invalid_tool_call_fields(
         gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
 
 
+@pytest.mark.parametrize("output", [None, 42])
+def test_responses_gateway_maps_non_iterable_output_to_unsupported(
+    output: object,
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeResponsesSequence(SimpleNamespace(
+        id="response-1", output_text=None, output=output
+    ))
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="responses", client=client
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+
+
+@pytest.mark.parametrize("missing_field", ["call_id", "name", "arguments"])
+def test_responses_gateway_maps_missing_function_call_fields_to_unsupported(
+    missing_field: str,
+) -> None:
+    fields = {
+        "type": "function_call",
+        "call_id": "call-1",
+        "name": "read_file",
+        "arguments": "{}",
+    }
+    del fields[missing_field]
+    client = FakeClient()
+    client.responses.create = FakeResponsesSequence(SimpleNamespace(
+        id="response-1", output_text="", output=[SimpleNamespace(**fields)]
+    ))
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="responses", client=client
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+
+
+@pytest.mark.parametrize("choices", [None, 42])
+def test_chat_gateway_maps_non_indexable_choices_to_unsupported(
+    choices: object,
+) -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeChatSequence(SimpleNamespace(choices=choices))
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="chat_completions", client=client
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+
+
+@pytest.mark.parametrize(
+    "tool_call",
+    [
+        SimpleNamespace(function=SimpleNamespace(name="read_file", arguments="{}")),
+        SimpleNamespace(id="call-1"),
+        SimpleNamespace(id="call-1", function=SimpleNamespace(arguments="{}")),
+        SimpleNamespace(id="call-1", function=SimpleNamespace(name="read_file")),
+        SimpleNamespace(
+            id="", function=SimpleNamespace(name="read_file", arguments="{}")
+        ),
+        SimpleNamespace(
+            id="call-1", function=SimpleNamespace(name="", arguments="{}")
+        ),
+        SimpleNamespace(
+            id="call-1", function=SimpleNamespace(name="read_file", arguments={})
+        ),
+    ],
+)
+def test_chat_gateway_maps_invalid_tool_call_shapes_to_unsupported(
+    tool_call: SimpleNamespace,
+) -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeChatSequence(SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(
+            content=None, tool_calls=[tool_call]
+        ))]
+    ))
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="chat_completions", client=client
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+
+
 class FakeResponsesSequence:
     def __init__(self, *responses: SimpleNamespace) -> None:
         self.responses = iter(responses)
