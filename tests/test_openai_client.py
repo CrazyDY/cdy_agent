@@ -530,6 +530,22 @@ def test_responses_gateway_maps_non_iterable_output_to_unsupported(
         gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
 
 
+@pytest.mark.parametrize("output", [{}, "bad"])
+def test_responses_gateway_rejects_invalid_iterable_output_container(
+    output: object,
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeResponsesSequence(SimpleNamespace(
+        id="response-1", output_text="valid text must not mask malformed output", output=output
+    ))
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="responses", client=client
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+
+
 @pytest.mark.parametrize("missing_field", ["call_id", "name", "arguments"])
 def test_responses_gateway_maps_missing_function_call_fields_to_unsupported(
     missing_field: str,
@@ -559,6 +575,32 @@ def test_chat_gateway_maps_non_indexable_choices_to_unsupported(
 ) -> None:
     client = FakeClient()
     client.chat.completions.create = FakeChatSequence(SimpleNamespace(choices=choices))
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="chat_completions", client=client
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+
+
+def test_chat_gateway_rejects_mapping_choices() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeChatSequence(SimpleNamespace(choices={}))
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="chat_completions", client=client
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+
+
+def test_chat_gateway_rejects_mapping_tool_calls_even_with_valid_text() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeChatSequence(SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(
+            content="valid text must not mask malformed calls", tool_calls={}
+        ))]
+    ))
     gateway = openai_client.ModelGateway(
         model="test-model", api_mode="chat_completions", client=client
     )

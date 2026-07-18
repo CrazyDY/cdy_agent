@@ -105,10 +105,7 @@ class ModelGateway:
             ]
 
         response = self.client.responses.create(**request)
-        try:
-            output_items = tuple(getattr(response, "output", ()))
-        except TypeError:
-            raise RuntimeError("OpenAI returned an unsupported response.") from None
+        output_items = _sdk_sequence(getattr(response, "output", ()))
         calls = tuple(
             _tool_call(
                 getattr(item, "call_id", None),
@@ -157,15 +154,14 @@ class ModelGateway:
             } for tool in tools]
 
         response = self.client.chat.completions.create(**request)
+        choices = _sdk_sequence(getattr(response, "choices", ()))
         try:
-            message = response.choices[0].message
-        except (AttributeError, IndexError, TypeError):
+            message = choices[0].message
+        except (AttributeError, IndexError, KeyError, TypeError):
             return _final_response(None)
-        raw_calls = getattr(message, "tool_calls", None) or ()
-        try:
-            call_items = tuple(raw_calls)
-        except TypeError:
-            raise RuntimeError("OpenAI returned an unsupported response.") from None
+        call_items = _sdk_sequence(
+            getattr(message, "tool_calls", None), allow_none=True
+        )
         calls = tuple(_chat_response_tool_call(item) for item in call_items)
         if calls:
             content = getattr(message, "content", None)
@@ -177,6 +173,14 @@ class ModelGateway:
 
 def _message_dicts(messages: Sequence[Message]) -> list[dict[str, str]]:
     return [{"role": message.role, "content": message.content} for message in messages]
+
+
+def _sdk_sequence(value: object, *, allow_none: bool = False) -> Sequence[Any]:
+    if allow_none and value is None:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise RuntimeError("OpenAI returned an unsupported response.")
+    return value
 
 
 def _tool_call(call_id: object, name: object, arguments: object) -> ToolCall:
