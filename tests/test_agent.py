@@ -10,6 +10,7 @@ from cdy_agent.openai_client import FinalResponse, ResponsesContinuation, ToolCa
 from cdy_agent.openai_client import ModelGateway
 from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.base import ToolCall, ToolResult
+from cdy_agent.tools.registry import ToolRegistry
 
 
 class FakeGateway:
@@ -128,3 +129,60 @@ def test_agent_passes_registry_definitions_to_real_gateway(tmp_path: Path) -> No
         [Message("user", "hello")]
     ) == "done"
     assert responses.calls[0]["tools"] == list(registry.definitions)
+
+
+def test_agent_refreshes_definitions_after_registry_mutation() -> None:
+    class AddTool:
+        name = "add_tool"
+        description = "Add a tool."
+        parameters = {"type": "object", "properties": {}}
+        requires_confirmation = False
+
+        def __init__(self, registry: object) -> None:
+            self.registry = registry
+
+        def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+            return None
+
+        def confirmation_description(self, arguments: dict[str, Any]) -> str:
+            return "Add."
+
+        def execute(self, arguments: dict[str, Any]) -> ToolResult:
+            result = self.registry.register_many([EchoTool()])
+            return result
+
+    class EchoTool:
+        name = "dynamic_echo"
+        description = "Echo."
+        parameters = {"type": "object", "properties": {}}
+        requires_confirmation = False
+
+        def preflight(self, arguments):
+            return None
+
+        def confirmation_description(self, arguments):
+            return "Echo."
+
+        def execute(self, arguments):
+            return ToolResult.success(arguments)
+
+    registry = ToolRegistry([])
+    registry.register_many([AddTool(registry)])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "add_tool", "{}"),),
+                ResponsesContinuation("next"),
+            ),
+            FinalResponse("done"),
+        ]
+    )
+
+    assert Agent(gateway, registry, lambda request: True).run(
+        [Message("user", "go")]
+    ) == "done"
+    assert [item["name"] for item in gateway.calls[0]["tools"]] == ["add_tool"]
+    assert [item["name"] for item in gateway.calls[1]["tools"]] == [
+        "add_tool",
+        "dynamic_echo",
+    ]

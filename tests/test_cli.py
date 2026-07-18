@@ -18,7 +18,7 @@ from cdy_agent import cli, openai_client
 from cdy_agent.agent import AgentLoopLimitError
 from cdy_agent.cli import app
 from cdy_agent.conversation import Message
-from cdy_agent.tools.base import ConfirmationRequest
+from cdy_agent.tools.base import ConfirmationRequest, ToolResult
 
 
 runner = CliRunner()
@@ -273,10 +273,28 @@ def test_create_agent_wires_gateway_registry_and_confirmation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     gateway = object()
-    registry = object()
+    manager = object()
+    skill_tools = object()
+    manager_calls: list[tuple[Path, object, object]] = []
+    registered: list[object] = []
+
+    class FakeRegistry:
+        def register_many(self, tools: object) -> ToolResult:
+            registered.append(tools)
+            return ToolResult.success({})
+
+    registry = FakeRegistry()
     seen: list[tuple[object, object, object]] = []
     monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: gateway)
     monkeypatch.setattr(cli, "create_builtin_registry", lambda workspace: registry)
+    monkeypatch.setattr(
+        cli,
+        "SkillManager",
+        lambda workspace, built_registry, confirm: manager_calls.append(
+            (workspace, built_registry, confirm)
+        ) or manager,
+    )
+    monkeypatch.setattr(cli, "create_skill_tools", lambda built_manager: skill_tools)
     monkeypatch.setattr(
         cli,
         "Agent",
@@ -288,6 +306,8 @@ def test_create_agent_wires_gateway_registry_and_confirmation(
     result = cli._create_agent("model", "responses", tmp_path)
 
     assert result == "agent"
+    assert manager_calls == [(tmp_path, registry, cli._confirm_tool)]
+    assert registered == [skill_tools]
     assert seen == [(gateway, registry, cli._confirm_tool)]
 
 
@@ -419,3 +439,31 @@ def test_ask_reports_missing_api_key(
     result = runner.invoke(app, ["ask", "Hello", "--workspace", str(tmp_path)])
     assert result.exit_code == 1
     assert "Check OPENAI_API_KEY" in result.stderr
+
+
+def test_create_agent_registers_skill_management_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: object())
+
+    agent = cli._create_agent("model", "responses", tmp_path)
+
+    names = [definition["name"] for definition in agent._registry.definitions]
+    assert names[-2:] == ["list_skills", "activate_skill"]
+
+
+def test_skill_code_confirmation_warns_about_current_user_permissions() -> None:
+    request = ConfirmationRequest(
+        "activate_skill",
+        {"name": "research"},
+        "Run Skill 'research' Python code from /workspace/tools.py with current user permissions.",
+    )
+    monkey_app = typer.Typer()
+
+    @monkey_app.callback(invoke_without_command=True)
+    def invoke() -> None:
+        typer.echo("APPROVED" if cli._confirm_tool(request) else "DENIED")
+
+    result = runner.invoke(monkey_app, [], input="\n")
+    assert "current user permissions" in result.stdout
+    assert result.stdout.endswith("DENIED\n")

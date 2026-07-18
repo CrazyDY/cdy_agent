@@ -18,6 +18,7 @@ from .agent import Agent, AgentLoopLimitError
 from .config import resolve_api_mode, resolve_model
 from .conversation import Conversation
 from .openai_client import MissingAPIKeyError, ModelGateway
+from .skills import SkillManager, create_skill_tools
 from .tools import create_builtin_registry
 from .tools.base import ConfirmationRequest
 from .tools.filesystem import resolve_workspace
@@ -75,6 +76,10 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     """Construct the CLI's shared model-and-local-tools boundary."""
     gateway = ModelGateway(model=model, api_mode=api_mode)
     registry = create_builtin_registry(workspace)
+    manager = SkillManager(workspace, registry, _confirm_tool)
+    registered = registry.register_many(create_skill_tools(manager))
+    if not registered.ok:
+        raise RuntimeError(registered.message or "Could not register Skill tools.")
     return Agent(gateway, registry, _confirm_tool)
 
 
