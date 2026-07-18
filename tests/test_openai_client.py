@@ -6,6 +6,24 @@ import pytest
 from cdy_agent import openai_client
 from cdy_agent.conversation import Message
 from cdy_agent.openai_client import generate_reply
+from cdy_agent.tools.base import ToolCall
+
+
+class FakeTool:
+    name = "read_file"
+    description = "Read a file."
+    parameters = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    }
+    requires_confirmation = False
+
+    def confirmation_description(self, arguments: dict[str, Any]) -> str:
+        return ""
+
+    def execute(self, arguments: dict[str, Any]) -> object:
+        raise NotImplementedError
 
 
 class FakeResponses:
@@ -327,3 +345,184 @@ def test_generate_reply_for_messages_rejects_empty_history() -> None:
 
     assert client.responses.calls == []
     assert client.chat.completions.calls == []
+
+
+def test_gateway_adapts_responses_tool_calls_and_continuation() -> None:
+    client = FakeClient()
+    client.responses.create = FakeResponsesSequence(
+        SimpleNamespace(
+            id="response-1",
+            output_text="",
+            output=[
+                SimpleNamespace(
+                    type="function_call",
+                    call_id="call-1",
+                    name="read_file",
+                    arguments='{"path":"README.md"}',
+                ),
+                SimpleNamespace(
+                    type="function_call",
+                    call_id="call-2",
+                    name="read_file",
+                    arguments='{"path":"pyproject.toml"}',
+                ),
+            ],
+        ),
+        SimpleNamespace(id="response-2", output_text="Done", output=[]),
+    )
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="responses", client=client
+    )
+
+    first = gateway.create(
+        (Message(role="user", content="Inspect files"),), (FakeTool(),)
+    )
+
+    assert first == openai_client.ToolCallResponse(
+        calls=(
+            ToolCall("call-1", "read_file", '{"path":"README.md"}'),
+            ToolCall("call-2", "read_file", '{"path":"pyproject.toml"}'),
+        ),
+        continuation=openai_client.ResponsesContinuation("response-1"),
+    )
+    second = gateway.create(
+        (Message(role="user", content="Inspect files"),),
+        (FakeTool(),),
+        continuation=first.continuation,
+        tool_outputs=(("call-1", '{"ok":true}'), ("call-2", '{"ok":true}')),
+    )
+    assert second == openai_client.FinalResponse("Done")
+    assert client.responses.create.calls == [
+        {
+            "model": "test-model",
+            "input": [{"role": "user", "content": "Inspect files"}],
+            "tools": [{
+                "type": "function",
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": FakeTool.parameters,
+            }],
+        },
+        {
+            "model": "test-model",
+            "input": [
+                {"type": "function_call_output", "call_id": "call-1", "output": '{"ok":true}'},
+                {"type": "function_call_output", "call_id": "call-2", "output": '{"ok":true}'},
+            ],
+            "tools": [{
+                "type": "function",
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": FakeTool.parameters,
+            }],
+            "previous_response_id": "response-1",
+        },
+    ]
+
+
+def test_gateway_adapts_chat_tool_calls_and_continuation() -> None:
+    assistant = SimpleNamespace(
+        content=None,
+        tool_calls=[SimpleNamespace(
+            id="call-1",
+            type="function",
+            function=SimpleNamespace(name="read_file", arguments='{"path":"README.md"}'),
+        )],
+    )
+    client = FakeClient()
+    client.chat.completions.create = FakeChatSequence(
+        SimpleNamespace(choices=[SimpleNamespace(message=assistant)]),
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Done", tool_calls=[]))]),
+    )
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="chat_completions", client=client
+    )
+
+    first = gateway.create((Message(role="user", content="Inspect"),), (FakeTool(),))
+    assert first.calls == (ToolCall("call-1", "read_file", '{"path":"README.md"}'),)
+    second = gateway.create(
+        (Message(role="user", content="Inspect"),),
+        (FakeTool(),),
+        continuation=first.continuation,
+        tool_outputs=(("call-1", '{"ok":true}'),),
+    )
+
+    assert second == openai_client.FinalResponse("Done")
+    tool_definition = {
+        "type": "function",
+        "function": {
+            "name": "read_file", "description": "Read a file.",
+            "parameters": FakeTool.parameters,
+        },
+    }
+    assert client.chat.completions.create.calls == [
+        {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "Inspect"}],
+            "tools": [tool_definition],
+        },
+        {
+            "model": "test-model",
+            "messages": [
+                {"role": "user", "content": "Inspect"},
+                {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "call-1", "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"README.md"}'},
+                }]},
+                {"role": "tool", "tool_call_id": "call-1", "content": '{"ok":true}'},
+            ],
+            "tools": [tool_definition],
+        },
+    ]
+
+
+@pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
+def test_gateway_rejects_unsupported_sdk_response(api_mode: str) -> None:
+    client = FakeClient(responses_output=None, chat_output=None)
+    client.responses.create = FakeResponsesSequence(
+        SimpleNamespace(id="response-1", output_text=None, output=[])
+    )
+    client.chat.completions.create = FakeChatSequence(
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=[]))])
+    )
+    gateway = openai_client.ModelGateway(model="test-model", api_mode=api_mode, client=client)
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), ())
+
+
+@pytest.mark.parametrize(
+    ("call_id", "name", "arguments"),
+    [("", "read_file", "{}"), ("call-1", "", "{}"), ("call-1", "read_file", {})],
+)
+def test_gateway_rejects_invalid_tool_call_fields(
+    call_id: object, name: object, arguments: object
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeResponsesSequence(SimpleNamespace(
+        id="response-1",
+        output_text="",
+        output=[SimpleNamespace(
+            type="function_call", call_id=call_id, name=name, arguments=arguments
+        )],
+    ))
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="responses", client=client
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+
+
+class FakeResponsesSequence:
+    def __init__(self, *responses: SimpleNamespace) -> None:
+        self.responses = iter(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    def __call__(self, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        return next(self.responses)
+
+
+class FakeChatSequence(FakeResponsesSequence):
+    pass
