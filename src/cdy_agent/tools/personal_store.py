@@ -187,13 +187,18 @@ def _valid_note(item: object) -> bool:
     title = item["title"]
     content = item["content"]
     trimmed_title = title.strip() if isinstance(title, str) else ""
+    if not isinstance(content, str):
+        return False
+    try:
+        content_size = len(content.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
     return (
         _is_uuid(item["id"])
         and isinstance(title, str)
         and bool(trimmed_title)
         and len(trimmed_title) <= 200
-        and isinstance(content, str)
-        and len(content.encode("utf-8")) <= 64 * 1024
+        and content_size <= 64 * 1024
         and _is_utc_timestamp(item["created_at"])
     )
 

@@ -78,6 +78,37 @@ def test_save_refuses_to_overwrite_invalid_existing_store(
     assert target.read_bytes() == invalid_content
 
 
+def test_load_rejects_json_note_content_with_lone_surrogate(tmp_path: Path) -> None:
+    data_directory = tmp_path / ".cdy-agent"
+    data_directory.mkdir()
+    target = data_directory / "notes.json"
+    target.write_text(
+        json.dumps({"version": 1, "items": [{**NOTE, "content": "\ud800"}]}),
+        encoding="ascii",
+    )
+
+    result = PersonalStore(tmp_path).load_notes()
+
+    assert result.code == "invalid_store"
+
+
+def test_save_refuses_to_overwrite_lone_surrogate_and_preserves_bytes(
+    tmp_path: Path,
+) -> None:
+    data_directory = tmp_path / ".cdy-agent"
+    data_directory.mkdir()
+    target = data_directory / "notes.json"
+    original = json.dumps(
+        {"version": 1, "items": [{**NOTE, "content": "\ud800"}]}
+    ).encode("ascii")
+    target.write_bytes(original)
+
+    result = PersonalStore(tmp_path).save_notes([NOTE])
+
+    assert result.code == "invalid_store"
+    assert target.read_bytes() == original
+
+
 @pytest.mark.parametrize("version", [True, 1.0])
 def test_store_version_requires_integer_one(
     tmp_path: Path, version: object
