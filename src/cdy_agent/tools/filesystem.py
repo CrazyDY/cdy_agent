@@ -23,7 +23,12 @@ def _resolve_existing(workspace: Path, raw_path: object) -> Path | ToolResult:
             "invalid_arguments", "path must be a non-empty string."
         )
     path = Path(raw_path)
-    target = (workspace / path).resolve() if not path.is_absolute() else path.resolve()
+    try:
+        target = (
+            (workspace / path).resolve() if not path.is_absolute() else path.resolve()
+        )
+    except OSError as error:
+        return ToolResult.failure("file_error", f"Could not resolve path: {error}.")
     try:
         target.relative_to(workspace)
     except ValueError:

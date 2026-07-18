@@ -70,3 +70,18 @@ def test_read_file_rejects_symlink_escape(tmp_path: Path) -> None:
     assert ReadFileTool(tmp_path).execute({"path": "link.txt"}).code == (
         "path_outside_workspace"
     )
+
+
+def test_read_file_maps_resolution_error_to_file_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = ReadFileTool(tmp_path)
+
+    def fail_resolution(path: Path) -> Path:
+        raise OSError("resolution failed")
+
+    monkeypatch.setattr(Path, "resolve", fail_resolution)
+
+    result = tool.execute({"path": "file.txt"})
+
+    assert result.code == "file_error"
