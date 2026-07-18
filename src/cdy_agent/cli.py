@@ -64,9 +64,11 @@ def _fail_for_exception(exc: Exception) -> NoReturn:
 def _confirm_tool(request: ConfirmationRequest) -> bool:
     """Ask before a destructive tool call, treating interruptions as denial."""
     try:
-        return typer.confirm(request.description, default=False)
+        typer.echo(f"{request.description} [y/N]: ", nl=False)
+        answer = input()
     except (EOFError, KeyboardInterrupt, typer.Abort):
         return False
+    return answer.strip().lower() in {"y", "yes"}
 
 
 def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:

@@ -294,13 +294,14 @@ def test_create_agent_wires_gateway_registry_and_confirmation(
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [("y\n", "APPROVED\n"), ("YES\n", "APPROVED\n"), ("\n", "DENIED\n"),
-     ("n\n", "DENIED\n"), ("invalid\nn\n", "DENIED\n")],
+     ("n\n", "DENIED\n"), ("invalid\n", "DENIED\n")],
 )
 def test_confirmation_answers(answer: str, expected: str) -> None:
     result = runner.invoke(confirm_test_app, [], input=answer)
 
     assert result.exit_code == 0
     assert "Run ['pwd']" in result.stdout
+    assert result.stdout.count("Run ['pwd']") == 1
     assert result.stdout.endswith(expected)
 
 
@@ -317,7 +318,7 @@ def test_confirmation_interrupt_denies(
     def raise_error(*args: object, **kwargs: object) -> bool:
         raise error
 
-    monkeypatch.setattr(typer, "confirm", raise_error)
+    monkeypatch.setattr(builtins, "input", raise_error)
     result = runner.invoke(confirm_test_app)
     assert result.exit_code == 0
     assert result.stdout.endswith("DENIED\n")
