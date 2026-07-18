@@ -452,6 +452,32 @@ def test_create_agent_registers_skill_management_tools(
     assert names[-2:] == ["list_skills", "activate_skill"]
 
 
+def test_ask_reports_management_tool_registration_failure_without_model_execution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class RejectingRegistry:
+        def register_many(self, tools: object) -> ToolResult:
+            return ToolResult.failure(
+                "invalid_tools", "Could not register Skill management tools."
+            )
+
+    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: object())
+    monkeypatch.setattr(
+        cli, "create_builtin_registry", lambda workspace: RejectingRegistry()
+    )
+
+    def fail_if_agent_is_created(*args: object, **kwargs: object) -> object:
+        raise AssertionError("model execution boundary must not be constructed")
+
+    monkeypatch.setattr(cli, "Agent", fail_if_agent_is_created)
+
+    result = runner.invoke(app, ["ask", "Hello", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert result.stderr == "Error: Could not register Skill management tools.\n"
+    assert "Traceback" not in result.stderr
+
+
 def test_skill_code_confirmation_warns_about_current_user_permissions() -> None:
     request = ConfirmationRequest(
         "activate_skill",

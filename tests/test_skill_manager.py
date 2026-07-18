@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -163,6 +164,21 @@ def test_tools_are_revalidated_before_requesting_approval(tmp_path: Path) -> Non
     assert requests == []
 
 
+def test_removed_workspace_before_activation_is_invalid_without_mutation(
+    tmp_path: Path,
+) -> None:
+    write_skill(tmp_path, "removed", ECHO_TOOL)
+    registry = ToolRegistry([])
+    manager = SkillManager(tmp_path, registry, lambda request: True)
+    shutil.rmtree(tmp_path)
+
+    result = manager.activate("removed")
+
+    assert result.code == "invalid_skill"
+    assert registry.definitions == ()
+    assert manager.list_skills()["skills"][0]["active"] is False
+
+
 def test_tools_are_revalidated_again_after_approval(tmp_path: Path) -> None:
     directory = write_skill(tmp_path, "changed", ECHO_TOOL)
     outside = tmp_path / "outside.py"
@@ -180,6 +196,25 @@ def test_tools_are_revalidated_again_after_approval(tmp_path: Path) -> None:
 
     assert result.code == "invalid_skill"
     assert registry.definitions == ()
+
+
+def test_removed_workspace_during_approval_is_invalid_without_mutation(
+    tmp_path: Path,
+) -> None:
+    write_skill(tmp_path, "removed", ECHO_TOOL)
+
+    def approve_and_remove(request):
+        shutil.rmtree(tmp_path)
+        return True
+
+    registry = ToolRegistry([])
+    manager = SkillManager(tmp_path, registry, approve_and_remove)
+
+    result = manager.activate("removed")
+
+    assert result.code == "invalid_skill"
+    assert registry.definitions == ()
+    assert manager.list_skills()["skills"][0]["active"] is False
 
 
 def test_failed_activations_use_unique_module_names_and_clean_sys_modules(

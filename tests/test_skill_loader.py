@@ -29,6 +29,28 @@ def test_missing_skills_directory_is_empty_and_not_created(tmp_path: Path) -> No
     assert not (tmp_path / ".cdy-agent").exists()
 
 
+def test_skills_root_probe_oserror_is_diagnosed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / ".cdy-agent" / "skills"
+    original_lstat = Path.lstat
+
+    def fail_root_probe(path: Path):
+        if path == root:
+            raise PermissionError("root is unreadable")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_root_probe)
+
+    discovery = discover_skills(tmp_path)
+
+    assert discovery.skills == ()
+    assert len(discovery.diagnostics) == 1
+    assert discovery.diagnostics[0].entry == "skills"
+    assert discovery.diagnostics[0].code == "invalid_skills_root"
+    assert discovery.diagnostics[0].message == "Skills root is invalid."
+
+
 def test_discovers_sorted_metadata_instructions_and_optional_tools(
     tmp_path: Path,
 ) -> None:

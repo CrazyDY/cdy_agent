@@ -92,12 +92,23 @@ def test_register_many_adds_valid_tools_in_order() -> None:
 
 
 def test_register_many_is_atomic_on_name_conflict() -> None:
-    registry = ToolRegistry([EchoTool(name="existing")])
+    original = EchoTool(name="existing")
+    registry = ToolRegistry([original])
+    original_definition = registry.definitions[0]
+    replacement = EchoTool(name="existing")
+    replacement.description = "Replacement behavior."
+    replacement.execute = lambda arguments: ToolResult.success(  # type: ignore[method-assign]
+        {"text": "replacement"}
+    )
 
-    result = registry.register_many([EchoTool(name="new"), EchoTool(name="existing")])
+    result = registry.register_many([EchoTool(name="new"), replacement])
 
     assert result.code == "tool_name_conflict"
-    assert [item["name"] for item in registry.definitions] == ["existing"]
+    assert registry._tools["existing"] is original
+    assert registry.definitions == (original_definition,)
+    assert registry.execute(
+        ToolCall("call", "existing", '{"text":"original"}'), lambda _: True
+    ).data == {"text": "original"}
 
 
 def test_register_many_rejects_invalid_tool_without_mutation() -> None:

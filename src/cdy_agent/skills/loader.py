@@ -20,8 +20,15 @@ class InvalidSkillError(ValueError):
 def discover_skills(workspace: Path) -> SkillDiscovery:
     workspace = resolve_workspace(workspace)
     root = workspace / ".cdy-agent" / "skills"
-    if not root.exists() and not root.is_symlink():
+    try:
+        root.lstat()
+    except FileNotFoundError:
         return SkillDiscovery((), ())
+    except OSError:
+        diagnostic = SkillDiagnostic(
+            "skills", "invalid_skills_root", "Skills root is invalid."
+        )
+        return SkillDiscovery((), (diagnostic,))
     try:
         _require_safe(root, workspace, directory=True)
         entries = sorted(root.iterdir(), key=lambda path: path.name)
@@ -44,7 +51,11 @@ def discover_skills(workspace: Path) -> SkillDiscovery:
 def revalidate_tools_file(skill: DiscoveredSkill, workspace: Path) -> None:
     if skill.tools_path is None:
         return
-    _require_safe(skill.tools_path, resolve_workspace(workspace), directory=False)
+    try:
+        resolved_workspace = resolve_workspace(workspace)
+    except ValueError as error:
+        raise InvalidSkillError("Workspace is invalid.") from error
+    _require_safe(skill.tools_path, resolved_workspace, directory=False)
     if skill.tools_path.stat().st_size > MAX_TOOLS_BYTES:
         raise InvalidSkillError("tools.py exceeds 1 MiB.")
 
