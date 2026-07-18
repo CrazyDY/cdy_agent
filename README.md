@@ -4,7 +4,7 @@ CDY Agent 是一个本地个人 AI 助理项目，通过渐进式开发学习实
 
 ## 当前阶段
 
-项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和进程内多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地文件、Shell、笔记和 Todo 工具。笔记与 Todo 按 workspace 持久化；Skills、持久化会话和长期记忆将在后续阶段加入。
+项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和进程内多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具。模型还可以从工作区发现并按需激活 Skills；带 Python 工具的 Skill 在当前进程首次加载前需要用户明确授权。持久化会话和长期记忆将在后续阶段加入。
 
 ## 配置
 
@@ -66,6 +66,25 @@ uv run cdy-agent chat --workspace .
 笔记保存在 `<workspace>/.cdy-agent/notes.json`，Todo 保存在 `<workspace>/.cdy-agent/todos.json`。创建、完成和删除操作每次都需要默认 No 的用户确认；列表和查看不会请求确认，也不会为了空列表创建数据目录。
 
 数据文件使用严格校验的版本化 JSON 和原子替换写入。格式损坏、版本未知或路径越过 workspace 时，工具会拒绝操作，不会用空数据覆盖原文件。同一 workspace 首版只允许一个 `cdy-agent` 进程执行修改。
+
+### 工作区 Skills
+
+Skills 位于 `<workspace>/.cdy-agent/skills/<skill_name>/`。每个 Skill 必须包含 `SKILL.md`：
+
+```text
+---
+name: research
+description: Search and summarize local project information.
+---
+
+# Research
+
+这里写激活后交给模型的完整说明。
+```
+
+Skill 可选提供单个 `tools.py`，其中必须定义 `create_tools(workspace: Path)` 并返回符合项目 `Tool` 协议的可迭代对象。模型初始只看到 Skill 名称和摘要；调用 `activate_skill` 后才获得完整说明和新工具。
+
+发现过程不会执行 Python。加载 `tools.py` 前，CLI 会显示绝对路径并默认拒绝；批准后代码以当前用户权限在主进程运行，因此只应激活可信工作区中的代码。授权只在当前进程有效。首版不提供沙箱、依赖安装、Skill 间依赖、辅助 Python 包、热重载或持久信任。
 
 ## 开发
 

@@ -127,7 +127,7 @@ src/cdy_agent/
 
 ### 6. Skills 系统
 
-从本地目录发现技能说明和工具，建立可扩展的注册机制，并明确 Skills 与普通函数工具的职责区别。
+本阶段已经交付工作区 Skills 系统。模型可以从 `<workspace>/.cdy-agent/skills/` 发现名称与摘要并按需激活完整说明；Skill 可选注册 Python 函数工具。发现不执行代码，Python 在当前进程首次加载前需用户确认，动态工具通过现有 Registry 原子注册。
 
 ### 7. 持久化与记忆
 
