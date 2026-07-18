@@ -91,7 +91,11 @@ def test_builtin_registry_has_deterministic_order(tmp_path: Path) -> None:
     assert tuple(
         definition["name"]
         for definition in create_builtin_registry(tmp_path).definitions
-    ) == ("read_file", "write_file", "shell")
+    ) == (
+        "read_file", "write_file", "shell",
+        "create_note", "list_notes", "get_note", "delete_note",
+        "create_todo", "list_todos", "complete_todo", "delete_todo",
+    )
 
 
 def test_agent_passes_registry_definitions_to_real_gateway(tmp_path: Path) -> None:

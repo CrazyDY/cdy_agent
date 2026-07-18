@@ -311,6 +311,24 @@ def test_confirmation_eof_denies() -> None:
     assert result.stdout.endswith("DENIED\n")
 
 
+def test_personal_tool_confirmation_description_is_shown_once() -> None:
+    request = ConfirmationRequest(
+        "create_todo",
+        {"text": "Write tests"},
+        "Create Todo: Write tests.",
+    )
+    monkey_app = typer.Typer()
+
+    @monkey_app.callback(invoke_without_command=True)
+    def invoke() -> None:
+        typer.echo("APPROVED" if cli._confirm_tool(request) else "DENIED")
+
+    result = runner.invoke(monkey_app, [], input="y\n")
+    assert result.exit_code == 0
+    assert result.stdout.count("Create Todo: Write tests.") == 1
+    assert result.stdout.endswith("APPROVED\n")
+
+
 @pytest.mark.parametrize("error", [KeyboardInterrupt(), typer.Abort()])
 def test_confirmation_interrupt_denies(
     monkeypatch: pytest.MonkeyPatch, error: BaseException

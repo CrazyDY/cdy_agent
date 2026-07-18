@@ -5,3 +5,4 @@ __pycache__/
 .worktrees/
 .superpowers/sdd/
 .env
+.cdy-agent/
