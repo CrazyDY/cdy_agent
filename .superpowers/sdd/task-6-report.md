@@ -26,8 +26,16 @@ Implemented the bounded agent tool loop and deterministic built-in registry.
 
 The implementation is scoped to the requested files and maintains tool-output
 order through tuple construction. The loop makes at most the configured number
-of calls, including exactly eight by default, before raising. One pre-existing
-contract issue remains for CLI integration: `Agent` follows the task brief and
-passes `ToolRegistry.definitions` (definition dictionaries), while the current
-`ModelGateway.create` implementation is annotated for tool objects and reads
-their attributes. The next integration task should reconcile that boundary.
+of calls, including exactly eight by default, before raising.
+
+## Gateway contract follow-up
+
+Resolved the boundary issue before review. `ModelGateway.create()` now consumes
+the normalized definition mappings exposed by `ToolRegistry.definitions`.
+Responses requests receive those native mappings unchanged, while Chat
+Completions requests wrap each mapping in its required `function` object.
+
+- Red: the Agent/real-ModelGateway regression test failed with
+  `AttributeError: 'dict' object has no attribute 'name'`.
+- Green: `uv run pytest tests/test_agent.py tests/test_openai_client.py -v`
+  passed all 50 focused tests.

@@ -26,6 +26,14 @@ class FakeTool:
         raise NotImplementedError
 
 
+TOOL_DEFINITIONS = ({
+    "type": "function",
+    "name": FakeTool.name,
+    "description": FakeTool.description,
+    "parameters": FakeTool.parameters,
+},)
+
+
 class FakeResponses:
     def __init__(self, output_text: str | None) -> None:
         self.output_text = output_text
@@ -375,7 +383,7 @@ def test_gateway_adapts_responses_tool_calls_and_continuation() -> None:
     )
 
     first = gateway.create(
-        (Message(role="user", content="Inspect files"),), (FakeTool(),)
+        (Message(role="user", content="Inspect files"),), TOOL_DEFINITIONS
     )
 
     assert first == openai_client.ToolCallResponse(
@@ -387,7 +395,7 @@ def test_gateway_adapts_responses_tool_calls_and_continuation() -> None:
     )
     second = gateway.create(
         (Message(role="user", content="Inspect files"),),
-        (FakeTool(),),
+        TOOL_DEFINITIONS,
         continuation=first.continuation,
         tool_outputs=(("call-1", '{"ok":true}'), ("call-2", '{"ok":true}')),
     )
@@ -438,11 +446,11 @@ def test_gateway_adapts_chat_tool_calls_and_continuation() -> None:
         model="test-model", api_mode="chat_completions", client=client
     )
 
-    first = gateway.create((Message(role="user", content="Inspect"),), (FakeTool(),))
+    first = gateway.create((Message(role="user", content="Inspect"),), TOOL_DEFINITIONS)
     assert first.calls == (ToolCall("call-1", "read_file", '{"path":"README.md"}'),)
     second = gateway.create(
         (Message(role="user", content="Inspect"),),
-        (FakeTool(),),
+        TOOL_DEFINITIONS,
         continuation=first.continuation,
         tool_outputs=(("call-1", '{"ok":true}'),),
     )
@@ -511,7 +519,7 @@ def test_gateway_rejects_invalid_tool_call_fields(
     )
 
     with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
-        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+        gateway.create((Message(role="user", content="Hello"),), TOOL_DEFINITIONS)
 
 
 @pytest.mark.parametrize("output", [None, 42])
@@ -527,7 +535,7 @@ def test_responses_gateway_maps_non_iterable_output_to_unsupported(
     )
 
     with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
-        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+        gateway.create((Message(role="user", content="Hello"),), TOOL_DEFINITIONS)
 
 
 @pytest.mark.parametrize("output", [{}, "bad"])
@@ -543,7 +551,7 @@ def test_responses_gateway_rejects_invalid_iterable_output_container(
     )
 
     with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
-        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+        gateway.create((Message(role="user", content="Hello"),), TOOL_DEFINITIONS)
 
 
 @pytest.mark.parametrize("missing_field", ["call_id", "name", "arguments"])
@@ -566,7 +574,7 @@ def test_responses_gateway_maps_missing_function_call_fields_to_unsupported(
     )
 
     with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
-        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+        gateway.create((Message(role="user", content="Hello"),), TOOL_DEFINITIONS)
 
 
 @pytest.mark.parametrize("choices", [None, 42])
@@ -580,7 +588,7 @@ def test_chat_gateway_maps_non_indexable_choices_to_unsupported(
     )
 
     with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
-        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+        gateway.create((Message(role="user", content="Hello"),), TOOL_DEFINITIONS)
 
 
 def test_chat_gateway_rejects_mapping_choices() -> None:
@@ -591,7 +599,7 @@ def test_chat_gateway_rejects_mapping_choices() -> None:
     )
 
     with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
-        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+        gateway.create((Message(role="user", content="Hello"),), TOOL_DEFINITIONS)
 
 
 def test_chat_gateway_rejects_mapping_tool_calls_even_with_valid_text() -> None:
@@ -606,7 +614,7 @@ def test_chat_gateway_rejects_mapping_tool_calls_even_with_valid_text() -> None:
     )
 
     with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
-        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+        gateway.create((Message(role="user", content="Hello"),), TOOL_DEFINITIONS)
 
 
 @pytest.mark.parametrize(
@@ -641,7 +649,7 @@ def test_chat_gateway_maps_invalid_tool_call_shapes_to_unsupported(
     )
 
     with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
-        gateway.create((Message(role="user", content="Hello"),), (FakeTool(),))
+        gateway.create((Message(role="user", content="Hello"),), TOOL_DEFINITIONS)
 
 
 class FakeResponsesSequence:

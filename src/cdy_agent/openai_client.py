@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from openai import OpenAI
 
 from .conversation import Message
-from .tools.base import Tool, ToolCall
+from .tools.base import ToolCall
 
 
 class MissingAPIKeyError(RuntimeError):
@@ -41,6 +41,7 @@ class ToolCallResponse:
 
 ModelResponse = FinalResponse | ToolCallResponse
 Continuation = ResponsesContinuation | ChatContinuation
+ToolDefinition = Mapping[str, object]
 
 
 class ModelGateway:
@@ -67,7 +68,7 @@ class ModelGateway:
     def create(
         self,
         messages: Sequence[Message],
-        tools: Sequence[Tool],
+        tools: Sequence[ToolDefinition],
         continuation: Continuation | None = None,
         tool_outputs: Sequence[tuple[str, str]] = (),
     ) -> ModelResponse:
@@ -78,7 +79,7 @@ class ModelGateway:
     def _create_response(
         self,
         messages: Sequence[Message],
-        tools: Sequence[Tool],
+        tools: Sequence[ToolDefinition],
         continuation: Continuation | None,
         tool_outputs: Sequence[tuple[str, str]],
     ) -> ModelResponse:
@@ -94,15 +95,7 @@ class ModelGateway:
             ]
             request["previous_response_id"] = continuation.response_id
         if tools:
-            request["tools"] = [
-                {
-                    "type": "function",
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                }
-                for tool in tools
-            ]
+            request["tools"] = list(tools)
 
         response = self.client.responses.create(**request)
         output_items = _sdk_sequence(getattr(response, "output", ()))
@@ -125,7 +118,7 @@ class ModelGateway:
     def _create_chat_completion(
         self,
         messages: Sequence[Message],
-        tools: Sequence[Tool],
+        tools: Sequence[ToolDefinition],
         continuation: Continuation | None,
         tool_outputs: Sequence[tuple[str, str]],
     ) -> ModelResponse:
@@ -147,9 +140,9 @@ class ModelGateway:
             request["tools"] = [{
                 "type": "function",
                 "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["parameters"],
                 },
             } for tool in tools]
 

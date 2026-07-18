@@ -1,10 +1,13 @@
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from cdy_agent.agent import Agent, AgentLoopLimitError
 from cdy_agent.conversation import Message
 from cdy_agent.openai_client import FinalResponse, ResponsesContinuation, ToolCallResponse
+from cdy_agent.openai_client import ModelGateway
 from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.base import ToolCall, ToolResult
 
@@ -89,3 +92,23 @@ def test_builtin_registry_has_deterministic_order(tmp_path: Path) -> None:
         definition["name"]
         for definition in create_builtin_registry(tmp_path).definitions
     ) == ("read_file", "write_file", "shell")
+
+
+def test_agent_passes_registry_definitions_to_real_gateway(tmp_path: Path) -> None:
+    class FakeResponses:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def create(self, **kwargs: Any) -> SimpleNamespace:
+            self.calls.append(kwargs)
+            return SimpleNamespace(output_text="done", output=[])
+
+    responses = FakeResponses()
+    client = SimpleNamespace(responses=responses)
+    gateway = ModelGateway(model="test-model", api_mode="responses", client=client)
+    registry = create_builtin_registry(tmp_path)
+
+    assert Agent(gateway, registry, lambda _: True).run(
+        [Message("user", "hello")]
+    ) == "done"
+    assert responses.calls[0]["tools"] == list(registry.definitions)
