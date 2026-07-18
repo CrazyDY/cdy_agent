@@ -73,6 +73,17 @@ class PersonalStore:
             return target or ToolResult.failure(
                 "store_error", "Could not create data store."
             )
+        if target.exists():
+            try:
+                existing_document = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                return ToolResult.failure(
+                    "invalid_store", "Stored personal data is invalid."
+                )
+            if not validator(existing_document):
+                return ToolResult.failure(
+                    "invalid_store", "Stored personal data is invalid."
+                )
         temporary: Path | None = None
         try:
             descriptor, raw_path = tempfile.mkstemp(
@@ -87,7 +98,10 @@ class PersonalStore:
             self._replace(temporary, target)
         except OSError:
             if temporary is not None:
-                temporary.unlink(missing_ok=True)
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return ToolResult.failure("store_error", "Could not write personal data.")
         return ToolResult.success({"path": str(target), "count": len(items)})
 
@@ -149,8 +163,10 @@ def _valid_document(
 ) -> bool:
     if not isinstance(document, dict) or set(document) != {"version", "items"}:
         return False
-    if document["version"] != STORE_VERSION or not isinstance(
-        document["items"], list
+    if (
+        type(document["version"]) is not int
+        or document["version"] != STORE_VERSION
+        or not isinstance(document["items"], list)
     ):
         return False
     items = document["items"]
