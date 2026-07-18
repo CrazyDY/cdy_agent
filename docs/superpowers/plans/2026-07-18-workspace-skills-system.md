@@ -21,6 +21,7 @@
 - Tool registration is all-or-nothing and rejects conflicts with built-ins, management tools, or previously activated Skills.
 - Do not add YAML, plugin, sandbox, subprocess, dependency-installation, hot-reload, persistent-trust, session, or memory dependencies/features.
 - Tests use temporary workspaces and fakes only; they never access provider credentials, the network, or contributor data.
+- TDD preflight ruling: Tasks 1, 3, and 4 must move imports of not-yet-created modules inside a test helper that catches `ModuleNotFoundError` and calls `pytest.fail()`, so RED is an ordinary test failure rather than a collection error. Task 5's Agent Registry refresh test is a characterization regression expected to pass before the CLI integration change; the CLI construction test supplies that task's RED.
 
 ---
 
