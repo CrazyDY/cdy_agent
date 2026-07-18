@@ -48,6 +48,12 @@ def test_shell_rejects_disallowed_commands(tmp_path: Path, argv: list[str]) -> N
         ["sed", "p\ne touch owned", "file"],
         ["sed", "-f", "commands.sed", "file"],
         ["sed", "--file=commands.sed", "file"],
+        ["sed", "/x/e touch owned", "file"],
+        ["sed", "1!e touch owned", "file"],
+        ["sed", "{e touch owned}", "file"],
+        ["sed", "s/x/y/w owned", "file"],
+        ["git", "diff", "--ext", "helper"],
+        ["git", "diff", "--textc", "file"],
     ],
 )
 def test_shell_rejects_execution_delegation_without_runner(
@@ -215,6 +221,20 @@ def test_shell_confirmation_names_exact_argv_and_workspace(tmp_path: Path) -> No
                 "--no-ext-diff", "--no-textconv", "--", "file",
             ],
         ),
+        (
+            ["git", "diff", "--stat"],
+            [
+                "git", "--no-pager", "-c", "core.fsmonitor=false", "diff",
+                "--stat", "--no-ext-diff", "--no-textconv",
+            ],
+        ),
+        (
+            ["git", "diff", "--no-ext-diff", "--stat", "--no-textconv"],
+            [
+                "git", "--no-pager", "-c", "core.fsmonitor=false", "diff",
+                "--stat", "--no-ext-diff", "--no-textconv",
+            ],
+        ),
     ],
 )
 def test_shell_confirmation_and_execution_use_effective_argv(
@@ -231,16 +251,27 @@ def test_shell_confirmation_and_execution_use_effective_argv(
     assert calls == [effective_argv]
 
 
-@pytest.mark.parametrize("script", ["p", "1,3p", "s/x/y/g", "s|x|y|gi"])
-def test_shell_retains_safe_sed_scripts(tmp_path: Path, script: str) -> None:
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["sed", "-n", "1p", "file"], ["sed", "-n", "1p", "file"]),
+        (
+            ["sed", "-e", "s/foo/here/g", "file"],
+            ["sed", "-e", "s/foo/here/g", "file"],
+        ),
+    ],
+)
+def test_shell_retains_safe_sed_scripts(
+    tmp_path: Path, argv: list[str], expected: list[str]
+) -> None:
     calls: list[list[str]] = []
     tool = ShellTool(
         tmp_path,
         runner=lambda argv, **kwargs: calls.append(argv)
         or subprocess.CompletedProcess(argv, 0, "", ""),
     )
-    assert tool.execute({"argv": ["sed", "-e", script, "file"]}).ok
-    assert calls == [["sed", "-e", script, "file"]]
+    assert tool.execute({"argv": argv}).ok
+    assert calls == [expected]
 
 
 def test_registry_rejects_disallowed_shell_before_confirmation(tmp_path: Path) -> None:

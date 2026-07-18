@@ -67,3 +67,23 @@ Result: `10 failed, 60 passed`. Five newly covered sed execution forms reached t
 - Both CLI help checks exited successfully.
 - The sandboxed build retry was network-denied; the approved retry built the sdist and wheel successfully.
 - `git diff --check` exited successfully.
+
+## Third shell-hardening wave
+
+### RED evidence
+
+Command:
+
+`UV_CACHE_DIR=/tmp/cdy-agent-final-fix-cache uv run pytest tests/test_shell_tool.py tests/test_tool_registry.py -q`
+
+Result: `6 failed, 52 passed`. Regex-address, negated, and grouped sed execution forms reached the runner; abbreviated git execution options were accepted; and no-separator diff safety flags preceded user options.
+
+### GREEN evidence
+
+- Focused shell/registry suite: `59 passed in 0.04s`.
+- Full suite: `184 passed in 0.46s`.
+- Both CLI help commands exited successfully.
+- `uv build` successfully produced the sdist and wheel.
+- `git diff --check` exited successfully.
+- Sed now uses an explicit safe subset: approved control flags, simple numeric/`$` addressed `p`, `d`, `q`, `=`, and structurally parsed substitutions with non-executing flags only.
+- Git rejects ext-diff/textconv enabling abbreviations and removes user-supplied negative duplicates before placing mandatory safety flags last before `--`, or last overall without `--`.
