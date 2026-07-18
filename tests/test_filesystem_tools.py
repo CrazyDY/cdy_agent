@@ -169,9 +169,15 @@ def test_write_description_identifies_create_or_overwrite(tmp_path: Path) -> Non
 
     (tmp_path / "note.txt").write_text("old", encoding="utf-8")
     overwrite = tool.confirmation_description(
-        {"path": "note.txt", "content": "new", "overwrite": True}
+        {
+            "path": str((tmp_path / "note.txt").resolve()),
+            "content": "新",
+            "overwrite": True,
+        }
     )
     assert "overwrite" in overwrite.lower()
+    assert str((tmp_path / "note.txt").resolve()) in overwrite
+    assert "3 bytes" in overwrite
 
 
 def test_write_description_is_pure(tmp_path: Path) -> None:
@@ -182,6 +188,49 @@ def test_write_description_is_pure(tmp_path: Path) -> None:
     )
 
     assert not target.exists()
+
+
+def test_write_symlinks_stay_in_workspace_or_are_rejected(tmp_path: Path) -> None:
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    parent_link = tmp_path / "parent-link"
+    file_link = tmp_path / "file-link"
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    escape = tmp_path / "escape"
+    try:
+        parent_link.symlink_to(inside, target_is_directory=True)
+        file_link.symlink_to(inside / "target.txt")
+        escape.symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("platform cannot create symlinks")
+    tool = WriteFileTool(tmp_path)
+    assert tool.execute({"path": "parent-link/new.txt", "content": "ok"}).ok
+    assert tool.execute({"path": "file-link", "content": "one"}).ok
+    assert tool.execute({"path": "file-link", "content": "two", "overwrite": True}).ok
+    assert tool.execute({"path": "escape/new.txt", "content": "no"}).code == "path_outside_workspace"
+
+
+def test_registry_rejects_bad_writes_before_confirmation(tmp_path: Path) -> None:
+    from cdy_agent.tools.base import ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    existing = tmp_path / "existing.txt"
+    existing.write_text("old")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+    calls: list[object] = []
+    registry = ToolRegistry([WriteFileTool(tmp_path)])
+    for payload, code in [
+        ('{"path":1,"content":"x"}', "invalid_arguments"),
+        ('{"path":"existing.txt","content":"x"}', "overwrite_not_allowed"),
+        (f'{{"path":"{outside}","content":"x"}}', "path_outside_workspace"),
+    ]:
+        result = registry.execute(
+            ToolCall("1", "write_file", payload),
+            lambda request: calls.append(request) or True,
+        )
+        assert result.code == code
+    assert calls == []
 
 
 def test_write_file_maps_oserror_to_structured_error(

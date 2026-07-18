@@ -31,6 +31,7 @@ class ResponsesContinuation:
 class ChatContinuation:
     calls: tuple[ToolCall, ...]
     content: str | None = None
+    history: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,7 @@ class ModelGateway:
         if continuation is not None:
             if not isinstance(continuation, ChatContinuation):
                 raise ValueError("Continuation does not match Chat Completions API mode.")
+            request_messages.extend(continuation.history)
             request_messages.append({
                 "role": "assistant",
                 "content": continuation.content,
@@ -160,7 +162,8 @@ class ModelGateway:
             content = getattr(message, "content", None)
             if content is not None and not isinstance(content, str):
                 raise RuntimeError("OpenAI returned an unsupported response.")
-            return ToolCallResponse(calls, ChatContinuation(calls, content))
+            history = tuple(request_messages[len(_message_dicts(messages)):])
+            return ToolCallResponse(calls, ChatContinuation(calls, content, history))
         return _final_response(getattr(message, "content", None))
 
 

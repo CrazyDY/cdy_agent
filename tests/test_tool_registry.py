@@ -24,6 +24,11 @@ class EchoTool:
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         return "Echo text."
 
+    def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+        if set(arguments) != {"text"} or not isinstance(arguments["text"], str):
+            return ToolResult.failure("invalid_arguments", "text must be a string.")
+        return None
+
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
         if set(arguments) != {"text"} or not isinstance(arguments["text"], str):
             return ToolResult.failure("invalid_arguments", "text must be a string.")
@@ -64,3 +69,12 @@ def test_registry_denies_confirmed_tool_without_executing() -> None:
     )
     assert result.code == "approval_denied"
     assert requests[0].tool_name == "echo"
+
+
+def test_registry_preflights_before_confirmation() -> None:
+    requests: list[ConfirmationRequest] = []
+    result = ToolRegistry([EchoTool(requires_confirmation=True)]).execute(
+        ToolCall("1", "echo", '{"text":1}'), lambda request: requests.append(request) or True
+    )
+    assert result.code == "invalid_arguments"
+    assert requests == []

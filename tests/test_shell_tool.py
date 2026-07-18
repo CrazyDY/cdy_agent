@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cdy_agent.tools.shell import MAX_OUTPUT_CHARS, ShellTool
+from cdy_agent.tools.shell import MAX_OUTPUT_BYTES, ShellTool
 
 
 def test_shell_constructor_cannot_disable_confirmation(tmp_path: Path) -> None:
@@ -28,6 +28,30 @@ def test_shell_constructor_cannot_disable_confirmation(tmp_path: Path) -> None:
 )
 def test_shell_rejects_disallowed_commands(tmp_path: Path, argv: list[str]) -> None:
     assert ShellTool(tmp_path).execute({"argv": argv}).code == "command_not_allowed"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["find", ".", "-exec", "sh", "-c", "id", ";"],
+        ["find", ".", "-execdir", "id", ";"],
+        ["find", ".", "-ok", "id", ";"],
+        ["find", ".", "-okdir", "id", ";"],
+        ["rg", "--pre", "sh", "x"],
+        ["rg", "--pre=sh", "x"],
+        ["sed", "-e", "1e id", "file"],
+        ["sed", "--expression=1e id", "file"],
+        ["git", "diff", "--ext-diff"],
+        ["git", "-c", "diff.external=id", "diff"],
+    ],
+)
+def test_shell_rejects_execution_delegation_without_runner(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    calls: list[list[str]] = []
+    tool = ShellTool(tmp_path, runner=lambda value, **_: calls.append(value))  # type: ignore[arg-type]
+    assert tool.execute({"argv": argv}).code == "command_not_allowed"
+    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -126,8 +150,8 @@ def test_shell_maps_nonzero_exit_to_command_failed(tmp_path: Path) -> None:
 
 
 def test_shell_truncates_stdout_and_stderr_independently(tmp_path: Path) -> None:
-    stdout = "a" * MAX_OUTPUT_CHARS
-    stderr = "b" * (MAX_OUTPUT_CHARS + 1)
+    stdout = "a" * MAX_OUTPUT_BYTES
+    stderr = "b" * (MAX_OUTPUT_BYTES + 1)
 
     def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 0, stdout, stderr)
@@ -136,7 +160,39 @@ def test_shell_truncates_stdout_and_stderr_independently(tmp_path: Path) -> None
     assert result.data == {
         "returncode": 0,
         "stdout": stdout,
-        "stderr": "b" * MAX_OUTPUT_CHARS,
+        "stderr": "b" * MAX_OUTPUT_BYTES,
         "stdout_truncated": False,
         "stderr_truncated": True,
     }
+
+
+def test_shell_caps_utf8_bytes_and_drops_only_incomplete_codepoint(tmp_path: Path) -> None:
+    output = "a" * (MAX_OUTPUT_BYTES - 1) + "你" + "z"
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0, output, "你" * 30000)
+    result = ShellTool(tmp_path, runner=runner).execute({"argv": ["pwd"]})
+    assert result.data["stdout"] == "a" * (MAX_OUTPUT_BYTES - 1)
+    assert len(result.data["stderr"].encode()) <= MAX_OUTPUT_BYTES
+    assert result.data["stdout_truncated"] is True
+
+
+def test_shell_confirmation_names_exact_argv_and_workspace(tmp_path: Path) -> None:
+    description = ShellTool(tmp_path).confirmation_description(
+        {"argv": ["rg", "x y", "."]}
+    )
+    assert repr(["rg", "x y", "."]) in description
+    assert str(tmp_path.resolve()) in description
+
+
+def test_registry_rejects_disallowed_shell_before_confirmation(tmp_path: Path) -> None:
+    from cdy_agent.tools.base import ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    callbacks: list[object] = []
+    result = ToolRegistry([ShellTool(tmp_path)]).execute(
+        ToolCall("1", "shell", '{"argv":["find",".","-exec","id",";"]}'),
+        lambda request: callbacks.append(request) or True,
+    )
+    assert result.code == "command_not_allowed"
+    assert callbacks == []

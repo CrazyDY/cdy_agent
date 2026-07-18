@@ -484,6 +484,53 @@ def test_gateway_adapts_chat_tool_calls_and_continuation() -> None:
     ]
 
 
+def test_chat_continuation_accumulates_consecutive_tool_rounds() -> None:
+    def assistant(call_id: str) -> object:
+        return SimpleNamespace(
+            content=None,
+            tool_calls=[
+                SimpleNamespace(
+                    id=call_id,
+                    type="function",
+                    function=SimpleNamespace(
+                        name="read_file", arguments=f'{{"path":"{call_id}"}}'
+                    ),
+                )
+            ],
+        )
+    client = FakeClient()
+    client.chat.completions.create = FakeChatSequence(
+        SimpleNamespace(choices=[SimpleNamespace(message=assistant("call-1"))]),
+        SimpleNamespace(choices=[SimpleNamespace(message=assistant("call-2"))]),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Done", tool_calls=[])
+                )
+            ]
+        ),
+    )
+    gateway = openai_client.ModelGateway(model="m", api_mode="chat_completions", client=client)
+    first = gateway.create((Message(role="user", content="go"),), TOOL_DEFINITIONS)
+    second = gateway.create(
+        (Message(role="user", content="go"),),
+        TOOL_DEFINITIONS,
+        first.continuation,
+        (("call-1", "one"),),
+    )
+    gateway.create(
+        (Message(role="user", content="go"),),
+        TOOL_DEFINITIONS,
+        second.continuation,
+        (("call-2", "two"),),
+    )
+    messages = client.chat.completions.create.calls[2]["messages"]
+    assert [(m["role"], m.get("tool_call_id")) for m in messages] == [
+        ("user", None), ("assistant", None), ("tool", "call-1"),
+        ("assistant", None), ("tool", "call-2"),
+    ]
+
+
 @pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
 def test_gateway_rejects_unsupported_sdk_response(api_mode: str) -> None:
     client = FakeClient(responses_output=None, chat_output=None)

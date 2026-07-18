@@ -29,6 +29,9 @@ class ToolRegistry:
             return ToolResult.failure("invalid_arguments", "Arguments must be valid JSON.")
         if not isinstance(arguments, dict):
             return ToolResult.failure("invalid_arguments", "Arguments must be a JSON object.")
+        invalid = tool.preflight(arguments)
+        if invalid is not None:
+            return invalid
         if tool.requires_confirmation:
             request = ConfirmationRequest(
                 tool.name,

@@ -59,6 +59,14 @@ class ReadFileTool:
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         return f"Read file {arguments.get('path', '')}."
 
+    def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+        if set(arguments) != {"path"}:
+            return ToolResult.failure(
+                "invalid_arguments", "Exactly one path argument is required."
+            )
+        target = _resolve_existing(self.workspace, arguments["path"])
+        return target if isinstance(target, ToolResult) else None
+
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
         if set(arguments) != {"path"}:
             return ToolResult.failure(
@@ -173,6 +181,22 @@ class WriteFileTool:
         operation = "Overwrite" if target.exists() else "Create"
         byte_count = len(arguments["content"].encode("utf-8"))
         return f"{operation} file {target} with {byte_count} bytes of UTF-8 text."
+
+    def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+        invalid = _validate_write_arguments(arguments)
+        if invalid is not None:
+            return invalid
+        target = _resolve_write_target(self.workspace, arguments["path"])
+        if isinstance(target, ToolResult):
+            return target
+        if target.exists() and target.is_dir():
+            return ToolResult.failure("not_a_file", "Path is not a file.")
+        if target.exists() and arguments.get("overwrite") is not True:
+            return ToolResult.failure(
+                "overwrite_not_allowed",
+                "File already exists; set overwrite to true to replace it.",
+            )
+        return None
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
         invalid = _validate_write_arguments(arguments)

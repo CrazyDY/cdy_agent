@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,7 +25,9 @@ ALLOWED_COMMANDS = frozenset(
     }
 )
 ALLOWED_GIT_SUBCOMMANDS = frozenset({"status", "diff"})
-MAX_OUTPUT_CHARS = 64 * 1024
+MAX_OUTPUT_BYTES = 64 * 1024
+# Backwards-compatible name for callers that imported the original constant.
+MAX_OUTPUT_CHARS = MAX_OUTPUT_BYTES
 DEFAULT_TIMEOUT_SECONDS = 10
 MAX_TIMEOUT_SECONDS = 30
 
@@ -67,12 +70,55 @@ def _command_is_allowed(argv: list[str]) -> bool:
     if "/" in command or "\\" in command:
         return False
     if command == "git":
-        return len(argv) >= 2 and argv[1] in ALLOWED_GIT_SUBCOMMANDS
-    return command in ALLOWED_COMMANDS
+        return (
+            len(argv) >= 2
+            and argv[1] in ALLOWED_GIT_SUBCOMMANDS
+            and not any(arg in {"--ext-diff", "--textconv"} for arg in argv[2:])
+        )
+    if command not in ALLOWED_COMMANDS:
+        return False
+    if command == "find" and any(
+        arg in {"-exec", "-execdir", "-ok", "-okdir"} for arg in argv[1:]
+    ):
+        return False
+    if command == "rg" and any(
+        arg == "--pre" or arg.startswith("--pre=") for arg in argv[1:]
+    ):
+        return False
+    if command == "sed" and _sed_can_execute(argv[1:]):
+        return False
+    return True
+
+
+def _sed_can_execute(arguments: list[str]) -> bool:
+    scripts: list[str] = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in {"-e", "--expression"} and index + 1 < len(arguments):
+            scripts.append(arguments[index + 1])
+            index += 2
+            continue
+        if argument.startswith("--expression="):
+            scripts.append(argument.split("=", 1)[1])
+        elif argument.startswith("-e") and argument != "-e":
+            scripts.append(argument[2:])
+        elif not argument.startswith("-") and not scripts:
+            scripts.append(argument)
+        index += 1
+    return any(
+        re.search(r"(?:^|[;}])\s*(?:\d+(?:,\d+)?\s*)?e(?:\s|$)", script)
+        is not None
+        for script in scripts
+    )
 
 
 def _limited_output(output: str) -> tuple[str, bool]:
-    return output[:MAX_OUTPUT_CHARS], len(output) > MAX_OUTPUT_CHARS
+    encoded = output.encode("utf-8")
+    if len(encoded) <= MAX_OUTPUT_BYTES:
+        return output, False
+    limited = encoded[:MAX_OUTPUT_BYTES]
+    return limited.decode("utf-8", errors="ignore"), True
 
 
 @dataclass
@@ -106,7 +152,18 @@ class ShellTool:
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         argv = arguments.get("argv", [])
-        return f"Run command: {argv!r}."
+        return f"Run command {argv!r} in workspace {self.workspace}."
+
+    def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+        validated = _validate_arguments(arguments)
+        if isinstance(validated, ToolResult):
+            return validated
+        argv, _ = validated
+        if not _command_is_allowed(argv):
+            return ToolResult.failure(
+                "command_not_allowed", "Command is not in the allowlist."
+            )
+        return None
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
         validated = _validate_arguments(arguments)
