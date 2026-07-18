@@ -27,6 +27,8 @@ from .tools.filesystem import resolve_workspace
 
 
 app = typer.Typer(help="Run the CDY local personal AI assistant.")
+sessions_app = typer.Typer(help="List and delete saved conversations.")
+app.add_typer(sessions_app, name="sessions")
 
 REQUEST_ERRORS = (
     MissingAPIKeyError,
@@ -84,6 +86,59 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
     return Agent(gateway, registry, _confirm_tool)
+
+
+@sessions_app.command("list")
+def list_sessions(
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved conversations."),
+    ] = None,
+) -> None:
+    """List saved conversations, newest first."""
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        summaries = ConversationStore(active_workspace).list_summaries()
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    if not summaries:
+        typer.echo("No saved conversations.")
+        return
+    for summary in summaries:
+        typer.echo(
+            f"{summary.id}  {summary.updated_at}  "
+            f"{summary.message_count} messages  {summary.preview}"
+        )
+
+
+@sessions_app.command("delete")
+def delete_session(
+    session_id: Annotated[
+        str,
+        typer.Argument(help="Complete ID of the conversation to delete."),
+    ],
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved conversations."),
+    ] = None,
+) -> None:
+    """Delete one saved conversation after confirmation."""
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        store = ConversationStore(active_workspace)
+        approved = typer.confirm(
+            f"Delete conversation {session_id}?", default=False
+        )
+        if not approved:
+            typer.echo("Aborted.")
+            return
+        store.delete(session_id)
+    except (EOFError, KeyboardInterrupt, typer.Abort):
+        typer.echo("Aborted.")
+        return
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    typer.echo(f"Deleted conversation {session_id}.")
 
 
 @app.callback()

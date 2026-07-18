@@ -18,7 +18,11 @@ from cdy_agent import cli, openai_client
 from cdy_agent.agent import AgentLoopLimitError
 from cdy_agent.cli import app
 from cdy_agent.conversation import Message
-from cdy_agent.memory import ConversationNotFoundError, StoredConversation
+from cdy_agent.memory import (
+    ConversationNotFoundError,
+    ConversationSummary,
+    StoredConversation,
+)
 from cdy_agent.tools.base import ConfirmationRequest, ToolResult
 
 
@@ -710,3 +714,137 @@ def test_skill_code_confirmation_warns_about_current_user_permissions() -> None:
     result = runner.invoke(monkey_app, [], input="\n")
     assert "current user permissions" in result.stdout
     assert result.stdout.endswith("DENIED\n")
+
+
+def test_sessions_list_shows_empty_store_without_writing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = FakeConversationStore()
+    store.list_summaries = lambda: ()  # type: ignore[attr-defined]
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+
+    result = runner.invoke(
+        app, ["sessions", "list", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "No saved conversations.\n"
+
+
+def test_sessions_list_renders_ordered_summary_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = FakeConversationStore()
+    store.list_summaries = lambda: (  # type: ignore[attr-defined]
+        ConversationSummary(
+            "52c809c6-6e55-4ff1-9220-e4f90a4f6774",
+            "2026-07-18T08:30:00.000000Z",
+            4,
+            "First question",
+        ),
+    )
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+
+    result = runner.invoke(
+        app, ["sessions", "list", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert "52c809c6-6e55-4ff1-9220-e4f90a4f6774" in result.stdout
+    assert "2026-07-18T08:30:00.000000Z" in result.stdout
+    assert "4 messages" in result.stdout
+    assert "First question" in result.stdout
+
+
+def test_sessions_delete_defaults_to_no(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    deleted: list[str] = []
+    store = FakeConversationStore()
+    store.delete = deleted.append  # type: ignore[attr-defined]
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+    session_id = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
+
+    result = runner.invoke(
+        app,
+        ["sessions", "delete", session_id, "--workspace", str(tmp_path)],
+        input="\n",
+    )
+
+    assert result.exit_code == 0
+    assert session_id in result.stdout
+    assert "Aborted" in result.stdout
+    assert deleted == []
+
+
+def test_sessions_delete_confirmed_calls_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    deleted: list[str] = []
+    store = FakeConversationStore()
+    store.delete = deleted.append  # type: ignore[attr-defined]
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+    session_id = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
+
+    result = runner.invoke(
+        app,
+        ["sessions", "delete", session_id, "--workspace", str(tmp_path)],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0
+    assert deleted == [session_id]
+    assert result.stdout.endswith(f"Deleted conversation {session_id}.\n")
+
+
+@pytest.mark.parametrize("error", [EOFError(), KeyboardInterrupt(), typer.Abort()])
+def test_sessions_delete_interruption_aborts_without_deleting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: BaseException
+) -> None:
+    deleted: list[str] = []
+    store = FakeConversationStore()
+    store.delete = deleted.append  # type: ignore[attr-defined]
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+
+    def interrupt_confirmation(*args: object, **kwargs: object) -> bool:
+        raise error
+
+    monkeypatch.setattr(cli.typer, "confirm", interrupt_confirmation)
+
+    result = runner.invoke(
+        app,
+        [
+            "sessions",
+            "delete",
+            "52c809c6-6e55-4ff1-9220-e4f90a4f6774",
+            "--workspace",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "Aborted.\n"
+    assert deleted == []
+
+
+def test_sessions_commands_report_errors_without_tracebacks(tmp_path: Path) -> None:
+    missing_workspace = runner.invoke(
+        app, ["sessions", "list", "--workspace", str(tmp_path / "missing")]
+    )
+    missing_session = runner.invoke(
+        app,
+        [
+            "sessions",
+            "delete",
+            "52c809c6-6e55-4ff1-9220-e4f90a4f6774",
+            "--workspace",
+            str(tmp_path),
+        ],
+        input="y\n",
+    )
+
+    assert missing_workspace.exit_code == 1
+    assert "workspace" in missing_workspace.stderr.lower()
+    assert missing_session.exit_code == 1
+    assert "Conversation not found" in missing_session.stderr
+    assert "Traceback" not in missing_session.stderr
