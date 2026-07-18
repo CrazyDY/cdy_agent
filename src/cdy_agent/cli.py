@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated, NoReturn
+from uuid import uuid4
 
 import typer
 from openai import (
@@ -16,7 +17,8 @@ from openai import (
 
 from .agent import Agent, AgentLoopLimitError
 from .config import resolve_api_mode, resolve_model
-from .conversation import Conversation
+from .conversation import Conversation, Message
+from .memory import ConversationStore, ConversationStoreError
 from .openai_client import MissingAPIKeyError, ModelGateway
 from .skills import SkillManager, create_skill_tools
 from .tools import create_builtin_registry
@@ -36,6 +38,7 @@ REQUEST_ERRORS = (
     ValueError,
     RuntimeError,
     AgentLoopLimitError,
+    ConversationStoreError,
 )
 
 
@@ -131,16 +134,28 @@ def chat(
         Path | None,
         typer.Option(help="Directory available to local tools."),
     ] = None,
+    resume: Annotated[
+        str | None,
+        typer.Option(help="Resume a saved conversation by its complete ID."),
+    ] = None,
 ) -> None:
-    """Start an in-memory multi-turn conversation."""
+    """Start a new conversation or explicitly resume a saved one."""
     try:
         active_model = resolve_model(model)
         api_mode = resolve_api_mode()
         active_workspace = resolve_workspace(workspace or Path.cwd())
+        store = ConversationStore(active_workspace)
         agent = _create_agent(active_model, api_mode, active_workspace)
+        conversation = Conversation()
+        if resume is None:
+            session_id = str(uuid4())
+        else:
+            stored = store.load(resume)
+            session_id = stored.id
+            for message in stored.messages:
+                conversation.append(message.role, message.content)
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
-    conversation = Conversation()
 
     while True:
         try:
@@ -154,10 +169,12 @@ def chat(
         if normalized_prompt.lower() in {"/exit", "/quit"}:
             return
 
-        conversation.append("user", normalized_prompt)
+        user_message = conversation.append("user", normalized_prompt)
         try:
             reply = agent.run(conversation.history)
+            assistant_message = Message(role="assistant", content=reply.strip())
+            store.append_turn(session_id, user_message, assistant_message)
         except REQUEST_ERRORS as exc:
             _fail_for_exception(exc)
-        conversation.append("assistant", reply)
-        typer.echo(f"Assistant: {reply}")
+        conversation.append(assistant_message.role, assistant_message.content)
+        typer.echo(f"Assistant: {assistant_message.content}")

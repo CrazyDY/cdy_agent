@@ -18,6 +18,7 @@ from cdy_agent import cli, openai_client
 from cdy_agent.agent import AgentLoopLimitError
 from cdy_agent.cli import app
 from cdy_agent.conversation import Message
+from cdy_agent.memory import ConversationNotFoundError, StoredConversation
 from cdy_agent.tools.base import ConfirmationRequest, ToolResult
 
 
@@ -48,6 +49,23 @@ class FakeAgent:
         if self.error is not None:
             raise self.error
         return next(self.replies)
+
+
+class FakeConversationStore:
+    def __init__(self, stored: StoredConversation | None = None) -> None:
+        self.stored = stored
+        self.loads: list[str] = []
+        self.appended: list[tuple[str, Message, Message]] = []
+
+    def load(self, session_id: str) -> StoredConversation:
+        self.loads.append(session_id)
+        assert self.stored is not None
+        return self.stored
+
+    def append_turn(
+        self, session_id: str, user: Message, assistant: Message
+    ) -> None:
+        self.appended.append((session_id, user, assistant))
 
 
 @pytest.fixture(autouse=True)
@@ -174,6 +192,205 @@ def test_chat_passes_accumulated_history_and_appends_final_replies(
             Message(role="user", content="Follow-up"),
         ),
     ]
+
+
+def test_chat_persists_each_complete_turn_before_display(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    agent = FakeAgent(["First reply", "Second reply"])
+    store = FakeConversationStore()
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+
+    result = runner.invoke(
+        app, ["chat", "--workspace", str(tmp_path)], input="First\nSecond\n/exit\n"
+    )
+
+    assert result.exit_code == 0
+    assert len(store.appended) == 2
+    session_id = store.appended[0][0]
+    assert store.appended == [
+        (session_id, Message("user", "First"), Message("assistant", "First reply")),
+        (session_id, Message("user", "Second"), Message("assistant", "Second reply")),
+    ]
+    assert store.loads == []
+    assert result.stdout.index("Assistant: First reply") >= 0
+
+
+def test_chat_resume_loads_history_before_first_agent_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    session_id = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
+    stored = StoredConversation(
+        session_id,
+        "2026-07-18T08:30:00.000000Z",
+        "2026-07-18T08:30:00.000000Z",
+        (Message("user", "Old"), Message("assistant", "History")),
+    )
+    store = FakeConversationStore(stored)
+    agent = FakeAgent("New reply")
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(
+        app,
+        ["chat", "--resume", session_id, "--workspace", str(tmp_path)],
+        input="Continue\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert store.loads == [session_id]
+    assert agent.calls == [
+        (
+            Message("user", "Old"),
+            Message("assistant", "History"),
+            Message("user", "Continue"),
+        )
+    ]
+    assert store.appended == [
+        (session_id, Message("user", "Continue"), Message("assistant", "New reply"))
+    ]
+
+
+def test_chat_model_failure_and_immediate_exit_do_not_save(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = FakeConversationStore()
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+    monkeypatch.setattr(
+        cli,
+        "_create_agent",
+        lambda *args: FakeAgent(error=AgentLoopLimitError("model loop exhausted")),
+    )
+
+    failed = runner.invoke(app, ["chat", "--workspace", str(tmp_path)], input="Hello\n")
+    exited = runner.invoke(app, ["chat", "--workspace", str(tmp_path)], input="/exit\n")
+
+    assert failed.exit_code == 1
+    assert exited.exit_code == 0
+    assert store.appended == []
+
+
+def test_chat_store_failure_does_not_display_reply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FailingStore(FakeConversationStore):
+        def append_turn(
+            self, session_id: str, user: Message, assistant: Message
+        ) -> None:
+            raise cli.ConversationStoreError("Could not write conversation data.")
+
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: FailingStore())
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent("Unsaved reply"))
+
+    result = runner.invoke(
+        app, ["chat", "--workspace", str(tmp_path)], input="Hello\n"
+    )
+
+    assert result.exit_code == 1
+    assert "Could not write conversation data" in result.stderr
+    assert "Assistant: Unsaved reply" not in result.stdout
+
+
+def test_chat_later_model_failure_keeps_only_prior_complete_turn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FailSecondAgent(FakeAgent):
+        def run(self, messages: Sequence[Message]) -> str:
+            self.calls.append(tuple(messages))
+            if len(self.calls) == 2:
+                raise AgentLoopLimitError("second turn failed")
+            return "First reply"
+
+    store = FakeConversationStore()
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: FailSecondAgent())
+
+    result = runner.invoke(
+        app, ["chat", "--workspace", str(tmp_path)], input="First\nSecond\n"
+    )
+
+    assert result.exit_code == 1
+    assert len(store.appended) == 1
+    assert store.appended[0][1:] == (
+        Message("user", "First"),
+        Message("assistant", "First reply"),
+    )
+
+
+def test_resume_failure_happens_before_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class MissingStore(FakeConversationStore):
+        def load(self, session_id: str) -> StoredConversation:
+            raise ConversationNotFoundError("Conversation not found.")
+
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: MissingStore())
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent())
+
+    result = runner.invoke(
+        app,
+        [
+            "chat",
+            "--resume",
+            "52c809c6-6e55-4ff1-9220-e4f90a4f6774",
+            "--workspace",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Conversation not found" in result.stderr
+    assert "You:" not in result.stdout
+
+
+@pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
+def test_resumed_history_is_api_mode_neutral(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, api_mode: str
+) -> None:
+    session_id = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
+    stored = StoredConversation(
+        session_id,
+        "2026-07-18T08:30:00.000000Z",
+        "2026-07-18T08:30:00.000000Z",
+        (Message("user", "Old"), Message("assistant", "History")),
+    )
+    store = FakeConversationStore(stored)
+    seen_modes: list[str] = []
+    agent = FakeAgent("Reply")
+    monkeypatch.setenv("CDY_AGENT_API_MODE", api_mode)
+    monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
+    monkeypatch.setattr(
+        cli,
+        "_create_agent",
+        lambda model, mode, workspace: seen_modes.append(mode) or agent,
+    )
+
+    result = runner.invoke(
+        app,
+        ["chat", "--resume", session_id, "--workspace", str(tmp_path)],
+        input="New\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert seen_modes == [api_mode]
+    assert agent.calls[0][:2] == stored.messages
+
+
+def test_ask_does_not_construct_conversation_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent("Reply"))
+    monkeypatch.setattr(
+        cli,
+        "ConversationStore",
+        lambda workspace: pytest.fail("ask must remain stateless"),
+    )
+
+    result = runner.invoke(app, ["ask", "Hello", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert result.stdout == "Reply\n"
 
 
 def test_chat_does_not_append_assistant_message_after_failed_run(
