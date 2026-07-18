@@ -51,7 +51,9 @@ class PersonalStore:
             return ToolResult.success([])
         try:
             document = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except OSError:
+            return ToolResult.failure("store_error", "Could not read personal data.")
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return ToolResult.failure("invalid_store", "Stored personal data is invalid.")
         if not validator(document):
             return ToolResult.failure("invalid_store", "Stored personal data is invalid.")
@@ -76,7 +78,11 @@ class PersonalStore:
         if target.exists():
             try:
                 existing_document = json.loads(target.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            except OSError:
+                return ToolResult.failure(
+                    "store_error", "Could not read personal data."
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 return ToolResult.failure(
                     "invalid_store", "Stored personal data is invalid."
                 )

@@ -98,6 +98,18 @@ def test_builtin_registry_has_deterministic_order(tmp_path: Path) -> None:
     )
 
 
+def test_builtin_personal_tools_share_one_store(tmp_path: Path) -> None:
+    registry = create_builtin_registry(tmp_path)
+    personal_tool_names = (
+        "create_note", "list_notes", "get_note", "delete_note",
+        "create_todo", "list_todos", "complete_todo", "delete_todo",
+    )
+
+    stores = [registry._tools[name].store for name in personal_tool_names]
+
+    assert all(store is stores[0] for store in stores)
+
+
 def test_agent_passes_registry_definitions_to_real_gateway(tmp_path: Path) -> None:
     class FakeResponses:
         def __init__(self) -> None:

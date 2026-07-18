@@ -92,6 +92,27 @@ def test_load_rejects_json_note_content_with_lone_surrogate(tmp_path: Path) -> N
     assert result.code == "invalid_store"
 
 
+def test_load_read_error_returns_store_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_directory = tmp_path / ".cdy-agent"
+    data_directory.mkdir()
+    target = data_directory / "notes.json"
+    target.write_text(json.dumps({"version": 1, "items": [NOTE]}), encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fail_target_read(path: Path, *args: object, **kwargs: object) -> str:
+        if path == target:
+            raise OSError("read failed")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_target_read)
+
+    result = PersonalStore(tmp_path).load_notes()
+
+    assert result.code == "store_error"
+
+
 def test_save_refuses_to_overwrite_lone_surrogate_and_preserves_bytes(
     tmp_path: Path,
 ) -> None:
@@ -107,6 +128,30 @@ def test_save_refuses_to_overwrite_lone_surrogate_and_preserves_bytes(
 
     assert result.code == "invalid_store"
     assert target.read_bytes() == original
+
+
+def test_save_existing_read_error_preserves_original_and_creates_no_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_directory = tmp_path / ".cdy-agent"
+    data_directory.mkdir()
+    target = data_directory / "notes.json"
+    original = json.dumps({"version": 1, "items": [NOTE]}).encode("utf-8")
+    target.write_bytes(original)
+    original_read_text = Path.read_text
+
+    def fail_target_read(path: Path, *args: object, **kwargs: object) -> str:
+        if path == target:
+            raise OSError("read failed")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_target_read)
+
+    result = PersonalStore(tmp_path).save_notes([])
+
+    assert result.code == "store_error"
+    assert target.read_bytes() == original
+    assert list(data_directory.glob(".notes.json.*")) == []
 
 
 @pytest.mark.parametrize("version", [True, 1.0])

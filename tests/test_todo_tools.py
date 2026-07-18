@@ -46,12 +46,31 @@ def test_todo_tool_schemas_and_confirmation_flags(tmp_path: Path) -> None:
         tool.requires_confirmation
         for tool in (create, list_todos, complete, delete)
     ] == [True, False, True, True]
-    assert create.parameters["additionalProperties"] is False
-    assert list_todos.parameters == {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
+    assert [tool.parameters for tool in (create, list_todos, complete, delete)] == [
+        {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"todo_id": {"type": "string"}},
+            "required": ["todo_id"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"todo_id": {"type": "string"}},
+            "required": ["todo_id"],
+            "additionalProperties": False,
+        },
+    ]
 
 
 def test_todo_lifecycle(tmp_path: Path) -> None:
@@ -216,6 +235,31 @@ def test_todo_tools_propagate_load_errors(tmp_path: Path) -> None:
         result is not None and result.code == "invalid_store"
         for result in results
     )
+
+
+def test_create_todo_store_failure_happens_before_confirmation(
+    tmp_path: Path,
+) -> None:
+    data_directory = tmp_path / ".cdy-agent"
+    data_directory.mkdir()
+    (data_directory / "todos.json").write_text("{", encoding="utf-8")
+    _, create, _, _, _ = build_tools(tmp_path)
+    confirmations = []
+
+    result = ToolRegistry([create]).execute(
+        ToolCall("1", "create_todo", '{"text":"Write tests"}'),
+        lambda request: confirmations.append(request) or True,
+    )
+
+    assert result.code == "invalid_store"
+    assert confirmations == []
+
+
+def test_create_todo_preflight_does_not_create_empty_store(tmp_path: Path) -> None:
+    _, create, _, _, _ = build_tools(tmp_path)
+
+    assert create.preflight({"text": "Write tests"}) is None
+    assert not (tmp_path / ".cdy-agent").exists()
 
 
 def test_todo_mutations_propagate_save_errors_and_preserve_store(

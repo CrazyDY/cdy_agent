@@ -97,7 +97,11 @@ class CreateTodoTool:
     requires_confirmation: bool = True
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
-        return _validate_create(arguments)
+        invalid = _validate_create(arguments)
+        if invalid is not None:
+            return invalid
+        loaded = self.store.load_todos()
+        return None if loaded.ok else loaded
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         if _validate_create(arguments) is not None:
