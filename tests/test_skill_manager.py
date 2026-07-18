@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 from cdy_agent.skills.manager import SkillManager
 from cdy_agent.tools.base import ToolResult
 from cdy_agent.tools.registry import ToolRegistry
@@ -230,3 +232,74 @@ def create_tools(workspace):
     assert result.code == "load_failed"
     assert "factory secret" not in (result.message or "")
     assert module_name not in sys.modules
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "value = 1\n",
+        "create_tools = None\n",
+    ],
+)
+def test_missing_or_noncallable_factory_is_invalid_tools(
+    tmp_path: Path, source: str
+) -> None:
+    write_skill(tmp_path, "bad_factory", source)
+    registry = ToolRegistry([])
+    manager = SkillManager(tmp_path, registry, lambda request: True)
+
+    result = manager.activate("bad_factory")
+
+    assert result.code == "invalid_tools"
+    assert registry.definitions == ()
+    assert manager.list_skills()["skills"][0]["active"] is False
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def create_tools(workspace): return 42\n",
+        '''
+def create_tools(workspace):
+    def broken():
+        yield None
+        raise ValueError("materialization secret")
+    return broken()
+''',
+    ],
+)
+def test_unmaterializable_tool_result_is_invalid_tools(
+    tmp_path: Path, source: str
+) -> None:
+    write_skill(tmp_path, "bad_result", source)
+    registry = ToolRegistry([])
+    manager = SkillManager(tmp_path, registry, lambda request: True)
+
+    result = manager.activate("bad_result")
+
+    assert result.code == "invalid_tools"
+    assert "materialization secret" not in (result.message or "")
+    assert registry.definitions == ()
+    assert manager.list_skills()["skills"][0]["active"] is False
+
+
+def test_tool_property_failure_during_validation_is_invalid_tools(
+    tmp_path: Path,
+) -> None:
+    source = '''
+class InvalidTool:
+    @property
+    def name(self):
+        raise RuntimeError("validation secret")
+def create_tools(workspace): return [InvalidTool()]
+'''
+    write_skill(tmp_path, "bad_tool", source)
+    registry = ToolRegistry([])
+    manager = SkillManager(tmp_path, registry, lambda request: True)
+
+    result = manager.activate("bad_tool")
+
+    assert result.code == "invalid_tools"
+    assert "validation secret" not in (result.message or "")
+    assert registry.definitions == ()
+    assert manager.list_skills()["skills"][0]["active"] is False

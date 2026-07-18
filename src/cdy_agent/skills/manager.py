@@ -109,13 +109,18 @@ class SkillManager:
                     "invalid_tools", "Skill must define create_tools(workspace)."
                 )
             tools = factory(self.workspace)
-            registered = self.registry.register_many(tools)
         except Exception:
             return ToolResult.failure(
                 "load_failed", f"Could not load Skill '{skill.metadata.name}'."
             )
         finally:
             sys.modules.pop(module_name, None)
+        try:
+            registered = self.registry.register_many(tools)
+        except Exception:
+            return ToolResult.failure(
+                "invalid_tools", "Skill returned invalid tools."
+            )
         if not registered.ok:
             return registered
         names = tuple(registered.data["names"])
