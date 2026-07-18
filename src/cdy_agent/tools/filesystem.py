@@ -97,3 +97,109 @@ class ReadFileTool:
                 "truncated": truncated,
             }
         )
+
+
+def _validate_write_arguments(arguments: dict[str, Any]) -> ToolResult | None:
+    if set(arguments) not in ({"path", "content"}, {"path", "content", "overwrite"}):
+        return ToolResult.failure(
+            "invalid_arguments",
+            "path and content are required; overwrite is optional.",
+        )
+    if not isinstance(arguments["path"], str) or not arguments["path"]:
+        return ToolResult.failure(
+            "invalid_arguments", "path must be a non-empty string."
+        )
+    if not isinstance(arguments["content"], str):
+        return ToolResult.failure("invalid_arguments", "content must be a string.")
+    if "overwrite" in arguments and not isinstance(arguments["overwrite"], bool):
+        return ToolResult.failure("invalid_arguments", "overwrite must be a boolean.")
+    return None
+
+
+def _resolve_write_target(workspace: Path, raw_path: str) -> Path | ToolResult:
+    path = Path(raw_path)
+    unresolved = workspace / path if not path.is_absolute() else path
+    try:
+        if unresolved.exists() or unresolved.is_symlink():
+            target = unresolved.resolve()
+        else:
+            parent = unresolved.parent
+            if not parent.exists() or not parent.is_dir():
+                return ToolResult.failure(
+                    "parent_not_found", "Parent directory does not exist."
+                )
+            target = parent.resolve() / unresolved.name
+    except OSError as error:
+        return ToolResult.failure("file_error", f"Could not resolve path: {error}.")
+
+    try:
+        target.relative_to(workspace)
+    except ValueError:
+        return ToolResult.failure(
+            "path_outside_workspace", "Path is outside the workspace."
+        )
+    return target
+
+
+@dataclass
+class WriteFileTool:
+    workspace: Path
+    name: str = "write_file"
+    description: str = "Write UTF-8 text to a file in the workspace."
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+                "overwrite": {"type": "boolean"},
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        }
+    )
+    requires_confirmation: bool = True
+
+    def __post_init__(self) -> None:
+        self.workspace = resolve_workspace(self.workspace)
+
+    def confirmation_description(self, arguments: dict[str, Any]) -> str:
+        invalid = _validate_write_arguments(arguments)
+        if invalid is not None:
+            return "Invalid write_file arguments."
+        target = _resolve_write_target(self.workspace, arguments["path"])
+        if isinstance(target, ToolResult):
+            return f"Cannot write file: {target.message}"
+        operation = "Overwrite" if target.exists() else "Create"
+        byte_count = len(arguments["content"].encode("utf-8"))
+        return f"{operation} file {target} with {byte_count} bytes of UTF-8 text."
+
+    def execute(self, arguments: dict[str, Any]) -> ToolResult:
+        invalid = _validate_write_arguments(arguments)
+        if invalid is not None:
+            return invalid
+        target = _resolve_write_target(self.workspace, arguments["path"])
+        if isinstance(target, ToolResult):
+            return target
+
+        if target.exists() and target.is_dir():
+            return ToolResult.failure("not_a_file", "Path is not a file.")
+        overwritten = target.exists()
+        if overwritten and arguments.get("overwrite") is not True:
+            return ToolResult.failure(
+                "overwrite_not_allowed",
+                "File already exists; set overwrite to true to replace it.",
+            )
+
+        content = arguments["content"]
+        try:
+            target.write_text(content, encoding="utf-8")
+        except OSError as error:
+            return ToolResult.failure("file_error", f"Could not write file: {error}.")
+        return ToolResult.success(
+            {
+                "path": str(target),
+                "bytes": len(content.encode("utf-8")),
+                "overwritten": overwritten,
+            }
+        )

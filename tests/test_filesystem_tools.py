@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from cdy_agent.tools.filesystem import ReadFileTool, resolve_workspace
+from cdy_agent.tools.filesystem import ReadFileTool, WriteFileTool, resolve_workspace
 
 
 def test_resolve_workspace_requires_directory(tmp_path: Path) -> None:
@@ -85,3 +85,116 @@ def test_read_file_maps_resolution_error_to_file_error(
     result = tool.execute({"path": "file.txt"})
 
     assert result.code == "file_error"
+
+
+def test_write_file_creates_and_explicitly_overwrites(tmp_path: Path) -> None:
+    tool = WriteFileTool(tmp_path)
+
+    created = tool.execute({"path": "note.txt", "content": "hello"})
+    assert created.ok is True
+    assert created.data == {
+        "path": str((tmp_path / "note.txt").resolve()),
+        "bytes": 5,
+        "overwritten": False,
+    }
+    assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "hello"
+
+    denied = tool.execute({"path": "note.txt", "content": "new"})
+    assert denied.code == "overwrite_not_allowed"
+    assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "hello"
+
+    replaced = tool.execute(
+        {"path": "note.txt", "content": "new", "overwrite": True}
+    )
+    assert replaced.ok is True
+    assert replaced.data["overwritten"] is True
+    assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "new"
+
+
+def test_write_file_requires_existing_parent_and_stays_in_workspace(
+    tmp_path: Path,
+) -> None:
+    tool = WriteFileTool(tmp_path)
+
+    assert tool.execute({"path": "missing/note.txt", "content": "x"}).code == (
+        "parent_not_found"
+    )
+    outside_name = f"{tmp_path.name}-write-outside.txt"
+    assert tool.execute({"path": f"../{outside_name}", "content": "x"}).code == (
+        "path_outside_workspace"
+    )
+    assert not (tmp_path.parent / outside_name).exists()
+
+
+def test_write_file_rejects_directory_target(tmp_path: Path) -> None:
+    (tmp_path / "folder").mkdir()
+
+    result = WriteFileTool(tmp_path).execute(
+        {"path": "folder", "content": "x", "overwrite": True}
+    )
+
+    assert result.code == "not_a_file"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"path": "note.txt"},
+        {"content": "x"},
+        {"path": 1, "content": "x"},
+        {"path": "note.txt", "content": 1},
+        {"path": "note.txt", "content": "x", "overwrite": "yes"},
+        {"path": "note.txt", "content": "x", "extra": True},
+    ],
+)
+def test_write_file_rejects_invalid_arguments_before_mutation(
+    tmp_path: Path, arguments: dict[str, object]
+) -> None:
+    target = tmp_path / "note.txt"
+    target.write_text("original", encoding="utf-8")
+
+    result = WriteFileTool(tmp_path).execute(arguments)
+
+    assert result.code == "invalid_arguments"
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+def test_write_description_identifies_create_or_overwrite(tmp_path: Path) -> None:
+    tool = WriteFileTool(tmp_path)
+    create = tool.confirmation_description({"path": "note.txt", "content": "你好"})
+    assert "create" in create.lower()
+    assert str((tmp_path / "note.txt").resolve()) in create
+    assert "6 bytes" in create
+
+    (tmp_path / "note.txt").write_text("old", encoding="utf-8")
+    overwrite = tool.confirmation_description(
+        {"path": "note.txt", "content": "new", "overwrite": True}
+    )
+    assert "overwrite" in overwrite.lower()
+
+
+def test_write_description_is_pure(tmp_path: Path) -> None:
+    target = tmp_path / "note.txt"
+
+    WriteFileTool(tmp_path).confirmation_description(
+        {"path": "note.txt", "content": "content"}
+    )
+
+    assert not target.exists()
+
+
+def test_write_file_maps_oserror_to_structured_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_write(path: Path, content: str, encoding: str) -> int:
+        raise OSError("write failed")
+
+    monkeypatch.setattr(Path, "write_text", fail_write)
+
+    result = WriteFileTool(tmp_path).execute(
+        {"path": "note.txt", "content": "content"}
+    )
+
+    assert result.code == "file_error"
+    assert "write failed" in result.message
