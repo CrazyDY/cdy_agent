@@ -186,11 +186,12 @@ def _valid_note(item: object) -> bool:
         return False
     title = item["title"]
     content = item["content"]
+    trimmed_title = title.strip() if isinstance(title, str) else ""
     return (
         _is_uuid(item["id"])
         and isinstance(title, str)
-        and bool(title.strip())
-        and len(title) <= 200
+        and bool(trimmed_title)
+        and len(trimmed_title) <= 200
         and isinstance(content, str)
         and len(content.encode("utf-8")) <= 64 * 1024
         and _is_utc_timestamp(item["created_at"])
@@ -209,14 +210,15 @@ def _valid_todo(item: object) -> bool:
     text = item["text"]
     completed = item["completed"]
     completed_at = item["completed_at"]
+    trimmed_text = text.strip() if isinstance(text, str) else ""
     completion_is_valid = (
         _is_utc_timestamp(completed_at) if completed else completed_at is None
     )
     return (
         _is_uuid(item["id"])
         and isinstance(text, str)
-        and bool(text.strip())
-        and len(text) <= 1000
+        and bool(trimmed_text)
+        and len(trimmed_text) <= 1000
         and type(completed) is bool
         and _is_utc_timestamp(item["created_at"])
         and completion_is_valid

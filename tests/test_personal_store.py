@@ -134,3 +134,102 @@ def test_each_load_returns_fresh_lists_and_item_dictionaries(
     assert first == second == [item]
     assert first is not second
     assert first[0] is not second[0]
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"version": 2, "items": []},
+        {"version": 1, "items": [], "extra": True},
+        {"version": 1, "items": [{**NOTE, "extra": True}]},
+        {"version": 1, "items": [NOTE, NOTE]},
+        {"version": 1, "items": [{**TODO, "completed": True}]},
+    ],
+)
+def test_store_rejects_invalid_documents(tmp_path: Path, document: object) -> None:
+    data = tmp_path / ".cdy-agent"
+    data.mkdir()
+    filename = (
+        "todos.json"
+        if isinstance(document, dict)
+        and document.get("items")
+        and "text" in document["items"][0]
+        else "notes.json"
+    )
+    (data / filename).write_text(json.dumps(document), encoding="utf-8")
+
+    store = PersonalStore(tmp_path)
+    result = store.load_todos() if filename == "todos.json" else store.load_notes()
+
+    assert result.code == "invalid_store"
+
+
+@pytest.mark.parametrize(
+    ("save_method", "load_method", "item"),
+    [
+        (
+            "save_notes",
+            "load_notes",
+            {**NOTE, "title": f" {'x' * 200} "},
+        ),
+        (
+            "save_todos",
+            "load_todos",
+            {**TODO, "text": f" {'x' * 1000} "},
+        ),
+    ],
+)
+def test_store_validates_trimmed_text_without_altering_stored_data(
+    tmp_path: Path,
+    save_method: str,
+    load_method: str,
+    item: dict[str, object],
+) -> None:
+    store = PersonalStore(tmp_path)
+
+    assert getattr(store, save_method)([item]).ok
+    assert getattr(store, load_method)().data == [item]
+
+
+def test_store_rejects_data_directory_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-store"
+    outside.mkdir()
+    try:
+        (tmp_path / ".cdy-agent").symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("platform cannot create symlinks")
+
+    assert PersonalStore(tmp_path).load_notes().code == "path_outside_workspace"
+
+
+def test_store_rejects_data_file_symlink_escape_and_non_utf8(tmp_path: Path) -> None:
+    data = tmp_path / ".cdy-agent"
+    data.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-notes.json"
+    outside.write_text(json.dumps({"version": 1, "items": []}), encoding="utf-8")
+    try:
+        (data / "notes.json").symlink_to(outside)
+    except (NotImplementedError, OSError):
+        pytest.skip("platform cannot create symlinks")
+    assert PersonalStore(tmp_path).load_notes().code == "path_outside_workspace"
+
+    (data / "notes.json").unlink()
+    (data / "notes.json").write_bytes(b"\xff")
+    assert PersonalStore(tmp_path).load_notes().code == "invalid_store"
+
+
+def test_failed_atomic_replace_preserves_original_and_removes_temp_file(
+    tmp_path: Path,
+) -> None:
+    store = PersonalStore(tmp_path)
+    assert store.save_notes([NOTE]).ok
+    original = (tmp_path / ".cdy-agent/notes.json").read_bytes()
+
+    def fail_replace(source: object, destination: object) -> None:
+        raise OSError("replace failed")
+
+    result = PersonalStore(tmp_path, replace=fail_replace).save_notes([])
+
+    assert result.code == "store_error"
+    assert (tmp_path / ".cdy-agent/notes.json").read_bytes() == original
+    assert list((tmp_path / ".cdy-agent").glob(".notes.json.*")) == []
