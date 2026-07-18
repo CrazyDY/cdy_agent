@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from cdy_agent import openai_client
+from cdy_agent.conversation import Message
 from cdy_agent.openai_client import generate_reply
 
 
@@ -55,7 +56,10 @@ def test_generate_reply_sends_normalized_prompt_and_model(
 
     assert result == "Hello from the model."
     assert client.responses.calls == [
-        {"model": "gpt-5.6-terra", "input": "Hello"}
+        {
+            "model": "gpt-5.6-terra",
+            "input": [{"role": "user", "content": "Hello"}],
+        }
     ]
 
 
@@ -251,3 +255,75 @@ def test_generate_reply_rejects_missing_chat_content() -> None:
             api_mode="chat_completions",
             client=client,
         )
+
+
+def test_generate_reply_for_messages_sends_responses_history() -> None:
+    client = FakeClient(responses_output="Second reply")
+    messages = (
+        Message(role="user", content="First question"),
+        Message(role="assistant", content="First reply"),
+        Message(role="user", content="Follow-up"),
+    )
+
+    result = openai_client.generate_reply_for_messages(
+        messages,
+        model="gpt-5.6-terra",
+        api_mode="responses",
+        client=client,
+    )
+
+    assert result == "Second reply"
+    assert client.responses.calls == [
+        {
+            "model": "gpt-5.6-terra",
+            "input": [
+                {"role": "user", "content": "First question"},
+                {"role": "assistant", "content": "First reply"},
+                {"role": "user", "content": "Follow-up"},
+            ],
+        }
+    ]
+
+
+def test_generate_reply_for_messages_sends_chat_history() -> None:
+    client = FakeClient(chat_output="Second reply")
+    messages = (
+        Message(role="user", content="First question"),
+        Message(role="assistant", content="First reply"),
+        Message(role="user", content="Follow-up"),
+    )
+
+    result = openai_client.generate_reply_for_messages(
+        messages,
+        model="deepseek-v4-flash",
+        api_mode="chat_completions",
+        client=client,
+    )
+
+    assert result == "Second reply"
+    assert client.chat.completions.calls == [
+        {
+            "model": "deepseek-v4-flash",
+            "messages": [
+                {"role": "user", "content": "First question"},
+                {"role": "assistant", "content": "First reply"},
+                {"role": "user", "content": "Follow-up"},
+            ],
+        }
+    ]
+    assert client.responses.calls == []
+
+
+def test_generate_reply_for_messages_rejects_empty_history() -> None:
+    client = FakeClient()
+
+    with pytest.raises(ValueError, match="history must not be empty"):
+        openai_client.generate_reply_for_messages(
+            (),
+            model="test-model",
+            api_mode="responses",
+            client=client,
+        )
+
+    assert client.responses.calls == []
+    assert client.chat.completions.calls == []

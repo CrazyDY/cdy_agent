@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 
 from openai import OpenAI
+
+from .conversation import Message
 
 
 class MissingAPIKeyError(RuntimeError):
@@ -22,6 +25,25 @@ def generate_reply(
     normalized_prompt = prompt.strip()
     if not normalized_prompt:
         raise ValueError("Prompt must not be empty.")
+
+    return generate_reply_for_messages(
+        (Message(role="user", content=normalized_prompt),),
+        model=model,
+        api_mode=api_mode,
+        client=client,
+    )
+
+
+def generate_reply_for_messages(
+    messages: Sequence[Message],
+    *,
+    model: str,
+    api_mode: str,
+    client: OpenAI | None = None,
+) -> str:
+    """Generate one reply from a complete, ordered message history."""
+    if not messages:
+        raise ValueError("Conversation history must not be empty.")
     if api_mode not in {"responses", "chat_completions"}:
         raise ValueError(f"Unsupported API mode: {api_mode!r}.")
 
@@ -33,16 +55,20 @@ def generate_reply(
     else:
         active_client = client
 
+    request_messages = [
+        {"role": message.role, "content": message.content}
+        for message in messages
+    ]
     if api_mode == "responses":
         response = active_client.responses.create(
             model=model,
-            input=normalized_prompt,
+            input=request_messages,
         )
         output_text = response.output_text
     else:
         response = active_client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": normalized_prompt}],
+            messages=request_messages,
         )
         try:
             output_text = response.choices[0].message.content
