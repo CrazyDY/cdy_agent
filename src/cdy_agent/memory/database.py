@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
 import re
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -223,7 +223,7 @@ class WorkspaceDatabase:
             row[0]
             for row in connection.execute(
                 "SELECT name FROM sqlite_master "
-                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                "WHERE type = 'table' AND name NOT GLOB 'sqlite_*'"
             )
         }
 

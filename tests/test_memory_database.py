@@ -404,6 +404,7 @@ def test_read_and_migration_reject_malformed_v1_schema(
         DROP TABLE old_memories;
         """,
         "CREATE TABLE unexpected (value TEXT)",
+        "CREATE TABLE sqliteEvil (value TEXT)",
     ],
     ids=[
         "missing-table",
@@ -413,6 +414,7 @@ def test_read_and_migration_reject_malformed_v1_schema(
         "missing-primary-key",
         "missing-check",
         "unexpected-table",
+        "sqlite-prefix-application-table",
     ],
 )
 def test_read_and_write_reject_malformed_v2_schema(
