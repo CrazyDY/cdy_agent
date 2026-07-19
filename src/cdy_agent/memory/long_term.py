@@ -98,6 +98,19 @@ def _normalize_tags(tags: object) -> tuple[str, ...]:
     return tuple(sorted(normalized))
 
 
+def _normalize_query(query: object) -> str | None:
+    if query is None:
+        return None
+    if not isinstance(query, str):
+        raise InvalidMemoryError("Memory search query must be text.")
+    value = query.strip()
+    if len(value) > MAX_QUERY_CHARACTERS:
+        raise InvalidMemoryError(
+            "Memory search query must be at most 500 characters."
+        )
+    return value or None
+
+
 def _identity(content: str, tags: tuple[str, ...]) -> str:
     payload = json.dumps(
         [content, list(tags)], ensure_ascii=False, separators=(",", ":")
@@ -243,6 +256,63 @@ class MemoryStore:
         except (sqlite3.Error, InvalidConversationStoreError) as error:
             raise MemoryStoreError("Could not read memory data.") from error
 
+    def list_memories(
+        self, tags: Sequence[str] = ()
+    ) -> tuple[StoredMemory, ...]:
+        normalized_tags = _normalize_tags(tags)
+        try:
+            with self._database.read() as connection:
+                if connection is None:
+                    return ()
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+                    return ()
+                return tuple(
+                    record
+                    for record in self._all_records(connection)
+                    if set(normalized_tags).issubset(record.tags)
+                )
+        except MemoryStoreError:
+            raise
+        except (sqlite3.Error, InvalidConversationStoreError) as error:
+            raise MemoryStoreError("Could not read memory data.") from error
+
+    def search(
+        self, query: str | None = None, tags: Sequence[str] = ()
+    ) -> tuple[StoredMemory, ...]:
+        normalized_query = _normalize_query(query)
+        normalized_tags = _normalize_tags(tags)
+        if normalized_query is None and not normalized_tags:
+            raise InvalidMemoryError("Memory search requires query or tags.")
+        terms = (
+            tuple(normalized_query.casefold().split())
+            if normalized_query
+            else ()
+        )
+        try:
+            with self._database.read() as connection:
+                if connection is None:
+                    return ()
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+                    return ()
+                matches: list[StoredMemory] = []
+                for record in self._all_records(connection):
+                    haystack = record.content.casefold()
+                    tag_haystack = record.tags
+                    matches_terms = all(
+                        term in haystack or any(term in tag for tag in tag_haystack)
+                        for term in terms
+                    )
+                    matches_tags = set(normalized_tags).issubset(tag_haystack)
+                    if matches_terms and matches_tags:
+                        matches.append(record)
+                        if len(matches) == MAX_SEARCH_RESULTS:
+                            break
+                return tuple(matches)
+        except MemoryStoreError:
+            raise
+        except (sqlite3.Error, InvalidConversationStoreError) as error:
+            raise MemoryStoreError("Could not read memory data.") from error
+
     def update(
         self, memory_id: str, content: str, tags: Sequence[str]
     ) -> StoredMemory:
@@ -335,6 +405,18 @@ class MemoryStore:
         if record.content == draft.content and record.tags == draft.tags:
             return record
         return None
+
+    def _all_records(
+        self, connection: sqlite3.Connection
+    ) -> tuple[StoredMemory, ...]:
+        records = []
+        for row in connection.execute("SELECT id FROM memories"):
+            record = self._load(connection, row[0])
+            assert record is not None
+            records.append(record)
+        records.sort(key=lambda record: record.id)
+        records.sort(key=lambda record: record.updated_at, reverse=True)
+        return tuple(records)
 
     @staticmethod
     def _load(

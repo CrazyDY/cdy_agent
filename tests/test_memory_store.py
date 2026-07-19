@@ -1,6 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
+from uuid import UUID
 
 import pytest
 
@@ -51,6 +52,21 @@ def _create_v1_database(tmp_path: Path) -> Path:
     with sqlite3.connect(database) as connection:
         connection.executescript(V1_SCHEMA)
     return database
+
+
+def sequenced_store(tmp_path: Path) -> MemoryStore:
+    ids = iter(str(UUID(int=value)) for value in range(1, 100))
+    times = iter(FIRST_TIME + timedelta(minutes=value) for value in range(100))
+    return MemoryStore(
+        tmp_path, clock=lambda: next(times), id_factory=lambda: next(ids)
+    )
+
+
+def store_with_21_sequential_memories(tmp_path: Path) -> MemoryStore:
+    store = sequenced_store(tmp_path)
+    for value in range(21):
+        store.create(f"shared memory {value}", ["shared"])
+    return store
 
 
 def test_create_normalizes_content_tags_and_timestamps(tmp_path: Path) -> None:
@@ -233,6 +249,82 @@ def test_get_treats_v1_database_as_empty(tmp_path: Path) -> None:
     database = _create_v1_database(tmp_path)
     with pytest.raises(MemoryNotFoundError, match=r"^Memory not found\.$"):
         MemoryStore(tmp_path).get(FIRST_ID)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'memories'"
+        ).fetchone() is None
+
+
+def test_search_casefolds_unicode_and_matches_content_or_tags(
+    tmp_path: Path,
+) -> None:
+    store = sequenced_store(tmp_path)
+    first = store.create("Use STRAẞE conventions", ["Python"])
+    store.create("unrelated", ["other"])
+    assert store.search("strasse python") == (first,)
+
+
+def test_search_matches_chinese_query_as_one_term(tmp_path: Path) -> None:
+    store = sequenced_store(tmp_path)
+    record = store.create("项目统一使用 uv 管理依赖", ["工具"])
+    assert store.search("使用 uv") == (record,)
+
+
+def test_search_and_tag_filters_require_every_value(tmp_path: Path) -> None:
+    store = sequenced_store(tmp_path)
+    exact = store.create("alpha beta", ["one", "two"])
+    store.create("alpha only", ["one"])
+    assert store.search("alpha beta", ["ONE", "two"]) == (exact,)
+
+
+def test_search_requires_query_or_tags(tmp_path: Path) -> None:
+    with pytest.raises(InvalidMemoryError, match="query or tags"):
+        MemoryStore(tmp_path).search()
+
+
+def test_search_rejects_query_over_character_limit(tmp_path: Path) -> None:
+    with pytest.raises(InvalidMemoryError, match="500 characters"):
+        MemoryStore(tmp_path).search("x" * 501)
+
+
+def test_search_limits_newest_results_and_list_does_not(tmp_path: Path) -> None:
+    store = store_with_21_sequential_memories(tmp_path)
+    results = store.search("shared")
+    assert len(results) == 20
+    assert len(store.list_memories()) == 21
+    assert [item.updated_at for item in results] == sorted(
+        (item.updated_at for item in results), reverse=True
+    )
+
+
+def test_list_filters_all_tags_and_sorts_equal_timestamps_by_id(
+    tmp_path: Path,
+) -> None:
+    ids = iter((SECOND_ID, FIRST_ID))
+    store = MemoryStore(
+        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids)
+    )
+    second = store.create("second", ["ONE", "two"])
+    first = store.create("first", ["one", "two"])
+    assert store.list_memories([" One ", "TWO"]) == (first, second)
+
+
+def test_retrieval_treats_empty_and_v1_stores_as_empty_without_writes(
+    tmp_path: Path,
+) -> None:
+    empty_workspace = tmp_path / "empty"
+    empty_workspace.mkdir()
+    assert MemoryStore(empty_workspace).list_memories() == ()
+    assert MemoryStore(empty_workspace).search(tags=["tag"]) == ()
+    assert not (empty_workspace / ".cdy-agent").exists()
+
+    v1_workspace = tmp_path / "v1"
+    v1_workspace.mkdir()
+    database = _create_v1_database(v1_workspace)
+    store = MemoryStore(v1_workspace)
+    assert store.list_memories() == ()
+    assert store.search(tags=["tag"]) == ()
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (1,)
         assert connection.execute(
