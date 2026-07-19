@@ -96,11 +96,19 @@ CREATE TABLE memory_tags (
 );
 ```
 
-新数据库直接创建完整的版本 2 schema。打开版本 1 数据库进行写操作时，在单一
-事务中创建新表并把 `PRAGMA user_version` 更新为 2；任何失败都回滚，原会话数据
-保持可用且版本仍为 1。版本 1 的只读会话操作仍可读取现有表；需要读取长期记忆
-时返回空结果而不因只读操作触发迁移。版本为 0、负数、超过 2 或具有不符合预期
-结构的数据库一律拒绝，不猜测或覆盖。
+写连接先执行 `BEGIN IMMEDIATE`，再在持有 SQLite 写锁时读取版本和结构。版本 0
+且没有用户表表示未初始化占位，可在当前事务中建立完整版本 2 schema；失败事务
+可以留下空的 SQLite 占位文件，后续写入可安全恢复，只读则把它视为空存储且绝不
+修改。版本 0 但包含用户对象时拒绝。实现不通过锁外的文件存在性快照判断文件归属，
+异常清理也绝不删除数据库文件，因此并发首写者不能删掉另一写入者已提交的数据。
+
+打开版本 1 数据库进行写操作时，先完整验证 v1，再在单一事务中创建新表、更新
+`PRAGMA user_version` 并完整验证 v2；任何失败都回滚，原会话数据保持可用且版本
+仍为 1。版本 1 的只读会话操作仍可读取现有表；需要读取长期记忆时返回空结果而
+不触发迁移。每次 v1/v2 读写都验证精确应用表集合、列名、声明类型、`NOT NULL`、
+主键位置、外键及 `ON DELETE CASCADE`、必需唯一/主键索引，以及角色、非空正文/
+标签和 64 字符 identity 的关键 `CHECK`。SQLite 内部表可忽略；任何其他版本或结构
+不匹配都使用安全的无效存储错误拒绝，不猜测或覆盖。
 
 每个连接启用外键约束。删除 `memories` 行时，标签由数据库级联删除。时间戳继续
 使用 UTC ISO 8601 格式，ID 继续使用完整规范 UUID。
@@ -120,8 +128,17 @@ CREATE TABLE memory_tags (
 
 正文与规范化标签集合都完全相同的记录视为重复。存储层拒绝第二次保存，返回稳定
 的重复错误并包含已有记忆的 ID。相似但不完全相同的内容允许共存；系统不猜测它们
-是否表达同一事实。`identity_hash` 是正文与已排序标签的无歧义长度前缀编码所生成
-的 SHA-256，仅用于数据库级唯一约束，不对用户展示。唯一约束保证并发写入也不会
+是否表达同一事实。`identity_hash` 是以下稳定字节格式的 lowercase SHA-256：
+
+```text
+b"CDYMEM1" +
+uint64_be(len(content_utf8)) + content_utf8 +
+uint32_be(tag_count) +
+for each sorted tag: uint32_be(len(tag_utf8)) + tag_utf8
+```
+
+长度均为字节数，整数为无符号大端。摘要仅用于数据库级唯一约束，不对用户展示。
+唯一约束保证并发写入也不会
 产生完全重复项；如果出现摘要相同但原内容不同的理论碰撞，存储层返回安全错误，
 不把不同记录误报为重复。
 
@@ -139,6 +156,12 @@ CREATE TABLE memory_tags (
 - 按关键词和标签检索记忆；
 - 用完整正文与标签集合替换一条记忆；
 - 按 ID 删除一条记忆。
+
+确认写流程使用不可变 prepared 操作：create 包含预分配的规范 UUID 与规范化 draft；
+update 包含精确的 `before` 记录和 replacement draft；delete 包含精确的 `before`
+记录。prepare 负责存在性与重复预检，commit 在单一写事务内重新加载目标，并以完整
+不可变 before 快照执行 compare-and-swap。记录若在确认期间改变或消失，抛出稳定
+`MemoryConflictError` 且不修改新状态。直接 CRUD 公共方法继续保留给存储层调用方。
 
 返回值使用不可变的专用记忆记录类型，错误使用存储层定义的可安全展示异常。存储
 接口不返回 `ToolResult`，因为它同时服务 CLI 和模型工具，不属于工具协议本身。
@@ -170,13 +193,15 @@ forget_memory(memory_id)
 `search_memories` 的 `query` 和 `tags` 至少有一个非空，从而也支持仅按标签回忆。
 新增、更新和遗忘设置 `requires_confirmation = True`；搜索不需要确认。
 
-工具预检在确认前完成参数校验、目标存在性和重复检查。确认文案必须展示完整正文、
-规范化标签和目标 UUID；更新同时展示变更前后的正文与标签。用户拒绝时沿用现有
-`approval_denied` 结果，存储保持不变。
+工具预检在确认前建立不可变 prepared 操作并完成参数校验、目标存在性和重复检查。
+create 此时预分配并验证 UUID。确认文案必须展示将被提交的完整 UUID、正文和规范化
+标签；更新同时展示 prepared 的变更前后正文与标签。用户拒绝时沿用现有
+`approval_denied` 结果，清除该同步 registry 调用持有的 prepared 状态且存储保持
+不变；执行完成后同样清除，不跨调用缓存可变预检状态。
 
 工具把成功记录和错误转换为稳定、结构化的 `ToolResult`。重复项使用
-`duplicate_memory`，缺失项使用 `memory_not_found`，无效参数使用
-`invalid_arguments`，安全存储失败使用 `memory_store_error`。记忆内容只作为 JSON
+`duplicate_memory`，缺失项使用 `memory_not_found`，确认冲突使用 `memory_conflict`，
+无效参数使用 `invalid_arguments`，安全存储失败使用 `memory_store_error`。记忆内容只作为 JSON
 工具数据返回，不会被导入为 Python、Skill 或系统指令。
 
 ## CLI 接口
@@ -191,8 +216,10 @@ cdy-agent memories update MEMORY_ID --content TEXT [--tag TAG ...] [--workspace 
 cdy-agent memories delete MEMORY_ID [--workspace PATH]
 ```
 
-`add`、`update` 和 `delete` 显示即将执行的完整变更并使用默认 No 的确认。拒绝或
-中断确认不修改数据并输出 `Aborted.`。所有命令使用完整 UUID；不接受前缀匹配。
+`add`、`update` 和 `delete` 通过与工具相同的 prepared/commit 接口显示即将执行的
+完整变更并使用默认 No 的确认。新增在确认前显示预分配 UUID且 commit 使用同一值。
+拒绝或中断确认不修改数据并输出 `Aborted.`。确认期间目标变化会显示安全冲突错误，
+要求用户重新运行命令。所有命令使用完整 UUID；不接受前缀匹配。
 
 `list` 和 `search` 展示完整 UUID、正文、规范化标签与更新时间。没有匹配结果时
 输出清晰的空结果提示。只读命令不创建数据目录、数据库或触发 schema 迁移。
@@ -222,6 +249,8 @@ CLI 直接调用相同的 `MemoryStore`。变更命令由 CLI 自己执行默认
 - 记忆正文、标签和时间戳的新增或替换位于同一事务。
 - 删除记忆及级联删除标签位于同一事务。
 - 迁移与 `user_version` 更新位于同一事务。
+- schema 初始化决策与结构检查在 `BEGIN IMMEDIATE` 写锁内完成；异常绝不 unlink 数据库。
+- prepared 更新和删除的快照比较与变更位于同一事务，冲突时完整回滚。
 - SQLite 打开、读取、锁冲突、写入和损坏错误转换为稳定的存储错误，不向 CLI 或
   模型泄漏 SQL 和堆栈。
 - 无效 UUID、无效内容、无效标签、无效查询、重复记忆和缺失记忆使用可区分错误。
@@ -238,6 +267,8 @@ CLI 直接调用相同的 `MemoryStore`。变更命令由 CLI 自己执行默认
 - 只读空存储不创建目录或数据库；
 - 新 workspace 首次写入直接建立版本 2 schema；
 - 版本 1 原子迁移到版本 2 并保留全部会话及消息；
+- 两个并发首写者都成功且保留非冲突数据；失败首写留下的 v0 空占位可恢复并可只读为空；
+- v1/v2 缺表、错误列/主键、缺外键级联、缺唯一 identity 和缺关键 CHECK 均被拒绝；
 - 迁移失败回滚且不留下部分表或错误版本；
 - 未知版本、损坏数据库、符号链接越界和非常规文件被拒绝；
 - 原有会话保存、恢复、列表和删除行为在重构后不变。
@@ -247,6 +278,8 @@ CLI 直接调用相同的 `MemoryStore`。变更命令由 CLI 自己执行默认
 - 新增与加载完整记录；
 - 正文和标签规范化、大小与数量限制；
 - 完全重复新增与重复更新被拒绝；
+- 固定 identity 编码向量及标点、换行和 Unicode 边界歧义；
+- 两个真实 Store 间 prepared 更新/删除冲突保留较新记录；
 - Unicode 大小写无关关键词检索、中文完整字符串、AND 关键词和 AND 标签；
 - 搜索上限、更新时间排序与稳定 ID 次序；
 - 完整替换保留 ID 与创建时间；
@@ -257,6 +290,7 @@ CLI 直接调用相同的 `MemoryStore`。变更命令由 CLI 自己执行默认
 
 - 参数 schema、预检与稳定结果结构；
 - 新增、更新和遗忘的确认、拒绝及准确确认文案；
+- 新增确认 UUID 与最终记录一致，确认期间状态变化返回 `memory_conflict`；
 - 搜索无需确认；
 - 重复、缺失和存储错误转换；
 - 工具描述只允许响应用户的明确记忆请求。

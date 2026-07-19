@@ -6,7 +6,7 @@
 
 **Architecture:** Extract the existing SQLite path and schema lifecycle into a focused `WorkspaceDatabase`, while keeping `ConversationStore` and the new `MemoryStore` as separate domain stores over the same schema-v2 database. Register four memory tools in the existing tool loop and expose five Typer subcommands; no memory is loaded unless the user explicitly causes a search tool call or runs a read command.
 
-**Tech Stack:** Python 3.10+, standard-library `sqlite3`, `hashlib`, `json`, and `uuid`; Typer; pytest; existing OpenAI-compatible Agent Tool Loop; uv/Hatchling.
+**Tech Stack:** Python 3.10+, standard-library `sqlite3`, `hashlib`, and `uuid`; Typer; pytest; existing OpenAI-compatible Agent Tool Loop; uv/Hatchling.
 
 ## Global Constraints
 
@@ -24,6 +24,40 @@
 - Preserve all v1 conversation data during atomic migration to schema v2, and preserve the public `ConversationStore` API.
 - Tests must use temporary workspaces, deterministic clocks/UUIDs, mocked model boundaries, and no network or real credentials.
 - Preserve unrelated working-tree changes and never add credentials, `.idea`, generated images, caches, or model responses to a feature commit.
+
+## Final Review Amendments (Binding)
+
+These amendments supersede any older task snippet below that uses a lock-external
+`new_file` snapshot, unlinks a database after failure, hashes JSON, or performs a
+confirmed mutation through direct CRUD after a separate read.
+
+- `WorkspaceDatabase.write()` opens SQLite and acquires `BEGIN IMMEDIATE` before
+  inspecting `user_version` or schema. Version 0 with no application tables is an
+  initializable placeholder; version 0 with user objects is invalid. A failed first
+  transaction may leave an empty placeholder, which later writes initialize and reads
+  treat as empty without mutation. Exception cleanup never unlinks the database.
+- Validate v1 before migration and v2 before every read/write, then validate complete
+  v2 again after migration in the same transaction. Require the exact application
+  table set, exact columns/types/NOT NULL/PK positions, required foreign keys with
+  `ON DELETE CASCADE`, primary/unique indexes, and critical role/nonblank/64-character
+  `CHECK` clauses. Ignore only SQLite-internal tables.
+- Identity bytes are exactly `b"CDYMEM1" + uint64_be(len(content_utf8)) +
+  content_utf8 + uint32_be(tag_count)`, followed for each sorted tag by
+  `uint32_be(len(tag_utf8)) + tag_utf8`. `identity_hash` is lowercase SHA-256 over
+  those bytes; schema version remains 2.
+- Add frozen `PreparedCreate(memory_id, draft)`, `PreparedUpdate(before,
+  replacement)`, and `PreparedDelete(before)`. Prepare create allocates and validates
+  its canonical UUID before confirmation. Commit update/delete reloads and compares
+  the complete immutable before snapshot in the write transaction; a changed or
+  removed target raises `MemoryConflictError` and preserves the current record.
+- CLI and confirmed tools use only prepare/commit. Confirmation renders the prepared
+  complete UUID, normalized content, and normalized tags. Tools map conflict to
+  `memory_conflict`; a tool instance keeps at most one immutable prepared operation
+  during the synchronous registry call and clears it after execution or denial.
+- Add deterministic real-connection two-writer tests, v0 recovery/read tests,
+  malformed v1/v2 structural tests, fixed identity vectors, two-store CAS tests,
+  exact create-confirmation identity tests, tool/CLI confirmation-race tests, and
+  stale prepared-state cleanup tests.
 
 ---
 
@@ -209,32 +243,32 @@ class WorkspaceDatabase:
     def write(self) -> Iterator[sqlite3.Connection]:
         path = self._path(create=True)
         assert path is not None
-        new_file = not path.exists()
         connection = sqlite3.connect(path)
         try:
             self._configure(connection)
             connection.execute("BEGIN IMMEDIATE")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if new_file:
+            if version == 0 and not self._application_tables(connection):
                 for statement in (*SESSION_STATEMENTS, *MEMORY_STATEMENTS):
                     connection.execute(statement)
             elif version == 1:
+                self._validate_schema(connection, 1)
                 for statement in MEMORY_STATEMENTS:
                     connection.execute(statement)
-            elif version != SCHEMA_VERSION:
+            elif version == SCHEMA_VERSION:
+                self._validate_schema(connection, SCHEMA_VERSION)
+            else:
                 raise InvalidConversationStoreError(
                     "Conversation database schema version is not supported."
                 )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self._validate_schema(connection, SCHEMA_VERSION)
             yield connection
             connection.commit()
         except BaseException:
             connection.rollback()
-            connection.close()
-            if new_file and path.exists():
-                path.unlink()
             raise
-        else:
+        finally:
             connection.close()
 
     @staticmethod
@@ -251,7 +285,7 @@ class WorkspaceDatabase:
         return version
 ```
 
-Move `ConversationStoreError`, `ConversationNotFoundError`, and `InvalidConversationStoreError` into this file above `WorkspaceDatabase` so both stores share the same safe error family. Move the current `_database_path` body into `WorkspaceDatabase._path(create: bool)` unchanged except for domain-neutral message wording (`Data path...`, `Database...`). Wrap `sqlite3.Error`, `OSError`, and unlink failures in the shared safe error types; never expose SQL.
+Move `ConversationStoreError`, `ConversationNotFoundError`, and `InvalidConversationStoreError` into this file above `WorkspaceDatabase` so both stores share the same safe error family. Move the current `_database_path` body into `WorkspaceDatabase._path(create: bool)` unchanged except for domain-neutral message wording (`Data path...`, `Database...`). Wrap `sqlite3.Error` and `OSError` in the shared safe error types; never expose SQL and never delete a database during exception cleanup.
 
 - [ ] **Step 4: Refactor `ConversationStore` onto the shared lifecycle**
 
@@ -299,10 +333,12 @@ git commit -m "Add shared memory database migration"
 - Consumes: `WorkspaceDatabase.read()` and `WorkspaceDatabase.write()` from Task 1.
 - Produces: `StoredMemory(id: str, content: str, tags: tuple[str, ...], created_at: str, updated_at: str)`.
 - Produces: `MemoryDraft(content: str, tags: tuple[str, ...], identity_hash: str)` for non-mutating preflight and confirmation rendering.
+- Produces: frozen `PreparedCreate(memory_id: str, draft: MemoryDraft)`, `PreparedUpdate(before: StoredMemory, replacement: MemoryDraft)`, and `PreparedDelete(before: StoredMemory)`.
 - Produces: `MemoryStore(workspace: Path, *, clock: Callable[[], datetime] = _now, id_factory: Callable[[], str] = _new_id)`.
 - Produces: `prepare(content: str, tags: Sequence[str]) -> MemoryDraft` and `find_duplicate(draft: MemoryDraft, *, exclude_id: str | None = None) -> StoredMemory | None`, both non-mutating.
+- Produces: `prepare_create`/`commit_create`, `prepare_update`/`commit_update`, and `prepare_delete`/`commit_delete` for confirmation-safe mutations.
 - Produces: `create(content: str, tags: Sequence[str]) -> StoredMemory`, `get(memory_id: str) -> StoredMemory`, `update(memory_id: str, content: str, tags: Sequence[str]) -> StoredMemory`, and `delete(memory_id: str) -> None`.
-- Produces: `DuplicateMemoryError(existing_id: str)`, `MemoryNotFoundError`, `InvalidMemoryError`, and `MemoryStoreError`.
+- Produces: `DuplicateMemoryError(existing_id: str)`, `MemoryNotFoundError`, `MemoryConflictError`, `InvalidMemoryError`, and `MemoryStoreError`.
 
 - [ ] **Step 1: Write failing CRUD, validation, and duplicate tests**
 
@@ -483,8 +519,16 @@ def _normalize_tags(tags: object) -> tuple[str, ...]:
 
 
 def _identity(content: str, tags: tuple[str, ...]) -> str:
-    payload = json.dumps([content, list(tags)], ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    content_bytes = content.encode("utf-8")
+    payload = bytearray(b"CDYMEM1")
+    payload.extend(len(content_bytes).to_bytes(8, "big"))
+    payload.extend(content_bytes)
+    payload.extend(len(tags).to_bytes(4, "big"))
+    for tag in tags:
+        tag_bytes = tag.encode("utf-8")
+        payload.extend(len(tag_bytes).to_bytes(4, "big"))
+        payload.extend(tag_bytes)
+    return hashlib.sha256(payload).hexdigest()
 ```
 
 Implement `_canonical_uuid` with `UUID(value)` plus `str(parsed) == value`; `_timestamp` must reject naive datetimes and emit UTC microsecond ISO text ending in `Z`; `_require_timestamp` must parse only UTC `Z` strings; `_new_id` returns `str(uuid4())`; `_now` returns `datetime.now(timezone.utc)`. Each invalid input raises the exact memory-specific error asserted in Step 1.
@@ -705,12 +749,12 @@ ID_SCHEMA = {
 }
 ```
 
-Use one `_record_data(record)` serializer returning only `id`, `content`, list-valued `tags`, `created_at`, and `updated_at`. Use one `_failure(error)` mapper preserving typed errors and never including tracebacks. Write preflight calls `MemoryStore.prepare(content, tags)`, `MemoryStore.get(memory_id)`, and `MemoryStore.find_duplicate(draft, exclude_id=memory_id)` exactly as defined in Task 2; it performs no mutation.
+Use one `_record_data(record)` serializer returning only `id`, `content`, list-valued `tags`, `created_at`, and `updated_at`. Use one `_failure(error)` mapper preserving typed errors and never including tracebacks. Confirmed tool preflight calls `prepare_create`, `prepare_update`, or `prepare_delete`, retains that one immutable operation for the current synchronous registry call, and commit consumes the same object. Clear it after execution or denial; map `MemoryConflictError` to `memory_conflict`.
 
 Confirmation descriptions must render normalized values, for example:
 
 ```text
-Remember long-term memory with tags [python, tools]:
+Remember long-term memory 11111111-1111-1111-1111-111111111111 with tags [python, tools]:
 Use uv for Python projects.
 ```
 
@@ -814,7 +858,7 @@ memories_app = typer.Typer(help="Manage explicit long-term memories.")
 app.add_typer(memories_app, name="memories")
 ```
 
-Implement the five commands with repeated `--tag` options typed as `list[str] | None`, `--workspace` matching the sessions commands, and complete UUID arguments. Before each write, call store validation/probe methods, render the exact normalized current/proposed record, and use `typer.confirm(..., default=False)`. Catch `EOFError`, `KeyboardInterrupt`, and `typer.Abort` as `Aborted.`. Read commands never confirm.
+Implement the five commands with repeated `--tag` options typed as `list[str] | None`, `--workspace` matching the sessions commands, and complete UUID arguments. Before each write, create the corresponding immutable prepared operation, render its exact normalized current/proposed record (including preallocated create UUID), and use `typer.confirm(..., default=False)` before committing that same object. Catch `EOFError`, `KeyboardInterrupt`, and `typer.Abort` as `Aborted.`. Surface `MemoryConflictError` safely and require the user to rerun; read commands never confirm.
 
 Use one renderer with stable multiline output:
 
