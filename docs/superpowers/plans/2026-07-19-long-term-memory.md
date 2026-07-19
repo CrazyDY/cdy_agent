@@ -23,7 +23,7 @@
 - Reject only exact normalized content-and-tag duplicates; do not infer semantic similarity.
 - Preserve all v1 conversation data during atomic migration to schema v2, and preserve the public `ConversationStore` API.
 - Tests must use temporary workspaces, deterministic clocks/UUIDs, mocked model boundaries, and no network or real credentials.
-- Preserve unrelated working-tree changes. In particular, do not stage the pre-existing `src/cdy_agent/cli.py` `__main__` block or its credential values; stage only feature hunks, and require the exposed credential to be revoked before release.
+- Preserve unrelated working-tree changes and never add credentials, `.idea`, generated images, caches, or model responses to a feature commit.
 
 ---
 
@@ -848,19 +848,13 @@ Run: `uv run pytest tests/test_cli.py tests/test_agent.py -v`
 
 Expected: all tests pass for `ask`, `chat`, `sessions`, tools, and the new `memories` group.
 
-- [ ] **Step 6: Commit only the intended CLI hunks**
-
-Because `src/cdy_agent/cli.py` already contains an unrelated credential-bearing `__main__` hunk, do not run `git add src/cdy_agent/cli.py`. Stage the new imports, error tuple, Typer group, helper, and command functions with an explicit patch:
+- [ ] **Step 6: Commit the CLI slice**
 
 ```bash
-git diff -- src/cdy_agent/cli.py
-git add tests/test_cli.py
-git add -p src/cdy_agent/cli.py
-git diff --cached -- src/cdy_agent/cli.py
+git add src/cdy_agent/cli.py tests/test_cli.py
+git diff --cached --check
 git commit -m "Add memory management commands"
 ```
-
-At the interactive staging prompt, answer `y` only for the long-term-memory import, error tuple, Typer group, renderer, and five command hunks; answer `n` for the pre-existing `os` import and credential-bearing `__main__` hunk. Before committing, verify `git diff --cached` contains no `OPENAI_API_KEY`, provider URL, or `__main__` block. Leave the user's original worktree hunk unstaged.
 
 ### Task 6: Documentation, full verification, and stage completion
 
@@ -926,7 +920,7 @@ git status --short
 git grep -n "OPENAI_API_KEY.*=" -- ':!docs/superpowers/plans/2026-07-19-long-term-memory.md'
 ```
 
-Expected: feature diffs have no whitespace errors; no newly tracked cache, model response, `.env`, `.idea`, or credential appears. The pre-existing uncommitted credential-bearing CLI block may still appear in `git status`, but must not appear in any feature commit; release remains blocked until its credential is revoked and the block is removed by the user or with explicit authorization.
+Expected: feature diffs have no whitespace errors; no newly tracked cache, model response, `.env`, `.idea`, generated image, or credential appears. The previously exposed provider credential must have been revoked even though it is no longer present in the working tree.
 
 - [ ] **Step 6: Commit docs and stage completion**
 
@@ -944,4 +938,4 @@ git log -6 --oneline
 git status --short
 ```
 
-Expected: the six implementation commits are visible in order, only pre-existing user changes remain, and the final report includes exact pytest/build/help results plus the unresolved credential-removal warning.
+Expected: the six implementation commits are visible in order, only pre-existing user changes remain, and the final report includes exact pytest/build/help results plus the credential-rotation reminder.
