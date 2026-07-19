@@ -4,7 +4,7 @@ CDY Agent 是一个本地个人 AI 助理项目，通过渐进式开发学习实
 
 ## 当前阶段
 
-项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具。模型还可以从工作区发现并按需激活 Skills；带 Python 工具的 Skill 在当前进程首次加载前需要用户明确授权。`chat` 会话现在按 workspace 持久化，长期记忆仍属于后续工作。
+项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具。模型还可以从工作区发现并按需激活 Skills；带 Python 工具的 Skill 在当前进程首次加载前需要用户明确授权。`chat` 会话和用户显式保存的长期记忆现在都按 workspace 持久化。
 
 ## 配置
 
@@ -63,7 +63,25 @@ uv run cdy-agent sessions delete 52c809c6-6e55-4ff1-9220-e4f90a4f6774 --workspac
 
 会话数据库位于 `<workspace>/.cdy-agent/cdy-agent.sqlite3`。`sessions list` 不会为了空结果创建数据库。恢复和删除必须使用完整会话 ID，删除操作默认拒绝并需要用户确认。
 
-`ask` 仍然是无状态命令。首版不提供自动恢复、重命名、搜索、导出、分页、摘要或长期记忆。
+`ask` 仍然是无状态命令。会话首版不提供自动恢复、重命名、搜索、导出、分页或摘要。
+
+### 显式长期记忆
+
+持久化会话保存 `chat` 的完整对话轮次，用于以后显式恢复上下文；长期记忆则是用户明确要求保存、检索、修改或遗忘的独立信息。两者均限定在指定 workspace，保存在该 workspace 的 `<workspace>/.cdy-agent/cdy-agent.sqlite3` 中，不会跨 workspace 共享。
+
+可以直接管理长期记忆：
+
+```powershell
+uv run cdy-agent memories add "Python 项目统一使用 uv 管理依赖" --tag python --tag tooling --workspace .
+uv run cdy-agent memories list --workspace .
+uv run cdy-agent memories search "uv" --tag python --workspace .
+uv run cdy-agent memories update <memory-id> --content "Python 项目统一使用 uv sync 管理依赖" --tag python --tag tooling --workspace .
+uv run cdy-agent memories delete <memory-id> --workspace .
+```
+
+`add`、`update` 和 `delete` 都会先展示变更并请求确认，默认答案为 No。`update` 和 `delete` 的 `<memory-id>` 必须是完整 UUID，不接受缩写。`search` 使用关键词与标签的 AND 匹配：内容必须满足全部关键词，并同时具有全部指定标签。
+
+`ask` 和 `chat` 只会在用户明确要求检索长期记忆后调用记忆检索工具。系统不会从对话中自动提取记忆，也不会把已保存记忆自动注入提示或上下文。
 
 ### 本地工具与安全边界
 
