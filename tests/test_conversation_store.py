@@ -16,6 +16,44 @@ from cdy_agent.memory import (
 
 
 FIXED_TIME = datetime(2026, 7, 18, 8, 30, tzinfo=timezone.utc)
+SESSION_ID = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
+
+
+def create_v1_conversation_database(tmp_path: Path, *, session_id: str) -> None:
+    data = tmp_path / ".cdy-agent"
+    data.mkdir()
+    database = data / "cdy-agent.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE messages (
+                session_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                content TEXT NOT NULL CHECK (length(trim(content)) > 0),
+                PRIMARY KEY (session_id, sequence),
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+            PRAGMA user_version = 1;
+            """
+        )
+        timestamp = "2026-07-18T08:00:00.000000Z"
+        connection.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?)",
+            (session_id, timestamp, timestamp),
+        )
+        connection.executemany(
+            "INSERT INTO messages VALUES (?, ?, ?, ?)",
+            [
+                (session_id, 0, "user", "first"),
+                (session_id, 1, "assistant", "answer"),
+            ],
+        )
 
 
 def make_store(tmp_path: Path) -> ConversationStore:
@@ -74,6 +112,24 @@ def test_append_turn_appends_two_ordered_messages(tmp_path: Path) -> None:
         Message("user", "Two"),
         Message("assistant", "2"),
     )
+
+
+def test_append_turn_migrates_v1_and_preserves_existing_history(
+    tmp_path: Path,
+) -> None:
+    create_v1_conversation_database(tmp_path, session_id=SESSION_ID)
+    store = make_store(tmp_path)
+    store.append_turn(
+        SESSION_ID,
+        Message(role="user", content="second"),
+        Message(role="assistant", content="reply"),
+    )
+    assert [message.content for message in store.load(SESSION_ID).messages] == [
+        "first",
+        "answer",
+        "second",
+        "reply",
+    ]
 
 
 def test_list_summaries_is_lazy_sorted_and_truncates_preview(tmp_path: Path) -> None:
