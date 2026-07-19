@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,6 +21,57 @@ MEMORY_STATEMENTS = (
     "CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL CHECK (length(trim(content)) > 0), identity_hash TEXT NOT NULL UNIQUE CHECK (length(identity_hash) = 64), created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
     "CREATE TABLE memory_tags (memory_id TEXT NOT NULL, tag TEXT NOT NULL CHECK (length(trim(tag)) > 0), PRIMARY KEY (memory_id, tag), FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE)",
 )
+
+_V1_TABLES = {"sessions", "messages"}
+_V2_TABLES = _V1_TABLES | {"memories", "memory_tags"}
+_COLUMNS = {
+    "sessions": (
+        ("id", "TEXT", 0, 1),
+        ("created_at", "TEXT", 1, 0),
+        ("updated_at", "TEXT", 1, 0),
+    ),
+    "messages": (
+        ("session_id", "TEXT", 1, 1),
+        ("sequence", "INTEGER", 1, 2),
+        ("role", "TEXT", 1, 0),
+        ("content", "TEXT", 1, 0),
+    ),
+    "memories": (
+        ("id", "TEXT", 0, 1),
+        ("content", "TEXT", 1, 0),
+        ("identity_hash", "TEXT", 1, 0),
+        ("created_at", "TEXT", 1, 0),
+        ("updated_at", "TEXT", 1, 0),
+    ),
+    "memory_tags": (
+        ("memory_id", "TEXT", 1, 1),
+        ("tag", "TEXT", 1, 2),
+    ),
+}
+_FOREIGN_KEYS = {
+    "sessions": (),
+    "messages": (("session_id", "sessions", "id", "CASCADE"),),
+    "memories": (),
+    "memory_tags": (("memory_id", "memories", "id", "CASCADE"),),
+}
+_UNIQUE_INDEXES = {
+    "sessions": (("id",),),
+    "messages": (("session_id", "sequence"),),
+    "memories": (("id",), ("identity_hash",)),
+    "memory_tags": (("memory_id", "tag"),),
+}
+_CHECK_FRAGMENTS = {
+    "sessions": (),
+    "messages": (
+        "check(rolein('user','assistant'))",
+        "check(length(trim(content))>0)",
+    ),
+    "memories": (
+        "check(length(trim(content))>0)",
+        "check(length(identity_hash)=64)",
+    ),
+    "memory_tags": ("check(length(trim(tag))>0)",),
+}
 
 
 class ConversationStoreError(RuntimeError):
@@ -52,7 +104,9 @@ class WorkspaceDatabase:
                 return
             connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
             self._configure(connection)
-            self._require_readable_version(connection)
+            if self._require_readable_version(connection) is None:
+                yield None
+                return
             yield connection
         except ConversationStoreError:
             raise
@@ -68,28 +122,29 @@ class WorkspaceDatabase:
     def write(self) -> Iterator[sqlite3.Connection]:
         path = self._path(create=True)
         assert path is not None
-        new_file = not path.exists()
         connection: sqlite3.Connection | None = None
-        failed = True
         try:
             connection = sqlite3.connect(path)
             self._configure(connection)
             connection.execute("BEGIN IMMEDIATE")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if new_file:
+            if version == 0 and not self._application_tables(connection):
                 for statement in (*SESSION_STATEMENTS, *MEMORY_STATEMENTS):
                     connection.execute(statement)
             elif version == 1:
+                self._validate_schema(connection, 1)
                 for statement in MEMORY_STATEMENTS:
                     connection.execute(statement)
-            elif version != SCHEMA_VERSION:
+            elif version == SCHEMA_VERSION:
+                self._validate_schema(connection, SCHEMA_VERSION)
+            else:
                 raise InvalidConversationStoreError(
                     "Conversation database schema version is not supported."
                 )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self._validate_schema(connection, SCHEMA_VERSION)
             yield connection
             connection.commit()
-            failed = False
         except ConversationStoreError:
             if connection is not None:
                 connection.rollback()
@@ -107,13 +162,6 @@ class WorkspaceDatabase:
         finally:
             if connection is not None:
                 connection.close()
-            if failed and new_file and path.exists():
-                try:
-                    path.unlink()
-                except OSError as error:
-                    raise ConversationStoreError(
-                        "Could not remove incomplete database."
-                    ) from error
 
     def _path(self, *, create: bool) -> Path | None:
         data_directory = self.workspace / DATA_DIRECTORY
@@ -121,7 +169,7 @@ class WorkspaceDatabase:
             if not data_directory.exists() and not data_directory.is_symlink():
                 if not create:
                     return None
-                data_directory.mkdir()
+                data_directory.mkdir(exist_ok=True)
             if data_directory.is_symlink():
                 raise InvalidConversationStoreError(
                     "Data path must not be a symbolic link."
@@ -155,11 +203,90 @@ class WorkspaceDatabase:
     def _configure(connection: sqlite3.Connection) -> None:
         connection.execute("PRAGMA foreign_keys = ON")
 
-    @staticmethod
-    def _require_readable_version(connection: sqlite3.Connection) -> int:
+    @classmethod
+    def _require_readable_version(
+        cls, connection: sqlite3.Connection
+    ) -> int | None:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version == 0 and not cls._application_tables(connection):
+            return None
         if version not in {1, SCHEMA_VERSION}:
             raise InvalidConversationStoreError(
                 "Conversation database schema version is not supported."
             )
+        cls._validate_schema(connection, version)
         return version
+
+    @staticmethod
+    def _application_tables(connection: sqlite3.Connection) -> set[str]:
+        return {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+
+    @classmethod
+    def _validate_schema(
+        cls, connection: sqlite3.Connection, version: int
+    ) -> None:
+        expected_tables = _V1_TABLES if version == 1 else _V2_TABLES
+        if cls._application_tables(connection) != expected_tables:
+            cls._invalid_schema()
+        for table in expected_tables:
+            columns = tuple(
+                (row[1], row[2].upper(), row[3], row[5])
+                for row in connection.execute(f"PRAGMA table_info({table})")
+            )
+            if columns != _COLUMNS[table]:
+                cls._invalid_schema()
+
+            foreign_keys = tuple(
+                sorted(
+                    (row[3], row[2], row[4], row[6].upper())
+                    for row in connection.execute(
+                        f"PRAGMA foreign_key_list({table})"
+                    )
+                )
+            )
+            if foreign_keys != _FOREIGN_KEYS[table]:
+                cls._invalid_schema()
+
+            unique_indexes: set[tuple[str, ...]] = set()
+            for index in connection.execute(f"PRAGMA index_list({table})"):
+                if index[2] != 1 or index[4] != 0:
+                    continue
+                unique_indexes.add(
+                    tuple(
+                        row[2]
+                        for row in connection.execute(
+                            f"PRAGMA index_info({cls._quote(index[1])})"
+                        )
+                    )
+                )
+            if not set(_UNIQUE_INDEXES[table]).issubset(unique_indexes):
+                cls._invalid_schema()
+
+            row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            if row is None or not isinstance(row[0], str):
+                cls._invalid_schema()
+            normalized_sql = re.sub(r"\s+", "", row[0].casefold())
+            if any(
+                fragment not in normalized_sql
+                for fragment in _CHECK_FRAGMENTS[table]
+            ):
+                cls._invalid_schema()
+
+    @staticmethod
+    def _quote(identifier: str) -> str:
+        return '"' + identifier.replace('"', '""') + '"'
+
+    @staticmethod
+    def _invalid_schema() -> None:
+        raise InvalidConversationStoreError(
+            "Conversation database schema is invalid."
+        )
