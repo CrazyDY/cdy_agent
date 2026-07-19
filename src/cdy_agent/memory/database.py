@@ -128,7 +128,7 @@ class WorkspaceDatabase:
             self._configure(connection)
             connection.execute("BEGIN IMMEDIATE")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version == 0 and not self._application_tables(connection):
+            if version == 0 and not self._application_objects(connection):
                 for statement in (*SESSION_STATEMENTS, *MEMORY_STATEMENTS):
                     connection.execute(statement)
             elif version == 1:
@@ -208,7 +208,7 @@ class WorkspaceDatabase:
         cls, connection: sqlite3.Connection
     ) -> int | None:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version == 0 and not cls._application_tables(connection):
+        if version == 0 and not cls._application_objects(connection):
             return None
         if version not in {1, SCHEMA_VERSION}:
             raise InvalidConversationStoreError(
@@ -224,6 +224,18 @@ class WorkspaceDatabase:
             for row in connection.execute(
                 "SELECT name FROM sqlite_master "
                 "WHERE type = 'table' AND name NOT GLOB 'sqlite_*'"
+            )
+        }
+
+    @staticmethod
+    def _application_objects(
+        connection: sqlite3.Connection,
+    ) -> set[tuple[str, str]]:
+        return {
+            (row[0], row[1])
+            for row in connection.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE name NOT GLOB 'sqlite_*'"
             )
         }
 

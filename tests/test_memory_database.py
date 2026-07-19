@@ -160,6 +160,23 @@ def test_version_zero_database_with_user_table_is_rejected(
         ).fetchone() == ("unexpected",)
 
 
+def test_version_zero_database_with_user_view_is_rejected(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / ".cdy-agent"
+    data.mkdir()
+    database = data / "cdy-agent.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE VIEW unexpected AS SELECT 1 AS value")
+
+    with pytest.raises(InvalidConversationStoreError):
+        with WorkspaceDatabase(tmp_path).read():
+            pass
+    with pytest.raises(InvalidConversationStoreError):
+        with WorkspaceDatabase(tmp_path).write():
+            pass
+
+
 def test_write_migrates_v1_without_changing_conversations(tmp_path: Path) -> None:
     data = tmp_path / ".cdy-agent"
     data.mkdir()
