@@ -21,8 +21,13 @@ from cdy_agent.conversation import Message
 from cdy_agent.memory import (
     ConversationNotFoundError,
     ConversationSummary,
+    MemoryDraft,
+    MemoryStore,
+    MemoryStoreError,
     StoredConversation,
+    StoredMemory,
 )
+from cdy_agent.openai_client import FinalResponse
 from cdy_agent.tools.base import ConfirmationRequest, ToolResult
 
 
@@ -70,6 +75,100 @@ class FakeConversationStore:
         self, session_id: str, user: Message, assistant: Message
     ) -> None:
         self.appended.append((session_id, user, assistant))
+
+
+FIRST_ID = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
+SECOND_ID = "f8605a17-cf86-46ce-87ad-7db57533e5dc"
+MEMORY_RECORD = StoredMemory(
+    FIRST_ID,
+    "Use uv\nfor Python projects.",
+    ("python", "tooling"),
+    "2026-07-19T08:30:00.000000Z",
+    "2026-07-19T09:45:00.000000Z",
+)
+SECOND_MEMORY_RECORD = StoredMemory(
+    SECOND_ID,
+    "Keep tests offline.",
+    ("python", "testing"),
+    "2026-07-18T08:30:00.000000Z",
+    "2026-07-18T09:45:00.000000Z",
+)
+
+
+class FakeMemoryStore:
+    def __init__(
+        self,
+        records: Sequence[StoredMemory] = (),
+        error: MemoryStoreError | None = None,
+    ) -> None:
+        self.records = tuple(records)
+        self.error = error
+        self.created: list[tuple[str, tuple[str, ...]]] = []
+        self.listed: list[tuple[str, ...]] = []
+        self.searched: list[tuple[str | None, tuple[str, ...]]] = []
+        self.updated: list[tuple[str, str, tuple[str, ...]]] = []
+        self.deleted: list[str] = []
+        self.prepared: list[tuple[str, tuple[str, ...]]] = []
+        self.duplicates: list[tuple[MemoryDraft, str | None]] = []
+        self.loaded: list[str] = []
+
+    def _raise_error(self) -> None:
+        if self.error is not None:
+            raise self.error
+
+    def prepare(self, content: str, tags: Sequence[str]) -> MemoryDraft:
+        self._raise_error()
+        normalized = (content.strip(), tuple(sorted({tag.strip().casefold() for tag in tags})))
+        self.prepared.append(normalized)
+        return MemoryDraft(normalized[0], normalized[1], "identity")
+
+    def find_duplicate(
+        self, draft: MemoryDraft, *, exclude_id: str | None = None
+    ) -> StoredMemory | None:
+        self._raise_error()
+        self.duplicates.append((draft, exclude_id))
+        return None
+
+    def create(self, content: str, tags: Sequence[str]) -> StoredMemory:
+        self._raise_error()
+        self.created.append((content, tuple(tags)))
+        return MEMORY_RECORD
+
+    def get(self, memory_id: str) -> StoredMemory:
+        self._raise_error()
+        self.loaded.append(memory_id)
+        if memory_id != FIRST_ID:
+            raise MemoryStoreError("Memory ID must be a complete UUID.")
+        return MEMORY_RECORD
+
+    def list_memories(self, tags: Sequence[str] = ()) -> tuple[StoredMemory, ...]:
+        self._raise_error()
+        self.listed.append(tuple(tags))
+        return self.records
+
+    def search(
+        self, query: str | None = None, tags: Sequence[str] = ()
+    ) -> tuple[StoredMemory, ...]:
+        self._raise_error()
+        self.searched.append((query, tuple(tags)))
+        return self.records
+
+    def update(
+        self, memory_id: str, content: str, tags: Sequence[str]
+    ) -> StoredMemory:
+        self._raise_error()
+        self.updated.append((memory_id, content, tuple(tags)))
+        return StoredMemory(
+            memory_id,
+            content,
+            tuple(tags),
+            MEMORY_RECORD.created_at,
+            MEMORY_RECORD.updated_at,
+        )
+
+    def delete(self, memory_id: str) -> None:
+        self._raise_error()
+        self.deleted.append(memory_id)
 
 
 @pytest.fixture(autouse=True)
@@ -848,3 +947,320 @@ def test_sessions_commands_report_errors_without_tracebacks(tmp_path: Path) -> N
     assert missing_session.exit_code == 1
     assert "Conversation not found" in missing_session.stderr
     assert "Traceback" not in missing_session.stderr
+
+
+def _use_fake_memory_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, store: FakeMemoryStore
+) -> list[Path]:
+    workspaces: list[Path] = []
+
+    def build(workspace: Path) -> FakeMemoryStore:
+        workspaces.append(workspace)
+        return store
+
+    monkeypatch.setattr(cli, "MemoryStore", build)
+    return workspaces
+
+
+def test_memories_add_defaults_to_no(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore()
+    workspaces = _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app,
+        ["memories", "add", "Use uv", "--tag", "Python", "--workspace", str(tmp_path)],
+        input="\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Tags: python" in result.output
+    assert "Use uv" in result.output
+    assert "Aborted." in result.output
+    assert store.created == []
+    assert workspaces == [tmp_path.resolve()]
+
+
+def test_memories_add_confirmed_creates_normalized_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore()
+    workspaces = _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app,
+        ["memories", "add", "Use uv", "--tag", "Python", "--workspace", str(tmp_path)],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0
+    assert store.created == [("Use uv", ("Python",))]
+    assert FIRST_ID in result.output
+    assert workspaces == [tmp_path.resolve()]
+
+
+def test_memories_list_forwards_tags_and_renders_every_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore((MEMORY_RECORD, SECOND_MEMORY_RECORD))
+    workspaces = _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app,
+        [
+            "memories", "list", "--tag", "Python", "--tag", "testing",
+            "--workspace", str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert store.listed == [("Python", "testing")]
+    assert result.output == (
+        f"ID: {MEMORY_RECORD.id}\n"
+        f"Updated: {MEMORY_RECORD.updated_at}\n"
+        "Tags: python, tooling\nContent:\nUse uv\nfor Python projects.\n\n"
+        f"ID: {SECOND_MEMORY_RECORD.id}\n"
+        f"Updated: {SECOND_MEMORY_RECORD.updated_at}\n"
+        "Tags: python, testing\nContent:\nKeep tests offline.\n"
+    )
+    assert workspaces == [tmp_path.resolve()]
+
+
+def test_memories_list_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore()
+    _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app, ["memories", "list", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "No saved memories.\n"
+
+
+def test_memories_search_renders_full_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore(records=(MEMORY_RECORD,))
+    workspaces = _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app,
+        [
+            "memories", "search", "uv", "--tag", "python",
+            "--workspace", str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert store.searched == [("uv", ("python",))]
+    assert MEMORY_RECORD.id in result.output
+    assert MEMORY_RECORD.content in result.output
+    assert "python" in result.output
+    assert workspaces == [tmp_path.resolve()]
+
+
+def test_memories_search_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore()
+    _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app, ["memories", "search", "missing", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "No matching memories.\n"
+
+
+def test_memories_update_confirmed_replaces_complete_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore((MEMORY_RECORD,))
+    workspaces = _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app,
+        [
+            "memories", "update", FIRST_ID, "--content", "  Prefer uv sync  ",
+            "--tag", "Python", "--tag", "TOOLING", "--workspace", str(tmp_path),
+        ],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Current:" in result.output
+    assert MEMORY_RECORD.content in result.output
+    assert "Replacement:" in result.output
+    assert "Prefer uv sync" in result.output
+    assert "Tags: python, tooling" in result.output
+    assert store.updated == [
+        (FIRST_ID, "  Prefer uv sync  ", ("Python", "TOOLING"))
+    ]
+    assert result.output.endswith(f"Updated memory {FIRST_ID}.\n")
+    assert workspaces == [tmp_path.resolve()]
+
+
+def test_memories_delete_defaults_to_no(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore((MEMORY_RECORD,))
+    _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app,
+        ["memories", "delete", FIRST_ID, "--workspace", str(tmp_path)],
+        input="\n",
+    )
+
+    assert result.exit_code == 0
+    assert MEMORY_RECORD.content in result.output
+    assert "Aborted." in result.output
+    assert store.deleted == []
+
+
+def test_memories_delete_confirmed_calls_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore((MEMORY_RECORD,))
+    workspaces = _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app,
+        ["memories", "delete", FIRST_ID, "--workspace", str(tmp_path)],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0
+    assert store.deleted == [FIRST_ID]
+    assert result.output.endswith(f"Deleted memory {FIRST_ID}.\n")
+    assert workspaces == [tmp_path.resolve()]
+
+
+@pytest.mark.parametrize("command", ["add", "update", "delete"])
+@pytest.mark.parametrize("error", [EOFError(), KeyboardInterrupt()])
+def test_memories_write_confirmation_interruption_aborts_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    error: BaseException,
+) -> None:
+    store = FakeMemoryStore((MEMORY_RECORD,))
+    _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    def interrupt_confirmation(*args: object, **kwargs: object) -> bool:
+        raise error
+
+    monkeypatch.setattr(cli.typer, "confirm", interrupt_confirmation)
+    arguments = {
+        "add": ["memories", "add", "Use uv"],
+        "update": ["memories", "update", FIRST_ID, "--content", "Use uv sync"],
+        "delete": ["memories", "delete", FIRST_ID],
+    }[command]
+    result = runner.invoke(app, [*arguments, "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert result.output.endswith("Aborted.\n")
+    assert store.created == []
+    assert store.updated == []
+    assert store.deleted == []
+
+
+@pytest.mark.parametrize("command", ["update", "delete"])
+def test_memories_reject_invalid_uuid_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    store = FakeMemoryStore((MEMORY_RECORD,))
+    _use_fake_memory_store(monkeypatch, tmp_path, store)
+    arguments = ["memories", command, "not-a-complete-uuid"]
+    if command == "update":
+        arguments.extend(["--content", "new content"])
+
+    result = runner.invoke(app, [*arguments, "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "complete UUID" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert store.updated == []
+    assert store.deleted == []
+
+
+def test_memories_report_safe_store_errors_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FakeMemoryStore(error=MemoryStoreError("safe message"))
+    _use_fake_memory_store(monkeypatch, tmp_path, store)
+
+    result = runner.invoke(
+        app, ["memories", "list", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "safe message" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["memories", "--help"],
+        ["memories", "add", "--help"],
+        ["memories", "list", "--help"],
+        ["memories", "search", "--help"],
+        ["memories", "update", "--help"],
+        ["memories", "delete", "--help"],
+    ],
+)
+def test_memories_help(arguments: list[str]) -> None:
+    result = runner.invoke(app, arguments)
+    assert result.exit_code == 0
+
+
+@pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
+@pytest.mark.parametrize("command", ["ask", "chat"])
+def test_ask_and_chat_offer_memory_tools_without_automatic_injection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    api_mode: str,
+    command: str,
+) -> None:
+    memory = MemoryStore(tmp_path).create("private remembered preference", ["private"])
+
+    class FakeGateway:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def create(self, **kwargs: object) -> FinalResponse:
+            self.calls.append(kwargs)
+            return FinalResponse("done")
+
+    gateway = FakeGateway()
+    searches: list[tuple[object, ...]] = []
+    monkeypatch.setenv("CDY_AGENT_API_MODE", api_mode)
+    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: gateway)
+    monkeypatch.setattr(
+        MemoryStore,
+        "search",
+        lambda self, query=None, tags=(): searches.append((query, tuple(tags))) or (),
+    )
+    arguments = [command, "hello", "--workspace", str(tmp_path)]
+    invocation_input = None
+    if command == "chat":
+        arguments = ["chat", "--workspace", str(tmp_path)]
+        invocation_input = "hello\n/exit\n"
+
+    result = runner.invoke(app, arguments, input=invocation_input)
+
+    assert result.exit_code == 0
+    assert {tool["name"] for tool in gateway.calls[0]["tools"]} >= {
+        "remember_memory", "search_memories", "update_memory", "forget_memory"
+    }
+    assert all(
+        memory.content not in message.content
+        for message in gateway.calls[0]["messages"]
+    )
+    assert searches == []

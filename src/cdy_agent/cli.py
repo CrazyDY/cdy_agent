@@ -18,7 +18,15 @@ from openai import (
 from .agent import Agent, AgentLoopLimitError
 from .config import resolve_api_mode, resolve_model
 from .conversation import Conversation, Message
-from .memory import ConversationStore, ConversationStoreError
+from .memory import (
+    ConversationStore,
+    ConversationStoreError,
+    DuplicateMemoryError,
+    MemoryDraft,
+    MemoryStore,
+    MemoryStoreError,
+    StoredMemory,
+)
 from .openai_client import MissingAPIKeyError, ModelGateway
 from .skills import SkillManager, create_skill_tools
 from .tools import create_builtin_registry
@@ -28,7 +36,9 @@ from .tools.filesystem import resolve_workspace
 
 app = typer.Typer(help="Run the CDY local personal AI assistant.")
 sessions_app = typer.Typer(help="List and delete saved conversations.")
+memories_app = typer.Typer(help="Manage explicit long-term memories.")
 app.add_typer(sessions_app, name="sessions")
+app.add_typer(memories_app, name="memories")
 
 REQUEST_ERRORS = (
     MissingAPIKeyError,
@@ -41,6 +51,7 @@ REQUEST_ERRORS = (
     RuntimeError,
     AgentLoopLimitError,
     ConversationStoreError,
+    MemoryStoreError,
 )
 
 
@@ -86,6 +97,187 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
     return Agent(gateway, registry, _confirm_tool)
+
+
+def _render_memory(record: StoredMemory) -> None:
+    """Render one complete memory record with stable multiline formatting."""
+    typer.echo(f"ID: {record.id}")
+    typer.echo(f"Updated: {record.updated_at}")
+    typer.echo(f"Tags: {', '.join(record.tags) if record.tags else '-'}")
+    typer.echo("Content:")
+    typer.echo(record.content)
+
+
+def _render_memory_draft(draft: MemoryDraft) -> None:
+    typer.echo(f"Tags: {', '.join(draft.tags) if draft.tags else '-'}")
+    typer.echo("Content:")
+    typer.echo(draft.content)
+
+
+def _render_memories(records: tuple[StoredMemory, ...]) -> None:
+    for index, record in enumerate(records):
+        if index:
+            typer.echo()
+        _render_memory(record)
+
+
+def _confirm_memory_change(prompt: str) -> bool:
+    try:
+        return typer.confirm(prompt, default=False)
+    except (EOFError, KeyboardInterrupt, typer.Abort):
+        return False
+
+
+@memories_app.command("add")
+def add_memory(
+    content: Annotated[
+        str,
+        typer.Argument(help="Content of the memory to save."),
+    ],
+    tags: Annotated[
+        list[str] | None,
+        typer.Option("--tag", help="Tag to attach; may be repeated."),
+    ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved memories."),
+    ] = None,
+) -> None:
+    """Save one explicit long-term memory after confirmation."""
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        store = MemoryStore(active_workspace)
+        supplied_tags = tags or []
+        draft = store.prepare(content, supplied_tags)
+        duplicate = store.find_duplicate(draft)
+        if duplicate is not None:
+            raise DuplicateMemoryError(duplicate.id)
+        _render_memory_draft(draft)
+        if not _confirm_memory_change("Create this memory?"):
+            typer.echo("Aborted.")
+            return
+        record = store.create(content, supplied_tags)
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    typer.echo(f"Created memory {record.id}.")
+
+
+@memories_app.command("list")
+def list_memories(
+    tags: Annotated[
+        list[str] | None,
+        typer.Option("--tag", help="Require tag; may be repeated."),
+    ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved memories."),
+    ] = None,
+) -> None:
+    """List complete saved memories."""
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        records = MemoryStore(active_workspace).list_memories(tags or [])
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    if not records:
+        typer.echo("No saved memories.")
+        return
+    _render_memories(records)
+
+
+@memories_app.command("search")
+def search_memories(
+    query: Annotated[
+        str,
+        typer.Argument(help="Keywords to search for."),
+    ],
+    tags: Annotated[
+        list[str] | None,
+        typer.Option("--tag", help="Require tag; may be repeated."),
+    ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved memories."),
+    ] = None,
+) -> None:
+    """Search complete saved memories by keywords and tags."""
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        records = MemoryStore(active_workspace).search(query, tags or [])
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    if not records:
+        typer.echo("No matching memories.")
+        return
+    _render_memories(records)
+
+
+@memories_app.command("update")
+def update_memory(
+    memory_id: Annotated[
+        str,
+        typer.Argument(help="Complete UUID of the memory to update."),
+    ],
+    content: Annotated[
+        str,
+        typer.Option(help="Replacement memory content."),
+    ],
+    tags: Annotated[
+        list[str] | None,
+        typer.Option("--tag", help="Replacement tag; may be repeated."),
+    ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved memories."),
+    ] = None,
+) -> None:
+    """Replace one complete memory after confirmation."""
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        store = MemoryStore(active_workspace)
+        supplied_tags = tags or []
+        draft = store.prepare(content, supplied_tags)
+        current = store.get(memory_id)
+        duplicate = store.find_duplicate(draft, exclude_id=memory_id)
+        if duplicate is not None:
+            raise DuplicateMemoryError(duplicate.id)
+        typer.echo("Current:")
+        _render_memory(current)
+        typer.echo("Replacement:")
+        _render_memory_draft(draft)
+        if not _confirm_memory_change("Update this memory?"):
+            typer.echo("Aborted.")
+            return
+        record = store.update(memory_id, content, supplied_tags)
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    typer.echo(f"Updated memory {record.id}.")
+
+
+@memories_app.command("delete")
+def delete_memory(
+    memory_id: Annotated[
+        str,
+        typer.Argument(help="Complete UUID of the memory to delete."),
+    ],
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved memories."),
+    ] = None,
+) -> None:
+    """Delete one complete memory after confirmation."""
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        store = MemoryStore(active_workspace)
+        current = store.get(memory_id)
+        _render_memory(current)
+        if not _confirm_memory_change("Delete this memory?"):
+            typer.echo("Aborted.")
+            return
+        store.delete(memory_id)
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    typer.echo(f"Deleted memory {memory_id}.")
 
 
 @sessions_app.command("list")
