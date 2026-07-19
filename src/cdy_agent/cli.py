@@ -21,7 +21,6 @@ from .conversation import Conversation, Message
 from .memory import (
     ConversationStore,
     ConversationStoreError,
-    DuplicateMemoryError,
     MemoryDraft,
     MemoryStore,
     MemoryStoreError,
@@ -148,15 +147,13 @@ def add_memory(
         active_workspace = resolve_workspace(workspace or Path.cwd())
         store = MemoryStore(active_workspace)
         supplied_tags = tags or []
-        draft = store.prepare(content, supplied_tags)
-        duplicate = store.find_duplicate(draft)
-        if duplicate is not None:
-            raise DuplicateMemoryError(duplicate.id)
-        _render_memory_draft(draft)
+        prepared = store.prepare_create(content, supplied_tags)
+        typer.echo(f"ID: {prepared.memory_id}")
+        _render_memory_draft(prepared.draft)
         if not _confirm_memory_change("Create this memory?"):
             typer.echo("Aborted.")
             return
-        record = store.create(content, supplied_tags)
+        record = store.commit_create(prepared)
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
     typer.echo(f"Created memory {record.id}.")
@@ -236,19 +233,15 @@ def update_memory(
         active_workspace = resolve_workspace(workspace or Path.cwd())
         store = MemoryStore(active_workspace)
         supplied_tags = tags or []
-        draft = store.prepare(content, supplied_tags)
-        current = store.get(memory_id)
-        duplicate = store.find_duplicate(draft, exclude_id=memory_id)
-        if duplicate is not None:
-            raise DuplicateMemoryError(duplicate.id)
+        prepared = store.prepare_update(memory_id, content, supplied_tags)
         typer.echo("Current:")
-        _render_memory(current)
+        _render_memory(prepared.before)
         typer.echo("Replacement:")
-        _render_memory_draft(draft)
+        _render_memory_draft(prepared.replacement)
         if not _confirm_memory_change("Update this memory?"):
             typer.echo("Aborted.")
             return
-        record = store.update(memory_id, content, supplied_tags)
+        record = store.commit_update(prepared)
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
     typer.echo(f"Updated memory {record.id}.")
@@ -269,15 +262,15 @@ def delete_memory(
     try:
         active_workspace = resolve_workspace(workspace or Path.cwd())
         store = MemoryStore(active_workspace)
-        current = store.get(memory_id)
-        _render_memory(current)
+        prepared = store.prepare_delete(memory_id)
+        _render_memory(prepared.before)
         if not _confirm_memory_change("Delete this memory?"):
             typer.echo("Aborted.")
             return
-        store.delete(memory_id)
+        store.commit_delete(prepared)
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
-    typer.echo(f"Deleted memory {memory_id}.")
+    typer.echo(f"Deleted memory {prepared.before.id}.")
 
 
 @sessions_app.command("list")

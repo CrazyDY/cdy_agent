@@ -59,6 +59,9 @@ class ToolRegistry:
                 tool.confirmation_description(arguments),
             )
             if not confirm(request):
+                cancel = getattr(tool, "cancel", None)
+                if callable(cancel):
+                    cancel()
                 return ToolResult.failure("approval_denied", "User declined this tool call.")
         return tool.execute(arguments)
 

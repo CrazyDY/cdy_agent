@@ -1,5 +1,6 @@
 import builtins
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -24,6 +25,9 @@ from cdy_agent.memory import (
     MemoryDraft,
     MemoryStore,
     MemoryStoreError,
+    PreparedCreate,
+    PreparedDelete,
+    PreparedUpdate,
     StoredConversation,
     StoredMemory,
 )
@@ -129,6 +133,22 @@ class FakeMemoryStore:
         self.duplicates.append((draft, exclude_id))
         return None
 
+    def prepare_create(
+        self, content: str, tags: Sequence[str]
+    ) -> PreparedCreate:
+        return PreparedCreate(FIRST_ID, self.prepare(content, tags))
+
+    def commit_create(self, prepared: PreparedCreate) -> StoredMemory:
+        self._raise_error()
+        self.created.append((prepared.draft.content, prepared.draft.tags))
+        return StoredMemory(
+            prepared.memory_id,
+            prepared.draft.content,
+            prepared.draft.tags,
+            MEMORY_RECORD.created_at,
+            MEMORY_RECORD.updated_at,
+        )
+
     def create(self, content: str, tags: Sequence[str]) -> StoredMemory:
         self._raise_error()
         self.created.append((content, tuple(tags)))
@@ -166,9 +186,38 @@ class FakeMemoryStore:
             MEMORY_RECORD.updated_at,
         )
 
+    def prepare_update(
+        self, memory_id: str, content: str, tags: Sequence[str]
+    ) -> PreparedUpdate:
+        return PreparedUpdate(self.get(memory_id), self.prepare(content, tags))
+
+    def commit_update(self, prepared: PreparedUpdate) -> StoredMemory:
+        self._raise_error()
+        self.updated.append(
+            (
+                prepared.before.id,
+                prepared.replacement.content,
+                prepared.replacement.tags,
+            )
+        )
+        return StoredMemory(
+            prepared.before.id,
+            prepared.replacement.content,
+            prepared.replacement.tags,
+            prepared.before.created_at,
+            prepared.before.updated_at,
+        )
+
     def delete(self, memory_id: str) -> None:
         self._raise_error()
         self.deleted.append(memory_id)
+
+    def prepare_delete(self, memory_id: str) -> PreparedDelete:
+        return PreparedDelete(self.get(memory_id))
+
+    def commit_delete(self, prepared: PreparedDelete) -> None:
+        self._raise_error()
+        self.deleted.append(prepared.before.id)
 
 
 @pytest.fixture(autouse=True)
@@ -995,9 +1044,30 @@ def test_memories_add_confirmed_creates_normalized_record(
     )
 
     assert result.exit_code == 0
-    assert store.created == [("Use uv", ("Python",))]
+    assert store.created == [("Use uv", ("python",))]
     assert FIRST_ID in result.output
     assert workspaces == [tmp_path.resolve()]
+
+
+def test_memories_add_displays_and_commits_preallocated_uuid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = MemoryStore(
+        tmp_path,
+        clock=lambda: datetime(2026, 7, 19, 8, 30, tzinfo=timezone.utc),
+        id_factory=lambda: FIRST_ID,
+    )
+    monkeypatch.setattr(cli, "MemoryStore", lambda workspace: store)
+
+    result = runner.invoke(
+        app,
+        ["memories", "add", "Use uv", "--tag", "Python", "--workspace", str(tmp_path)],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0
+    assert result.output.index(FIRST_ID) < result.output.index("Create this memory?")
+    assert store.get(FIRST_ID).id == FIRST_ID
 
 
 def test_memories_list_forwards_tags_and_renders_every_record(
@@ -1099,7 +1169,7 @@ def test_memories_update_confirmed_replaces_complete_record(
     assert "Prefer uv sync" in result.output
     assert "Tags: python, tooling" in result.output
     assert store.updated == [
-        (FIRST_ID, "  Prefer uv sync  ", ("Python", "TOOLING"))
+        (FIRST_ID, "Prefer uv sync", ("python", "tooling"))
     ]
     assert result.output.endswith(f"Updated memory {FIRST_ID}.\n")
     assert workspaces == [tmp_path.resolve()]
@@ -1139,6 +1209,38 @@ def test_memories_delete_confirmed_calls_store(
     assert store.deleted == [FIRST_ID]
     assert result.output.endswith(f"Deleted memory {FIRST_ID}.\n")
     assert workspaces == [tmp_path.resolve()]
+
+
+@pytest.mark.parametrize("command", ["update", "delete"])
+def test_memories_confirmed_write_reports_concurrent_change(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_a = MemoryStore(
+        tmp_path,
+        clock=lambda: datetime(2026, 7, 19, 8, 30, tzinfo=timezone.utc),
+        id_factory=lambda: FIRST_ID,
+    )
+    store_b = MemoryStore(
+        tmp_path,
+        clock=lambda: datetime(2026, 7, 19, 10, 30, tzinfo=timezone.utc),
+    )
+    store_a.create("Original", ["old"])
+    monkeypatch.setattr(cli, "MemoryStore", lambda workspace: store_a)
+
+    def mutate_then_approve(*args: object, **kwargs: object) -> bool:
+        store_b.update(FIRST_ID, "Concurrent", ["newer"])
+        return True
+
+    monkeypatch.setattr(cli.typer, "confirm", mutate_then_approve)
+    arguments = ["memories", command, FIRST_ID]
+    if command == "update":
+        arguments.extend(["--content", "Approved", "--tag", "new"])
+    result = runner.invoke(app, [*arguments, "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "changed after confirmation" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert store_a.get(FIRST_ID).content == "Concurrent"
 
 
 @pytest.mark.parametrize("command", ["add", "update", "delete"])

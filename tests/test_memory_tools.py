@@ -21,6 +21,7 @@ from cdy_agent.tools.registry import ToolRegistry
 
 
 FIRST_ID = "11111111-1111-1111-1111-111111111111"
+SECOND_ID = "22222222-2222-2222-2222-222222222222"
 MISSING_ID = "99999999-9999-9999-9999-999999999999"
 FIRST_TIME = datetime(2026, 7, 19, 1, 0, tzinfo=timezone.utc)
 
@@ -221,6 +222,85 @@ def test_forget_confirmation_shows_complete_record(tmp_path: Path) -> None:
     assert content in description
     assert "first" in description
     assert "second" in description
+
+
+def test_remember_confirmation_displays_and_commits_exact_preallocated_uuid(
+    tmp_path: Path,
+) -> None:
+    store = fixed_store(tmp_path)
+    descriptions: list[str] = []
+
+    result = ToolRegistry([RememberMemoryTool(store)]).execute(
+        _call("remember_memory", {"content": "  New memory  ", "tags": [" B ", "a"]}),
+        confirm=lambda request: descriptions.append(request.description) or True,
+    )
+
+    assert result.ok
+    assert result.data["id"] == FIRST_ID
+    assert descriptions == [
+        f"Remember long-term memory {FIRST_ID} with tags [a, b]:\nNew memory"
+    ]
+    assert store.get(FIRST_ID).id == FIRST_ID
+
+
+@pytest.mark.parametrize("operation", ["update", "forget"])
+def test_confirmed_tool_detects_concurrent_memory_change(
+    operation: str, tmp_path: Path
+) -> None:
+    store_a = MemoryStore(
+        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: FIRST_ID
+    )
+    store_b = MemoryStore(tmp_path, clock=lambda: FIRST_TIME + timedelta(hours=2))
+    store_a.create("Original", ["old"])
+    arguments: dict[str, Any]
+    if operation == "update":
+        tool = UpdateMemoryTool(store_a)
+        arguments = {
+            "memory_id": FIRST_ID,
+            "content": "Approved",
+            "tags": ["new"],
+        }
+    else:
+        tool = ForgetMemoryTool(store_a)
+        arguments = {"memory_id": FIRST_ID}
+
+    def mutate_after_description(_: object) -> bool:
+        store_b.update(FIRST_ID, "Concurrent", ["newer"])
+        return True
+
+    result = ToolRegistry([tool]).execute(
+        _call(tool.name, arguments), confirm=mutate_after_description
+    )
+
+    assert result == ToolResult.failure(
+        "memory_conflict",
+        "Memory changed after confirmation; re-run the operation.",
+    )
+    assert store_a.get(FIRST_ID).content == "Concurrent"
+
+
+def test_declined_remember_clears_prepared_uuid_before_next_call(
+    tmp_path: Path,
+) -> None:
+    store = fixed_store(tmp_path)
+    tool = RememberMemoryTool(store)
+    registry = ToolRegistry([tool])
+    descriptions: list[str] = []
+
+    denied = registry.execute(
+        _call(tool.name, {"content": "Denied", "tags": []}),
+        confirm=lambda request: descriptions.append(request.description) or False,
+    )
+    approved = registry.execute(
+        _call(tool.name, {"content": "Approved", "tags": []}),
+        confirm=lambda request: descriptions.append(request.description) or True,
+    )
+
+    assert denied.code == "approval_denied"
+    assert FIRST_ID in descriptions[0]
+    assert SECOND_ID in descriptions[1]
+    assert approved.data["id"] == SECOND_ID
+    assert [record.id for record in store.list_memories()] == [SECOND_ID]
 
 
 @pytest.mark.parametrize("operation", ["remember", "update", "forget"])
