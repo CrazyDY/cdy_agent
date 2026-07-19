@@ -117,7 +117,9 @@ def test_get_rejects_noncanonical_uuid(tmp_path: Path) -> None:
 
 def test_create_rejects_naive_clock(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME.replace(tzinfo=None))
-    with pytest.raises(MemoryStoreError, match=r"^Memory clock is invalid\.$"):
+    with pytest.raises(
+        MemoryStoreError, match=r"^Memory clock must be timezone-aware\.$"
+    ):
         store.create("valid", [])
 
 

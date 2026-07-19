@@ -119,7 +119,7 @@ def _canonical_uuid(value: object) -> str:
 
 def _timestamp(value: object) -> str:
     if not isinstance(value, datetime) or value.tzinfo is None:
-        raise MemoryStoreError("Memory clock is invalid.")
+        raise MemoryStoreError("Memory clock must be timezone-aware.")
     try:
         offset = value.utcoffset()
         if offset is None:
