@@ -104,11 +104,13 @@ def _normalize_query(query: object) -> str | None:
     if not isinstance(query, str):
         raise InvalidMemoryError("Memory search query must be text.")
     value = query.strip()
+    if not value:
+        raise InvalidMemoryError("Memory search query must not be empty.")
     if len(value) > MAX_QUERY_CHARACTERS:
         raise InvalidMemoryError(
             "Memory search query must be at most 500 characters."
         )
-    return value or None
+    return value
 
 
 def _identity(content: str, tags: tuple[str, ...]) -> str:

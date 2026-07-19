@@ -283,6 +283,13 @@ def test_search_requires_query_or_tags(tmp_path: Path) -> None:
         MemoryStore(tmp_path).search()
 
 
+def test_search_rejects_explicit_whitespace_query_with_tags(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(InvalidMemoryError, match="query"):
+        MemoryStore(tmp_path).search("   ", ["x"])
+
+
 def test_search_rejects_query_over_character_limit(tmp_path: Path) -> None:
     with pytest.raises(InvalidMemoryError, match="500 characters"):
         MemoryStore(tmp_path).search("x" * 501)
