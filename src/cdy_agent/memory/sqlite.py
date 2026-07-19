@@ -15,6 +15,7 @@ from cdy_agent.memory.database import (
     ConversationStoreError,
     InvalidConversationStoreError,
     WorkspaceDatabase,
+    _WorkspaceDatabaseWriteError,
 )
 
 
@@ -205,12 +206,17 @@ class ConversationStore:
         with self._database.read() as connection:
             if connection is None:
                 raise ConversationNotFoundError("Conversation not found.")
-        with self._database.write() as connection:
-            cursor = connection.execute(
-                "DELETE FROM sessions WHERE id = ?", (session_id,)
-            )
-            if cursor.rowcount != 1:
-                raise ConversationNotFoundError("Conversation not found.")
+        try:
+            with self._database.write() as connection:
+                cursor = connection.execute(
+                    "DELETE FROM sessions WHERE id = ?", (session_id,)
+                )
+                if cursor.rowcount != 1:
+                    raise ConversationNotFoundError("Conversation not found.")
+        except _WorkspaceDatabaseWriteError as error:
+            raise ConversationStoreError(
+                "Could not delete conversation data."
+            ) from error
 
     @staticmethod
     def _validated_messages(

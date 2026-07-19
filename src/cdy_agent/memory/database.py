@@ -34,6 +34,10 @@ class InvalidConversationStoreError(ConversationStoreError):
     """The database path, schema, or stored history is invalid."""
 
 
+class _WorkspaceDatabaseWriteError(ConversationStoreError):
+    """The shared database could not complete a write operation."""
+
+
 class WorkspaceDatabase:
     def __init__(self, workspace: Path) -> None:
         self.workspace = resolve_workspace(workspace)
@@ -93,7 +97,7 @@ class WorkspaceDatabase:
         except (sqlite3.Error, OSError) as error:
             if connection is not None:
                 connection.rollback()
-            raise ConversationStoreError(
+            raise _WorkspaceDatabaseWriteError(
                 "Could not write conversation data."
             ) from error
         except BaseException:

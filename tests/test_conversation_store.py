@@ -198,6 +198,28 @@ def test_delete_removes_session_and_messages(tmp_path: Path) -> None:
     assert message_count == 0
 
 
+def test_delete_wraps_sqlite_failure_with_delete_message(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.append_turn(
+        SESSION_ID,
+        Message("user", "Hello"),
+        Message("assistant", "Hi"),
+    )
+    database = tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TRIGGER fail_session_delete "
+            "BEFORE DELETE ON sessions "
+            "BEGIN SELECT RAISE(ABORT, 'forced delete failure'); END"
+        )
+
+    with pytest.raises(
+        ConversationStoreError,
+        match=r"^Could not delete conversation data\.$",
+    ):
+        store.delete(SESSION_ID)
+
+
 def test_delete_missing_session_does_not_create_store(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     with pytest.raises(ConversationNotFoundError, match="Conversation not found"):
