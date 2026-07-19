@@ -26,26 +26,26 @@ _V1_TABLES = {"sessions", "messages"}
 _V2_TABLES = _V1_TABLES | {"memories", "memory_tags"}
 _COLUMNS = {
     "sessions": (
-        ("id", "TEXT", 0, 1),
-        ("created_at", "TEXT", 1, 0),
-        ("updated_at", "TEXT", 1, 0),
+        ("id", "TEXT", 0, 1, 0),
+        ("created_at", "TEXT", 1, 0, 0),
+        ("updated_at", "TEXT", 1, 0, 0),
     ),
     "messages": (
-        ("session_id", "TEXT", 1, 1),
-        ("sequence", "INTEGER", 1, 2),
-        ("role", "TEXT", 1, 0),
-        ("content", "TEXT", 1, 0),
+        ("session_id", "TEXT", 1, 1, 0),
+        ("sequence", "INTEGER", 1, 2, 0),
+        ("role", "TEXT", 1, 0, 0),
+        ("content", "TEXT", 1, 0, 0),
     ),
     "memories": (
-        ("id", "TEXT", 0, 1),
-        ("content", "TEXT", 1, 0),
-        ("identity_hash", "TEXT", 1, 0),
-        ("created_at", "TEXT", 1, 0),
-        ("updated_at", "TEXT", 1, 0),
+        ("id", "TEXT", 0, 1, 0),
+        ("content", "TEXT", 1, 0, 0),
+        ("identity_hash", "TEXT", 1, 0, 0),
+        ("created_at", "TEXT", 1, 0, 0),
+        ("updated_at", "TEXT", 1, 0, 0),
     ),
     "memory_tags": (
-        ("memory_id", "TEXT", 1, 1),
-        ("tag", "TEXT", 1, 2),
+        ("memory_id", "TEXT", 1, 1, 0),
+        ("tag", "TEXT", 1, 2, 0),
     ),
 }
 _FOREIGN_KEYS = {
@@ -248,8 +248,8 @@ class WorkspaceDatabase:
             cls._invalid_schema()
         for table in expected_tables:
             columns = tuple(
-                (row[1], row[2].upper(), row[3], row[5])
-                for row in connection.execute(f"PRAGMA table_info({table})")
+                (row[1], row[2].upper(), row[3], row[5], row[6])
+                for row in connection.execute(f"PRAGMA table_xinfo({table})")
             )
             if columns != _COLUMNS[table]:
                 cls._invalid_schema()
@@ -286,7 +286,10 @@ class WorkspaceDatabase:
             ).fetchone()
             if row is None or not isinstance(row[0], str):
                 cls._invalid_schema()
-            normalized_sql = re.sub(r"\s+", "", row[0].casefold())
+            without_comments = re.sub(
+                r"/\*.*?\*/|--[^\r\n]*", "", row[0], flags=re.DOTALL
+            )
+            normalized_sql = re.sub(r"\s+", "", without_comments.casefold())
             if any(
                 fragment not in normalized_sql
                 for fragment in _CHECK_FRAGMENTS[table]

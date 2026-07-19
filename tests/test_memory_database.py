@@ -345,8 +345,30 @@ def test_read_rejects_unsupported_version(tmp_path: Path) -> None:
         );
         PRAGMA user_version = 1;
         """,
+        """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE messages (
+            session_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            role TEXT NOT NULL /* CHECK (role IN ('user', 'assistant')) */,
+            content TEXT NOT NULL CHECK (length(trim(content)) > 0),
+            PRIMARY KEY (session_id, sequence),
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        );
+        PRAGMA user_version = 1;
+        """,
     ],
-    ids=["missing-table", "wrong-column", "missing-foreign-key", "missing-check"],
+    ids=[
+        "missing-table",
+        "wrong-column",
+        "missing-foreign-key",
+        "missing-check",
+        "commented-check",
+    ],
 )
 def test_read_and_migration_reject_malformed_v1_schema(
     tmp_path: Path, schema: str
@@ -422,6 +444,10 @@ def test_read_and_migration_reject_malformed_v1_schema(
         """,
         "CREATE TABLE unexpected (value TEXT)",
         "CREATE TABLE sqliteEvil (value TEXT)",
+        """
+        ALTER TABLE memories ADD COLUMN extra TEXT
+        GENERATED ALWAYS AS ('x') VIRTUAL
+        """,
     ],
     ids=[
         "missing-table",
@@ -432,6 +458,7 @@ def test_read_and_migration_reject_malformed_v1_schema(
         "missing-check",
         "unexpected-table",
         "sqlite-prefix-application-table",
+        "unexpected-generated-column",
     ],
 )
 def test_read_and_write_reject_malformed_v2_schema(
