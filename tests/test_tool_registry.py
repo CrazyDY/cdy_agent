@@ -1,10 +1,12 @@
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from cdy_agent.tools.base import ConfirmationRequest, ToolCall, ToolResult
+from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.registry import ToolRegistry
 
 
@@ -180,3 +182,28 @@ def test_register_many_handles_failure_while_materializing_iterable(
 
     assert result.code == "invalid_tools"
     assert [item["name"] for item in registry.definitions] == ["existing"]
+
+
+def test_builtin_registry_exposes_tools_in_deterministic_order(tmp_path: Path) -> None:
+    assert [item["name"] for item in create_builtin_registry(tmp_path).definitions] == [
+        "read_file",
+        "write_file",
+        "shell",
+        "create_note",
+        "list_notes",
+        "get_note",
+        "delete_note",
+        "create_todo",
+        "list_todos",
+        "complete_todo",
+        "delete_todo",
+        "remember_memory",
+        "search_memories",
+        "update_memory",
+        "forget_memory",
+    ]
+
+
+def test_creating_builtin_registry_does_not_create_database(tmp_path: Path) -> None:
+    create_builtin_registry(tmp_path)
+    assert not (tmp_path / ".cdy-agent").exists()

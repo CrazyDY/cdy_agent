@@ -10,7 +10,17 @@ from .todos import CompleteTodoTool, CreateTodoTool, DeleteTodoTool, ListTodosTo
 
 def create_builtin_registry(workspace: Path) -> ToolRegistry:
     """Create the deterministic registry of built-in local tools."""
+    from cdy_agent.memory import MemoryStore
+
+    from .memories import (
+        ForgetMemoryTool,
+        RememberMemoryTool,
+        SearchMemoriesTool,
+        UpdateMemoryTool,
+    )
+
     store = PersonalStore(workspace)
+    memory_store = MemoryStore(workspace)
     return ToolRegistry([
         ReadFileTool(workspace),
         WriteFileTool(workspace),
@@ -23,6 +33,10 @@ def create_builtin_registry(workspace: Path) -> ToolRegistry:
         ListTodosTool(store),
         CompleteTodoTool(store),
         DeleteTodoTool(store),
+        RememberMemoryTool(memory_store),
+        SearchMemoriesTool(memory_store),
+        UpdateMemoryTool(memory_store),
+        ForgetMemoryTool(memory_store),
     ])
 
 

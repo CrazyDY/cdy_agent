@@ -96,6 +96,7 @@ def test_builtin_registry_has_deterministic_order(tmp_path: Path) -> None:
         "read_file", "write_file", "shell",
         "create_note", "list_notes", "get_note", "delete_note",
         "create_todo", "list_todos", "complete_todo", "delete_todo",
+        "remember_memory", "search_memories", "update_memory", "forget_memory",
     )
 
 
