@@ -18,9 +18,39 @@ SECOND_ID = "22222222-2222-2222-2222-222222222222"
 FIRST_TIME = datetime(2026, 7, 19, 1, 0, tzinfo=timezone.utc)
 SECOND_TIME = datetime(2026, 7, 19, 2, 0, tzinfo=timezone.utc)
 
+V1_SCHEMA = """
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE messages (
+    session_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL CHECK (length(trim(content)) > 0),
+    PRIMARY KEY (session_id, sequence),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+PRAGMA user_version = 1;
+"""
+
+
+class _BrokenTimezoneConversion(datetime):
+    def astimezone(self, tz=None):
+        raise OSError("conversion failed")
+
 
 def _database(tmp_path: Path) -> Path:
     return tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
+
+
+def _create_v1_database(tmp_path: Path) -> Path:
+    database = _database(tmp_path)
+    database.parent.mkdir()
+    with sqlite3.connect(database) as connection:
+        connection.executescript(V1_SCHEMA)
+    return database
 
 
 def test_create_normalizes_content_tags_and_timestamps(tmp_path: Path) -> None:
@@ -87,10 +117,24 @@ def test_get_rejects_noncanonical_uuid(tmp_path: Path) -> None:
 
 def test_create_rejects_naive_clock(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME.replace(tzinfo=None))
-    with pytest.raises(
-        MemoryStoreError, match=r"^Memory clock must be timezone-aware\.$"
-    ):
+    with pytest.raises(MemoryStoreError, match=r"^Memory clock is invalid\.$"):
         store.create("valid", [])
+
+
+def test_create_rejects_failed_timezone_conversion(tmp_path: Path) -> None:
+    broken = _BrokenTimezoneConversion(
+        2026, 7, 19, 1, 0, tzinfo=timezone.utc
+    )
+    store = MemoryStore(tmp_path, clock=lambda: broken)
+    with pytest.raises(MemoryStoreError, match=r"^Memory clock is invalid\.$"):
+        store.create("valid", [])
+
+
+def test_create_rejects_tag_that_is_not_utf8(tmp_path: Path) -> None:
+    with pytest.raises(
+        InvalidMemoryError, match=r"^Each memory tag must be UTF-8 text\.$"
+    ):
+        MemoryStore(tmp_path).create("valid", ["\ud800"])
 
 
 def test_update_duplicate_rolls_back_original(tmp_path: Path) -> None:
@@ -169,3 +213,26 @@ def test_prepare_and_find_duplicate_are_non_mutating(tmp_path: Path) -> None:
     existing = store.create(draft.content, draft.tags)
     assert store.find_duplicate(draft) == existing
     assert store.find_duplicate(draft, exclude_id=FIRST_ID) is None
+
+
+def test_find_duplicate_treats_v1_database_as_empty(tmp_path: Path) -> None:
+    database = _create_v1_database(tmp_path)
+    store = MemoryStore(tmp_path)
+    draft = store.prepare("remember", ["tag"])
+    assert store.find_duplicate(draft) is None
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'memories'"
+        ).fetchone() is None
+
+
+def test_get_treats_v1_database_as_empty(tmp_path: Path) -> None:
+    database = _create_v1_database(tmp_path)
+    with pytest.raises(MemoryNotFoundError, match=r"^Memory not found\.$"):
+        MemoryStore(tmp_path).get(FIRST_ID)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'memories'"
+        ).fetchone() is None

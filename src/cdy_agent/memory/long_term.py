@@ -88,6 +88,12 @@ def _normalize_tags(tags: object) -> tuple[str, ...]:
             raise InvalidMemoryError(
                 "Each memory tag must be at most 50 characters."
             )
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise InvalidMemoryError(
+                "Each memory tag must be UTF-8 text."
+            ) from error
         normalized.add(value)
     return tuple(sorted(normalized))
 
@@ -113,16 +119,16 @@ def _canonical_uuid(value: object) -> str:
 
 def _timestamp(value: object) -> str:
     if not isinstance(value, datetime) or value.tzinfo is None:
-        raise MemoryStoreError("Memory clock must be timezone-aware.")
+        raise MemoryStoreError("Memory clock is invalid.")
     try:
         offset = value.utcoffset()
-    except (OverflowError, ValueError) as error:
-        raise MemoryStoreError("Memory clock must be timezone-aware.") from error
-    if offset is None:
-        raise MemoryStoreError("Memory clock must be timezone-aware.")
-    return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
-    )
+        if offset is None:
+            raise ValueError("clock has no UTC offset")
+        return value.astimezone(timezone.utc).isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z")
+    except (OSError, OverflowError, TypeError, ValueError) as error:
+        raise MemoryStoreError("Memory clock is invalid.") from error
 
 
 def _require_timestamp(value: object) -> str:
@@ -175,6 +181,8 @@ class MemoryStore:
             with self._database.read() as connection:
                 if connection is None:
                     return None
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+                    return None
                 return self._find_duplicate(connection, draft, excluded)
         except MemoryStoreError:
             raise
@@ -223,6 +231,8 @@ class MemoryStore:
         try:
             with self._database.read() as connection:
                 if connection is None:
+                    raise MemoryNotFoundError("Memory not found.")
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
                     raise MemoryNotFoundError("Memory not found.")
                 record = self._load(connection, canonical_id)
                 if record is None:
