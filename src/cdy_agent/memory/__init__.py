@@ -6,6 +6,15 @@ from .sqlite import (
     InvalidConversationStoreError,
     StoredConversation,
 )
+from .long_term import (
+    DuplicateMemoryError,
+    InvalidMemoryError,
+    MemoryDraft,
+    MemoryNotFoundError,
+    MemoryStore,
+    MemoryStoreError,
+    StoredMemory,
+)
 
 __all__ = [
     "ConversationNotFoundError",
@@ -14,4 +23,11 @@ __all__ = [
     "ConversationSummary",
     "InvalidConversationStoreError",
     "StoredConversation",
+    "DuplicateMemoryError",
+    "InvalidMemoryError",
+    "MemoryDraft",
+    "MemoryNotFoundError",
+    "MemoryStore",
+    "MemoryStoreError",
+    "StoredMemory",
 ]
