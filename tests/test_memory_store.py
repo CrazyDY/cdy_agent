@@ -8,7 +8,11 @@ import pytest
 from cdy_agent.memory import (
     DuplicateMemoryError,
     InvalidMemoryError,
+    MemoryConflictError,
     MemoryNotFoundError,
+    PreparedCreate,
+    PreparedDelete,
+    PreparedUpdate,
     MemoryStore,
     MemoryStoreError,
 )
@@ -231,6 +235,93 @@ def test_prepare_and_find_duplicate_are_non_mutating(tmp_path: Path) -> None:
     existing = store.create(draft.content, draft.tags)
     assert store.find_duplicate(draft) == existing
     assert store.find_duplicate(draft, exclude_id=FIRST_ID) is None
+
+
+def test_identity_hash_uses_cdymem1_length_prefixed_fixed_vector(
+    tmp_path: Path,
+) -> None:
+    draft = MemoryStore(tmp_path).prepare("line 1\n雪", ["标签", "a,b"])
+
+    assert draft.tags == ("a,b", "标签")
+    assert draft.identity_hash == (
+        "dd55a46a1d395d55ce6b7bbfda0c1e26351a1cd7969bf49b2e4afd042be014ef"
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (("a,b", ["c"]), ("a", ["b,c"])),
+        (("line\none", ["标签"]), ("line", ["one", "标签"])),
+        (("雪", ["é"]), ("雪é", [])),
+    ],
+)
+def test_identity_hash_distinguishes_ambiguous_text_and_tag_boundaries(
+    tmp_path: Path,
+    first: tuple[str, list[str]],
+    second: tuple[str, list[str]],
+) -> None:
+    store = MemoryStore(tmp_path)
+    assert store.prepare(*first).identity_hash != store.prepare(*second).identity_hash
+
+
+def test_prepare_create_allocates_uuid_and_commit_uses_exact_snapshot(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(
+        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: FIRST_ID
+    )
+
+    prepared = store.prepare_create("  Remember this  ", [" B ", "a"])
+
+    assert prepared == PreparedCreate(
+        FIRST_ID,
+        store.prepare("Remember this", ["a", "b"]),
+    )
+    assert not (tmp_path / ".cdy-agent").exists()
+    created = store.commit_create(prepared)
+    assert created.id == prepared.memory_id == FIRST_ID
+    assert (created.content, created.tags) == (
+        prepared.draft.content,
+        prepared.draft.tags,
+    )
+
+
+def test_prepared_update_conflicts_with_newer_two_store_record(
+    tmp_path: Path,
+) -> None:
+    times = iter((FIRST_TIME, SECOND_TIME))
+    store_a = MemoryStore(
+        tmp_path, clock=lambda: next(times), id_factory=lambda: FIRST_ID
+    )
+    store_b = MemoryStore(tmp_path, clock=lambda: FIRST_TIME + timedelta(hours=3))
+    original = store_a.create("original", ["old"])
+    prepared = store_a.prepare_update(FIRST_ID, "approved", ["new"])
+    newer = store_b.update(FIRST_ID, "newer", ["other"])
+
+    assert prepared == PreparedUpdate(
+        original, store_a.prepare("approved", ["new"])
+    )
+    with pytest.raises(MemoryConflictError, match="changed after confirmation"):
+        store_a.commit_update(prepared)
+    assert store_a.get(FIRST_ID) == newer
+
+
+def test_prepared_delete_conflicts_with_newer_two_store_record(
+    tmp_path: Path,
+) -> None:
+    store_a = MemoryStore(
+        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: FIRST_ID
+    )
+    store_b = MemoryStore(tmp_path, clock=lambda: SECOND_TIME)
+    original = store_a.create("original", ["old"])
+    prepared = store_a.prepare_delete(FIRST_ID)
+    newer = store_b.update(FIRST_ID, "newer", ["other"])
+
+    assert prepared == PreparedDelete(original)
+    with pytest.raises(MemoryConflictError, match="changed after confirmation"):
+        store_a.commit_delete(prepared)
+    assert store_a.get(FIRST_ID) == newer
 
 
 def test_find_duplicate_treats_v1_database_as_empty(tmp_path: Path) -> None:

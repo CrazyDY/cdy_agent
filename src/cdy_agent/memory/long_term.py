@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -41,6 +40,10 @@ class DuplicateMemoryError(MemoryStoreError):
         self.existing_id = existing_id
 
 
+class MemoryConflictError(MemoryStoreError):
+    """A confirmed memory changed before its mutation committed."""
+
+
 @dataclass(frozen=True)
 class StoredMemory:
     id: str
@@ -55,6 +58,23 @@ class MemoryDraft:
     content: str
     tags: tuple[str, ...]
     identity_hash: str
+
+
+@dataclass(frozen=True)
+class PreparedCreate:
+    memory_id: str
+    draft: MemoryDraft
+
+
+@dataclass(frozen=True)
+class PreparedUpdate:
+    before: StoredMemory
+    replacement: MemoryDraft
+
+
+@dataclass(frozen=True)
+class PreparedDelete:
+    before: StoredMemory
 
 
 def _normalize_content(content: object) -> str:
@@ -114,10 +134,16 @@ def _normalize_query(query: object) -> str | None:
 
 
 def _identity(content: str, tags: tuple[str, ...]) -> str:
-    payload = json.dumps(
-        [content, list(tags)], ensure_ascii=False, separators=(",", ":")
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    content_bytes = content.encode("utf-8")
+    payload = bytearray(b"CDYMEM1")
+    payload.extend(len(content_bytes).to_bytes(8, "big"))
+    payload.extend(content_bytes)
+    payload.extend(len(tags).to_bytes(4, "big"))
+    for tag in tags:
+        tag_bytes = tag.encode("utf-8")
+        payload.extend(len(tag_bytes).to_bytes(4, "big"))
+        payload.extend(tag_bytes)
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _canonical_uuid(value: object) -> str:
@@ -204,9 +230,18 @@ class MemoryStore:
         except (sqlite3.Error, InvalidConversationStoreError) as error:
             raise MemoryStoreError("Could not read memory data.") from error
 
-    def create(self, content: str, tags: Sequence[str]) -> StoredMemory:
+    def prepare_create(
+        self, content: str, tags: Sequence[str]
+    ) -> PreparedCreate:
         draft = self.prepare(content, tags)
         memory_id = _canonical_uuid(self._id_factory())
+        duplicate = self.find_duplicate(draft)
+        if duplicate is not None:
+            raise DuplicateMemoryError(duplicate.id)
+        return PreparedCreate(memory_id, draft)
+
+    def commit_create(self, prepared: PreparedCreate) -> StoredMemory:
+        self._require_prepared_create(prepared)
         created_at = _timestamp(self._clock())
         try:
             with self._database.write() as connection:
@@ -216,23 +251,27 @@ class MemoryStore:
                         "(id, content, identity_hash, created_at, updated_at) "
                         "VALUES (?, ?, ?, ?, ?)",
                         (
-                            memory_id,
-                            draft.content,
-                            draft.identity_hash,
+                            prepared.memory_id,
+                            prepared.draft.content,
+                            prepared.draft.identity_hash,
                             created_at,
                             created_at,
                         ),
                     )
                 except sqlite3.IntegrityError:
-                    duplicate = self._find_duplicate(connection, draft, None)
+                    duplicate = self._find_duplicate(
+                        connection, prepared.draft, None
+                    )
                     if duplicate is not None:
                         raise DuplicateMemoryError(duplicate.id)
                     raise
-                self._insert_tags(connection, memory_id, draft.tags)
+                self._insert_tags(
+                    connection, prepared.memory_id, prepared.draft.tags
+                )
                 return StoredMemory(
-                    memory_id,
-                    draft.content,
-                    draft.tags,
+                    prepared.memory_id,
+                    prepared.draft.content,
+                    prepared.draft.tags,
                     created_at,
                     created_at,
                 )
@@ -240,6 +279,9 @@ class MemoryStore:
             raise
         except (sqlite3.Error, ConversationStoreError) as error:
             raise MemoryStoreError("Could not write memory data.") from error
+
+    def create(self, content: str, tags: Sequence[str]) -> StoredMemory:
+        return self.commit_create(self.prepare_create(content, tags))
 
     def get(self, memory_id: str) -> StoredMemory:
         canonical_id = _canonical_uuid(memory_id)
@@ -350,6 +392,61 @@ class MemoryStore:
         except (sqlite3.Error, ConversationStoreError) as error:
             raise MemoryStoreError("Could not write memory data.") from error
 
+    def prepare_update(
+        self, memory_id: str, content: str, tags: Sequence[str]
+    ) -> PreparedUpdate:
+        canonical_id = _canonical_uuid(memory_id)
+        replacement = self.prepare(content, tags)
+        before = self.get(canonical_id)
+        duplicate = self.find_duplicate(replacement, exclude_id=canonical_id)
+        if duplicate is not None:
+            raise DuplicateMemoryError(duplicate.id)
+        return PreparedUpdate(before, replacement)
+
+    def commit_update(self, prepared: PreparedUpdate) -> StoredMemory:
+        self._require_prepared_update(prepared)
+        try:
+            with self._database.write() as connection:
+                current = self._load(connection, prepared.before.id)
+                if current != prepared.before:
+                    raise MemoryConflictError(
+                        "Memory changed after confirmation; re-run the operation."
+                    )
+                duplicate = self._find_duplicate(
+                    connection, prepared.replacement, prepared.before.id
+                )
+                if duplicate is not None:
+                    raise DuplicateMemoryError(duplicate.id)
+                updated_at = _timestamp(self._clock())
+                connection.execute(
+                    "UPDATE memories SET content = ?, identity_hash = ?, "
+                    "updated_at = ? WHERE id = ?",
+                    (
+                        prepared.replacement.content,
+                        prepared.replacement.identity_hash,
+                        updated_at,
+                        prepared.before.id,
+                    ),
+                )
+                connection.execute(
+                    "DELETE FROM memory_tags WHERE memory_id = ?",
+                    (prepared.before.id,),
+                )
+                self._insert_tags(
+                    connection, prepared.before.id, prepared.replacement.tags
+                )
+                return StoredMemory(
+                    prepared.before.id,
+                    prepared.replacement.content,
+                    prepared.replacement.tags,
+                    prepared.before.created_at,
+                    updated_at,
+                )
+        except MemoryStoreError:
+            raise
+        except (sqlite3.Error, ConversationStoreError) as error:
+            raise MemoryStoreError("Could not write memory data.") from error
+
     def delete(self, memory_id: str) -> None:
         canonical_id = _canonical_uuid(memory_id)
         try:
@@ -359,6 +456,30 @@ class MemoryStore:
                 )
                 if cursor.rowcount != 1:
                     raise MemoryNotFoundError("Memory not found.")
+        except MemoryStoreError:
+            raise
+        except (sqlite3.Error, ConversationStoreError) as error:
+            raise MemoryStoreError("Could not delete memory data.") from error
+
+    def prepare_delete(self, memory_id: str) -> PreparedDelete:
+        return PreparedDelete(self.get(memory_id))
+
+    def commit_delete(self, prepared: PreparedDelete) -> None:
+        self._require_prepared_delete(prepared)
+        try:
+            with self._database.write() as connection:
+                current = self._load(connection, prepared.before.id)
+                if current != prepared.before:
+                    raise MemoryConflictError(
+                        "Memory changed after confirmation; re-run the operation."
+                    )
+                cursor = connection.execute(
+                    "DELETE FROM memories WHERE id = ?", (prepared.before.id,)
+                )
+                if cursor.rowcount != 1:
+                    raise MemoryConflictError(
+                        "Memory changed after confirmation; re-run the operation."
+                    )
         except MemoryStoreError:
             raise
         except (sqlite3.Error, ConversationStoreError) as error:
@@ -378,6 +499,55 @@ class MemoryStore:
             raise InvalidMemoryError("Memory draft is invalid.") from error
         if not valid:
             raise InvalidMemoryError("Memory draft is invalid.")
+
+    @classmethod
+    def _require_prepared_create(cls, prepared: object) -> None:
+        if not isinstance(prepared, PreparedCreate):
+            raise InvalidMemoryError("Prepared memory operation is invalid.")
+        try:
+            _canonical_uuid(prepared.memory_id)
+            cls._require_draft(prepared.draft)
+        except InvalidMemoryError as error:
+            raise InvalidMemoryError(
+                "Prepared memory operation is invalid."
+            ) from error
+
+    @classmethod
+    def _require_prepared_update(cls, prepared: object) -> None:
+        if not isinstance(prepared, PreparedUpdate):
+            raise InvalidMemoryError("Prepared memory operation is invalid.")
+        cls._require_stored(prepared.before)
+        try:
+            cls._require_draft(prepared.replacement)
+        except InvalidMemoryError as error:
+            raise InvalidMemoryError(
+                "Prepared memory operation is invalid."
+            ) from error
+
+    @classmethod
+    def _require_prepared_delete(cls, prepared: object) -> None:
+        if not isinstance(prepared, PreparedDelete):
+            raise InvalidMemoryError("Prepared memory operation is invalid.")
+        cls._require_stored(prepared.before)
+
+    @staticmethod
+    def _require_stored(record: object) -> None:
+        if not isinstance(record, StoredMemory):
+            raise InvalidMemoryError("Prepared memory operation is invalid.")
+        try:
+            valid = (
+                _canonical_uuid(record.id) == record.id
+                and _normalize_content(record.content) == record.content
+                and _normalize_tags(record.tags) == record.tags
+                and _require_timestamp(record.created_at) == record.created_at
+                and _require_timestamp(record.updated_at) == record.updated_at
+            )
+        except InvalidMemoryError as error:
+            raise InvalidMemoryError(
+                "Prepared memory operation is invalid."
+            ) from error
+        if not valid:
+            raise InvalidMemoryError("Prepared memory operation is invalid.")
 
     @staticmethod
     def _insert_tags(

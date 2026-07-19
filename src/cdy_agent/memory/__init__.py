@@ -9,10 +9,14 @@ from .sqlite import (
 from .long_term import (
     DuplicateMemoryError,
     InvalidMemoryError,
+    MemoryConflictError,
     MemoryDraft,
     MemoryNotFoundError,
     MemoryStore,
     MemoryStoreError,
+    PreparedCreate,
+    PreparedDelete,
+    PreparedUpdate,
     StoredMemory,
 )
 
@@ -25,9 +29,13 @@ __all__ = [
     "StoredConversation",
     "DuplicateMemoryError",
     "InvalidMemoryError",
+    "MemoryConflictError",
     "MemoryDraft",
     "MemoryNotFoundError",
     "MemoryStore",
     "MemoryStoreError",
+    "PreparedCreate",
+    "PreparedDelete",
+    "PreparedUpdate",
     "StoredMemory",
 ]
