@@ -198,7 +198,7 @@ def test_delete_removes_session_and_messages(tmp_path: Path) -> None:
     assert message_count == 0
 
 
-def test_delete_wraps_sqlite_failure_with_delete_message(tmp_path: Path) -> None:
+def test_delete_rejects_unexpected_trigger_before_mutation(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.append_turn(
         SESSION_ID,
@@ -214,10 +214,14 @@ def test_delete_wraps_sqlite_failure_with_delete_message(tmp_path: Path) -> None
         )
 
     with pytest.raises(
-        ConversationStoreError,
-        match=r"^Could not delete conversation data\.$",
+        InvalidConversationStoreError,
+        match=r"^Conversation database schema is invalid\.$",
     ):
         store.delete(SESSION_ID)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT id FROM sessions WHERE id = ?", (SESSION_ID,)
+        ).fetchone() == (SESSION_ID,)
 
 
 def test_delete_missing_session_does_not_create_store(tmp_path: Path) -> None:

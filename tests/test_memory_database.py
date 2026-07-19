@@ -476,3 +476,77 @@ def test_read_and_write_reject_malformed_v2_schema(
     with pytest.raises(InvalidConversationStoreError):
         with WorkspaceDatabase(tmp_path).write():
             pass
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_read_and_write_reject_schema_with_user_view(
+    tmp_path: Path, version: int
+) -> None:
+    data = tmp_path / ".cdy-agent"
+    data.mkdir()
+    database = data / "cdy-agent.sqlite3"
+    if version == 1:
+        with sqlite3.connect(database) as connection:
+            connection.executescript(V1_SCHEMA)
+    else:
+        with WorkspaceDatabase(tmp_path).write():
+            pass
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE VIEW memory_counts AS SELECT 0 AS value")
+
+    with pytest.raises(InvalidConversationStoreError):
+        with WorkspaceDatabase(tmp_path).read():
+            pass
+    with pytest.raises(InvalidConversationStoreError):
+        with WorkspaceDatabase(tmp_path).write():
+            pass
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (version,)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'view'"
+        ).fetchall() == [("memory_counts",)]
+
+
+def test_write_rejects_v2_schema_with_destructive_trigger(
+    tmp_path: Path,
+) -> None:
+    with WorkspaceDatabase(tmp_path).write():
+        pass
+    database = tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TRIGGER purge_sessions AFTER INSERT ON sessions "
+            "BEGIN DELETE FROM sessions WHERE id = NEW.id; END"
+        )
+
+    with pytest.raises(InvalidConversationStoreError):
+        with WorkspaceDatabase(tmp_path).write() as connection:
+            connection.execute(
+                "INSERT INTO sessions VALUES ('target', 'created', 'updated')"
+            )
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT id FROM sessions").fetchall() == []
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall() == [("purge_sessions",)]
+
+
+def test_read_and_write_reject_schema_with_explicit_user_index(
+    tmp_path: Path,
+) -> None:
+    with WorkspaceDatabase(tmp_path).write():
+        pass
+    database = tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE INDEX memory_content_index ON memories(content)"
+        )
+
+    with pytest.raises(InvalidConversationStoreError):
+        with WorkspaceDatabase(tmp_path).read():
+            pass
+    with pytest.raises(InvalidConversationStoreError):
+        with WorkspaceDatabase(tmp_path).write():
+            pass

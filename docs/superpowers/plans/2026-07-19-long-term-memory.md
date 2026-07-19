@@ -37,10 +37,13 @@ confirmed mutation through direct CRUD after a separate read.
   transaction may leave an empty placeholder, which later writes initialize and reads
   treat as empty without mutation. Exception cleanup never unlinks the database.
 - Validate v1 before migration and v2 before every read/write, then validate complete
-  v2 again after migration in the same transaction. Require the exact application
-  table set, exact columns/types/NOT NULL/PK positions, required foreign keys with
-  `ON DELETE CASCADE`, primary/unique indexes, and critical role/nonblank/64-character
-  `CHECK` clauses. Ignore only SQLite-internal tables.
+  v2 again after migration in the same transaction. Apply an exact `sqlite_master`
+  object allowlist containing only the expected tables and the exact SQLite-generated
+  constraint autoindexes. Reject every extra view, trigger, explicit user index, table,
+  or deceptive SQLite-prefixed object without rejecting valid autoindexes. Require exact
+  visible columns/types/NOT NULL/PK/hidden positions, required foreign keys with
+  `ON DELETE CASCADE`, primary/unique indexes, and real comment-stripped critical
+  role/nonblank/64-character `CHECK` clauses.
 - Identity bytes are exactly `b"CDYMEM1" + uint64_be(len(content_utf8)) +
   content_utf8 + uint32_be(tag_count)`, followed for each sorted tag by
   `uint32_be(len(tag_utf8)) + tag_utf8`. `identity_hash` is lowercase SHA-256 over
@@ -55,7 +58,8 @@ confirmed mutation through direct CRUD after a separate read.
   `memory_conflict`; a tool instance keeps at most one immutable prepared operation
   during the synchronous registry call and clears it after execution or denial.
 - Add deterministic real-connection two-writer tests, v0 recovery/read tests,
-  malformed v1/v2 structural tests, fixed identity vectors, two-store CAS tests,
+  malformed v1/v2 structural and object-allowlist tests (including side-effect triggers),
+  fixed identity vectors, two-store CAS tests,
   exact create-confirmation identity tests, tool/CLI confirmation-race tests, and
   stale prepared-state cleanup tests.
 
@@ -248,7 +252,7 @@ class WorkspaceDatabase:
             self._configure(connection)
             connection.execute("BEGIN IMMEDIATE")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version == 0 and not self._application_tables(connection):
+            if version == 0 and not self._application_objects(connection):
                 for statement in (*SESSION_STATEMENTS, *MEMORY_STATEMENTS):
                     connection.execute(statement)
             elif version == 1:

@@ -24,6 +24,15 @@ MEMORY_STATEMENTS = (
 
 _V1_TABLES = {"sessions", "messages"}
 _V2_TABLES = _V1_TABLES | {"memories", "memory_tags"}
+_V1_AUTO_INDEXES = {
+    ("sqlite_autoindex_sessions_1", "sessions"),
+    ("sqlite_autoindex_messages_1", "messages"),
+}
+_V2_AUTO_INDEXES = _V1_AUTO_INDEXES | {
+    ("sqlite_autoindex_memories_1", "memories"),
+    ("sqlite_autoindex_memories_2", "memories"),
+    ("sqlite_autoindex_memory_tags_1", "memory_tags"),
+}
 _COLUMNS = {
     "sessions": (
         ("id", "TEXT", 0, 1, 0),
@@ -244,7 +253,22 @@ class WorkspaceDatabase:
         cls, connection: sqlite3.Connection, version: int
     ) -> None:
         expected_tables = _V1_TABLES if version == 1 else _V2_TABLES
-        if cls._application_tables(connection) != expected_tables:
+        expected_indexes = (
+            _V1_AUTO_INDEXES if version == 1 else _V2_AUTO_INDEXES
+        )
+        expected_objects = {
+            ("table", table, table, False) for table in expected_tables
+        } | {
+            ("index", name, table, True)
+            for name, table in expected_indexes
+        }
+        actual_objects = {
+            (row[0], row[1], row[2], row[3] is None)
+            for row in connection.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master"
+            )
+        }
+        if actual_objects != expected_objects:
             cls._invalid_schema()
         for table in expected_tables:
             columns = tuple(
