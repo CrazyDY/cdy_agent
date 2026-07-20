@@ -40,6 +40,27 @@ def test_append_writes_one_json_line_and_lists_newest_first(
     assert store.get(first.trace_id) == first
 
 
+def test_list_sorts_mixed_timestamp_precision_chronologically(
+    tmp_path: Path,
+) -> None:
+    earlier = sample_trace()
+    later_payload = earlier.to_dict()
+    later_payload["trace_id"] = "0cebd5c2-7d4c-4655-a997-f31e05eb74a5"
+    later_payload["started_at"] = "2026-07-20T08:30:00.100000Z"
+    later = type(earlier).from_dict(later_payload)
+    earlier_payload = earlier.to_dict()
+    earlier_payload["started_at"] = "2026-07-20T08:30:00Z"
+    earlier = type(earlier).from_dict(earlier_payload)
+    store = TraceStore(tmp_path)
+    store.append(later)
+    store.append(earlier)
+
+    assert [record.trace_id for record in store.list_traces()] == [
+        later.trace_id,
+        earlier.trace_id,
+    ]
+
+
 @pytest.mark.parametrize(
     ("corrupt_line", "line_number"),
     [
@@ -59,6 +80,18 @@ def test_corrupt_line_reports_line_number(
     )
 
     with pytest.raises(TraceStoreError, match=rf"line {line_number}"):
+        TraceStore(tmp_path).list_traces()
+
+
+def test_invalid_utf8_reports_safe_line_number(tmp_path: Path) -> None:
+    path = tmp_path / ".cdy-agent" / "traces.jsonl"
+    path.parent.mkdir()
+    valid_line = json.dumps(sample_trace().to_dict()).encode("utf-8")
+    path.write_bytes(valid_line + b"\n\xffprivate-bytes\n")
+
+    with pytest.raises(
+        TraceStoreError, match=r"^Invalid trace data on line 2\.$"
+    ):
         TraceStore(tmp_path).list_traces()
 
 

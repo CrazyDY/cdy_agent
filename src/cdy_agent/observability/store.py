@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -35,7 +36,13 @@ class TraceStore:
     def list_traces(self) -> tuple[TraceRecord, ...]:
         records = self._read_all()
         return tuple(
-            sorted(records, key=lambda record: record.started_at, reverse=True)
+            sorted(
+                records,
+                key=lambda record: datetime.fromisoformat(
+                    record.started_at[:-1] + "+00:00"
+                ),
+                reverse=True,
+            )
         )
 
     def get(self, trace_id: str) -> TraceRecord:
@@ -54,10 +61,10 @@ class TraceStore:
             return ()
         records = []
         try:
-            with self.path.open(encoding="utf-8") as stream:
+            with self.path.open("rb") as stream:
                 for line_number, line in enumerate(stream, 1):
                     try:
-                        payload = json.loads(line)
+                        payload = json.loads(line.decode("utf-8"))
                         records.append(TraceRecord.from_dict(payload))
                     except (json.JSONDecodeError, ValueError) as exc:
                         raise TraceStoreError(
