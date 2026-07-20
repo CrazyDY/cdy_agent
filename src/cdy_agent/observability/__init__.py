@@ -8,6 +8,7 @@ from .models import (
     TraceRecord,
 )
 from .pricing import Pricing, estimate_cost, resolve_pricing
+from .recorder import TraceRecorder
 
 __all__ = [
     "EstimatedCost",
@@ -15,6 +16,7 @@ __all__ = [
     "Pricing",
     "TokenUsage",
     "ToolCallSpan",
+    "TraceRecorder",
     "TraceRecord",
     "estimate_cost",
     "resolve_pricing",
