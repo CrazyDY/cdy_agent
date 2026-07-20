@@ -78,6 +78,7 @@ class TraceRecorder:
         self._open_tool_calls: dict[int, _OpenSpan] = {}
         self._next_model_sequence = 1
         self._next_tool_sequence = 1
+        self._healthy = True
         self._finished = False
         log_event(
             logging.INFO,
@@ -85,6 +86,15 @@ class TraceRecorder:
             trace_id=self.trace_id,
             status="started",
         )
+
+    @property
+    def healthy(self) -> bool:
+        """Whether this recorder can still produce a complete trace."""
+        return self._healthy
+
+    def invalidate(self) -> None:
+        """Permanently mark this recorder's partial trace for discard."""
+        self._healthy = False
 
     def start_model_call(self) -> _OpenSpan:
         self._require_active()
@@ -182,6 +192,8 @@ class TraceRecorder:
         )
 
     def finish(self, error: Exception | None = None) -> TraceRecord:
+        if not self._healthy:
+            raise RuntimeError("Trace recorder is invalidated.")
         if self._finished:
             raise RuntimeError("Trace recorder is already finished.")
         self._finished = True

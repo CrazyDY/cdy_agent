@@ -66,6 +66,18 @@ def test_recorder_can_finish_once_with_unknown_usage() -> None:
         recorder.finish()
 
 
+def test_recorder_invalidation_is_durable_and_prevents_finalization() -> None:
+    recorder = TraceRecorder("ask", "m", "responses")
+
+    assert recorder.healthy is True
+    recorder.invalidate()
+    recorder.invalidate()
+
+    assert recorder.healthy is False
+    with pytest.raises(RuntimeError, match="invalidated"):
+        recorder.finish()
+
+
 def test_recorder_orders_overlapping_spans_by_start_sequence() -> None:
     recorder = TraceRecorder("ask", "m", "responses")
     first_model = recorder.start_model_call()

@@ -13,6 +13,14 @@ class AgentLoopLimitError(RuntimeError):
     """Raised when an agent does not finish within its model-call budget."""
 
 
+def _invalidate_recorder(recorder: TraceRecorder) -> None:
+    """Mark a broken recorder unusable without affecting the Agent result."""
+    try:
+        recorder.invalidate()
+    except Exception:
+        pass
+
+
 class Agent:
     """Run a bounded, API-neutral model and tool interaction loop."""
 
@@ -47,6 +55,7 @@ class Agent:
                 try:
                     model_span = active_recorder.start_model_call()
                 except Exception:
+                    _invalidate_recorder(active_recorder)
                     active_recorder = None
             try:
                 outcome = self._gateway.create(
@@ -62,12 +71,14 @@ class Agent:
                             model_span, None, exc
                         )
                     except Exception:
+                        _invalidate_recorder(active_recorder)
                         active_recorder = None
                 raise
             if active_recorder is not None and model_span is not None:
                 try:
                     active_recorder.finish_model_call(model_span, outcome.usage)
                 except Exception:
+                    _invalidate_recorder(active_recorder)
                     active_recorder = None
             if isinstance(outcome, FinalResponse):
                 return outcome.text
@@ -78,6 +89,7 @@ class Agent:
                     try:
                         tool_span = active_recorder.start_tool_call(call.name)
                     except Exception:
+                        _invalidate_recorder(active_recorder)
                         active_recorder = None
                 try:
                     result = self._registry.execute(call, self._confirm)
@@ -90,6 +102,7 @@ class Agent:
                                 error_type=type(exc).__name__,
                             )
                         except Exception:
+                            _invalidate_recorder(active_recorder)
                             active_recorder = None
                     raise
                 if active_recorder is not None and tool_span is not None:
@@ -100,6 +113,7 @@ class Agent:
                             error_type=None if result.ok else result.code,
                         )
                     except Exception:
+                        _invalidate_recorder(active_recorder)
                         active_recorder = None
                 completed_outputs.append((call.call_id, result.to_json()))
             outputs = tuple(completed_outputs)

@@ -48,6 +48,14 @@ class SpyRecorder:
         self.events: list[tuple[object, ...]] = []
         self.model_sequence = 0
         self.tool_sequence = 0
+        self.invalidations = 0
+
+    @property
+    def healthy(self) -> bool:
+        return self.invalidations == 0
+
+    def invalidate(self) -> None:
+        self.invalidations += 1
 
     def start_model_call(self) -> int:
         self.model_sequence += 1
@@ -78,10 +86,18 @@ class SpyRecorder:
 
 
 class FailingRecorder(SpyRecorder):
-    def __init__(self, operation: str) -> None:
+    def __init__(
+        self, operation: str, *, invalidate_raises: bool = False
+    ) -> None:
         super().__init__()
         self.operation = operation
+        self.invalidate_raises = invalidate_raises
         self.attempts: list[str] = []
+
+    def invalidate(self) -> None:
+        super().invalidate()
+        if self.invalidate_raises:
+            raise RuntimeError("private invalidation failure")
 
     def _fail(self, operation: str) -> None:
         self.attempts.append(operation)
@@ -207,6 +223,7 @@ def test_agent_disables_tracing_when_model_span_start_fails() -> None:
         [Message("user", "hello")], recorder
     ) == "done"
     assert recorder.attempts == ["start_model"]
+    assert recorder.invalidations == 1
 
 
 def test_agent_disables_tracing_when_model_span_finish_fails_after_success() -> None:
@@ -221,6 +238,7 @@ def test_agent_disables_tracing_when_model_span_finish_fails_after_success() -> 
         [Message("user", "hello")], recorder
     ) == "done"
     assert recorder.attempts == ["start_model", "finish_model"]
+    assert recorder.invalidations == 1
 
 
 def test_model_finish_failure_does_not_mask_provider_exception() -> None:
@@ -234,6 +252,7 @@ def test_model_finish_failure_does_not_mask_provider_exception() -> None:
 
     assert raised.value is provider_error
     assert recorder.attempts == ["start_model", "finish_model"]
+    assert recorder.invalidations == 1
 
 
 def test_agent_disables_tracing_when_tool_span_start_fails() -> None:
@@ -248,6 +267,7 @@ def test_agent_disables_tracing_when_tool_span_start_fails() -> None:
         [Message("user", "hello")], recorder
     ) == "done"
     assert recorder.attempts == ["start_model", "finish_model", "start_tool"]
+    assert recorder.invalidations == 1
 
 
 @pytest.mark.parametrize(
@@ -278,6 +298,7 @@ def test_tool_finish_failure_preserves_structured_result(
     assert recorder.attempts == [
         "start_model", "finish_model", "start_tool", "finish_tool",
     ]
+    assert recorder.invalidations == 1
 
 
 def test_tool_finish_failure_does_not_mask_tool_exception() -> None:
@@ -302,6 +323,16 @@ def test_tool_finish_failure_does_not_mask_tool_exception() -> None:
     assert recorder.attempts == [
         "start_model", "finish_model", "start_tool", "finish_tool",
     ]
+    assert recorder.invalidations == 1
+
+
+def test_recorder_invalidation_failure_does_not_replace_primary_result() -> None:
+    recorder = FailingRecorder("start_model", invalidate_raises=True)
+
+    assert Agent(
+        FakeGateway([FinalResponse("done")]), FakeRegistry(), lambda _: True
+    ).run([Message("user", "hello")], recorder) == "done"
+    assert recorder.invalidations == 1
 
 
 def test_agent_returns_direct_response() -> None:

@@ -16,7 +16,7 @@ from openai import (
 from typer.testing import CliRunner
 
 from cdy_agent import cli, openai_client
-from cdy_agent.agent import AgentLoopLimitError
+from cdy_agent.agent import Agent, AgentLoopLimitError
 from cdy_agent.cli import app
 from cdy_agent.conversation import Message
 from cdy_agent.memory import (
@@ -31,9 +31,13 @@ from cdy_agent.memory import (
     StoredConversation,
     StoredMemory,
 )
-from cdy_agent.openai_client import FinalResponse
+from cdy_agent.openai_client import (
+    FinalResponse,
+    ResponsesContinuation,
+    ToolCallResponse,
+)
 from cdy_agent.observability import TraceRecord, TraceStore, TraceStoreError
-from cdy_agent.tools.base import ConfirmationRequest, ToolResult
+from cdy_agent.tools.base import ConfirmationRequest, ToolCall, ToolResult
 
 
 runner = CliRunner()
@@ -433,6 +437,44 @@ def test_trace_recorder_construction_failure_warns_and_runs_ask(
     assert TraceStore(tmp_path).list_traces() == ()
 
 
+def test_invalidated_real_trace_is_discarded_without_hiding_reply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class ToolGateway:
+        def __init__(self) -> None:
+            self.outcomes = iter([
+                ToolCallResponse(
+                    (ToolCall("call-1", "private_tool", "{}"),),
+                    ResponsesContinuation("next"),
+                ),
+                FinalResponse("visible reply"),
+            ])
+
+        def create(self, **kwargs: object) -> object:
+            return next(self.outcomes)
+
+    class InvalidCodeRegistry:
+        definitions = ()
+
+        def execute(self, call: ToolCall, confirm: object) -> ToolResult:
+            return ToolResult.failure("bad-code", "private tool detail")
+
+    agent = Agent(ToolGateway(), InvalidCodeRegistry(), lambda _: True)
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(
+        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "visible reply\n"
+    assert result.stderr == "Warning: Could not save trace.\n"
+    assert "bad-code" not in result.stderr
+    assert "private_tool" not in result.stderr
+    assert "private tool detail" not in result.stderr
+    assert TraceStore(tmp_path).list_traces() == ()
+
+
 @pytest.mark.parametrize("failure_point", ["finish", "append"])
 def test_agent_error_survives_trace_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure_point: str
@@ -443,6 +485,10 @@ def test_agent_error_survives_trace_cleanup_failure(
         class FailingTraceRecorder:
             def __init__(self, *args: object, **kwargs: object) -> None:
                 pass
+
+            @property
+            def healthy(self) -> bool:
+                return True
 
             def finish(self, error: Exception | None) -> TraceRecord:
                 assert isinstance(error, AgentLoopLimitError)

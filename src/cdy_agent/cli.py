@@ -125,10 +125,13 @@ def _run_traced(
         error = exc
         raise
     finally:
-        try:
-            store.append(recorder.finish(error))
-        except (TraceStoreError, RuntimeError, ValueError, OSError):
+        if not recorder.healthy:
             typer.echo("Warning: Could not save trace.", err=True)
+        else:
+            try:
+                store.append(recorder.finish(error))
+            except (TraceStoreError, RuntimeError, ValueError, OSError):
+                typer.echo("Warning: Could not save trace.", err=True)
 
 
 def _run_with_best_effort_trace(
