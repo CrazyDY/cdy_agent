@@ -92,6 +92,77 @@ def test_gateway_normalizes_chat_usage() -> None:
     assert outcome == openai_client.FinalResponse("Done", TokenUsage(9, 2))
 
 
+def test_responses_gateway_normalizes_tool_call_usage() -> None:
+    client = FakeClient()
+    client.responses.create = FakeResponsesSequence(SimpleNamespace(
+        id="response-1",
+        output_text="",
+        output=[SimpleNamespace(
+            type="function_call", call_id="call-1", name="read_file", arguments="{}"
+        )],
+        usage=SimpleNamespace(input_tokens=12, output_tokens=3),
+    ))
+
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="responses", client=client
+    ).create((Message("user", "Hello"),), TOOL_DEFINITIONS)
+
+    assert isinstance(outcome, openai_client.ToolCallResponse)
+    assert outcome.usage == TokenUsage(12, 3)
+
+
+def test_chat_gateway_normalizes_tool_call_usage() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeChatSequence(SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(
+            content=None,
+            tool_calls=[SimpleNamespace(
+                id="call-1",
+                function=SimpleNamespace(name="read_file", arguments="{}"),
+            )],
+        ))],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=2),
+    ))
+
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="chat_completions", client=client
+    ).create((Message("user", "Hello"),), TOOL_DEFINITIONS)
+
+    assert isinstance(outcome, openai_client.ToolCallResponse)
+    assert outcome.usage == TokenUsage(9, 2)
+
+
+@pytest.mark.parametrize(
+    ("api_mode", "usage"),
+    [
+        ("responses", SimpleNamespace(output_tokens=2)),
+        ("responses", SimpleNamespace(input_tokens="12", output_tokens=2)),
+        ("chat_completions", SimpleNamespace(completion_tokens=2)),
+        ("chat_completions", SimpleNamespace(prompt_tokens=9, completion_tokens=None)),
+    ],
+)
+def test_gateway_maps_malformed_usage_to_unsupported(
+    api_mode: str, usage: SimpleNamespace
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeResponsesSequence(SimpleNamespace(
+        id="response-1", output_text="Done", output=[], usage=usage
+    ))
+    client.chat.completions.create = FakeChatSequence(SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(
+            content="Done", tool_calls=[]
+        ))],
+        usage=usage,
+    ))
+
+    with pytest.raises(
+        RuntimeError, match=r"OpenAI returned an unsupported response\."
+    ):
+        openai_client.ModelGateway(
+            model="m", api_mode=api_mode, client=client
+        ).create((Message("user", "Hello"),), ())
+
+
 @pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
 def test_gateway_allows_missing_usage(api_mode: str) -> None:
     client = FakeClient(responses_output="Done", chat_output="Done")

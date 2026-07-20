@@ -56,6 +56,31 @@ def test_structured_log_contains_only_explicit_safe_fields(capsys) -> None:
     }
 
 
+def test_structured_logging_filters_below_configured_level(capsys) -> None:
+    configure_structured_logging(logging.WARNING)
+
+    log_event(
+        logging.INFO,
+        "trace_started",
+        trace_id=TRACE_ID,
+        status="started",
+    )
+
+    assert capsys.readouterr().err == ""
+
+
+def test_reconfiguring_structured_logging_replaces_handler() -> None:
+    logger = logging.getLogger("cdy_agent.observability")
+
+    configure_structured_logging(logging.INFO)
+    first_handler = logger.handlers[0]
+    configure_structured_logging(logging.DEBUG)
+
+    assert len(logger.handlers) == 1
+    assert logger.handlers[0] is not first_handler
+    assert isinstance(logger.handlers[0].formatter, type(first_handler.formatter))
+
+
 @pytest.mark.parametrize(
     "unsafe_field",
     ["prompt", "reply", "arguments", "result", "api_key", "environment", "message"],

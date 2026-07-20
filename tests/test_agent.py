@@ -77,6 +77,47 @@ class SpyRecorder:
         self.events.append(("tool", "finish", token, ok, error_type))
 
 
+class FailingRecorder(SpyRecorder):
+    def __init__(self, operation: str) -> None:
+        super().__init__()
+        self.operation = operation
+        self.attempts: list[str] = []
+
+    def _fail(self, operation: str) -> None:
+        self.attempts.append(operation)
+        if operation == self.operation:
+            raise RuntimeError("recorder secret")
+
+    def start_model_call(self) -> int:
+        self._fail("start_model")
+        return super().start_model_call()
+
+    def finish_model_call(
+        self,
+        token: int,
+        usage: TokenUsage | None,
+        error: Exception | None = None,
+    ) -> None:
+        self._fail("finish_model")
+        super().finish_model_call(token, usage, error)
+
+    def start_tool_call(self, tool_name: str) -> int:
+        self._fail("start_tool")
+        return super().start_tool_call(tool_name)
+
+    def finish_tool_call(
+        self,
+        token: int,
+        *,
+        ok: bool,
+        error_type: str | None = None,
+    ) -> None:
+        self._fail("finish_tool")
+        if self.operation == "reject_bad_code" and error_type == "bad-code":
+            raise ValueError("Tool error type must be a stable identifier.")
+        super().finish_tool_call(token, ok=ok, error_type=error_type)
+
+
 def test_agent_records_model_and_tool_spans() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
     gateway = FakeGateway([
@@ -152,6 +193,115 @@ def test_agent_records_unexpected_tool_exception_and_reraises() -> None:
     assert recorder.events[-1] == (
         "tool", "finish", 1, False, "RuntimeError",
     )
+
+
+def test_agent_disables_tracing_when_model_span_start_fails() -> None:
+    calls = (ToolCall("1", "echo", "{}"),)
+    gateway = FakeGateway([
+        ToolCallResponse(calls, ResponsesContinuation("next")),
+        FinalResponse("done"),
+    ])
+    recorder = FailingRecorder("start_model")
+
+    assert Agent(gateway, FakeRegistry(), lambda _: True).run(
+        [Message("user", "hello")], recorder
+    ) == "done"
+    assert recorder.attempts == ["start_model"]
+
+
+def test_agent_disables_tracing_when_model_span_finish_fails_after_success() -> None:
+    calls = (ToolCall("1", "echo", "{}"),)
+    gateway = FakeGateway([
+        ToolCallResponse(calls, ResponsesContinuation("next")),
+        FinalResponse("done"),
+    ])
+    recorder = FailingRecorder("finish_model")
+
+    assert Agent(gateway, FakeRegistry(), lambda _: True).run(
+        [Message("user", "hello")], recorder
+    ) == "done"
+    assert recorder.attempts == ["start_model", "finish_model"]
+
+
+def test_model_finish_failure_does_not_mask_provider_exception() -> None:
+    provider_error = RuntimeError("provider secret")
+    recorder = FailingRecorder("finish_model")
+
+    with pytest.raises(RuntimeError) as raised:
+        Agent(
+            FakeGateway([provider_error]), FakeRegistry(), lambda _: True
+        ).run([Message("user", "hello")], recorder)
+
+    assert raised.value is provider_error
+    assert recorder.attempts == ["start_model", "finish_model"]
+
+
+def test_agent_disables_tracing_when_tool_span_start_fails() -> None:
+    calls = (ToolCall("1", "echo", "{}"),)
+    gateway = FakeGateway([
+        ToolCallResponse(calls, ResponsesContinuation("next")),
+        FinalResponse("done"),
+    ])
+    recorder = FailingRecorder("start_tool")
+
+    assert Agent(gateway, FakeRegistry(), lambda _: True).run(
+        [Message("user", "hello")], recorder
+    ) == "done"
+    assert recorder.attempts == ["start_model", "finish_model", "start_tool"]
+
+
+@pytest.mark.parametrize(
+    ("result", "recorder_failure"),
+    [
+        (ToolResult.success({"value": "echo"}), "finish_tool"),
+        (ToolResult.failure("approval_denied", "secret detail"), "finish_tool"),
+        (ToolResult.failure("bad-code", "secret detail"), "reject_bad_code"),
+    ],
+)
+def test_tool_finish_failure_preserves_structured_result(
+    result: ToolResult, recorder_failure: str
+) -> None:
+    registry = FakeRegistry()
+    registry.result = result
+    gateway = FakeGateway([
+        ToolCallResponse(
+            (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
+        ),
+        FinalResponse("done"),
+    ])
+    recorder = FailingRecorder(recorder_failure)
+
+    assert Agent(gateway, registry, lambda _: True).run(
+        [Message("user", "hello")], recorder
+    ) == "done"
+    assert gateway.calls[1]["tool_outputs"] == (("1", result.to_json()),)
+    assert recorder.attempts == [
+        "start_model", "finish_model", "start_tool", "finish_tool",
+    ]
+
+
+def test_tool_finish_failure_does_not_mask_tool_exception() -> None:
+    tool_error = LookupError("tool secret")
+
+    class ExplodingRegistry(FakeRegistry):
+        def execute(self, call: ToolCall, confirm: object) -> ToolResult:
+            raise tool_error
+
+    recorder = FailingRecorder("finish_tool")
+    gateway = FakeGateway([
+        ToolCallResponse(
+            (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
+        ),
+    ])
+
+    with pytest.raises(LookupError) as raised:
+        Agent(gateway, ExplodingRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
+    assert raised.value is tool_error
+    assert recorder.attempts == [
+        "start_model", "finish_model", "start_tool", "finish_tool",
+    ]
 
 
 def test_agent_returns_direct_response() -> None:

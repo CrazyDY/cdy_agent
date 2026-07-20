@@ -40,8 +40,14 @@ class Agent:
 
         continuation = None
         outputs: tuple[tuple[str, str], ...] = ()
+        active_recorder = recorder
         for _ in range(self._max_model_calls):
-            model_span = recorder.start_model_call() if recorder else None
+            model_span = None
+            if active_recorder is not None:
+                try:
+                    model_span = active_recorder.start_model_call()
+                except Exception:
+                    active_recorder = None
             try:
                 outcome = self._gateway.create(
                     messages=messages,
@@ -50,32 +56,51 @@ class Agent:
                     tool_outputs=outputs,
                 )
             except Exception as exc:
-                if recorder is not None and model_span is not None:
-                    recorder.finish_model_call(model_span, None, exc)
+                if active_recorder is not None and model_span is not None:
+                    try:
+                        active_recorder.finish_model_call(
+                            model_span, None, exc
+                        )
+                    except Exception:
+                        active_recorder = None
                 raise
-            if recorder is not None and model_span is not None:
-                recorder.finish_model_call(model_span, outcome.usage)
+            if active_recorder is not None and model_span is not None:
+                try:
+                    active_recorder.finish_model_call(model_span, outcome.usage)
+                except Exception:
+                    active_recorder = None
             if isinstance(outcome, FinalResponse):
                 return outcome.text
             completed_outputs = []
             for call in outcome.calls:
-                tool_span = recorder.start_tool_call(call.name) if recorder else None
+                tool_span = None
+                if active_recorder is not None:
+                    try:
+                        tool_span = active_recorder.start_tool_call(call.name)
+                    except Exception:
+                        active_recorder = None
                 try:
                     result = self._registry.execute(call, self._confirm)
                 except Exception as exc:
-                    if recorder is not None and tool_span is not None:
-                        recorder.finish_tool_call(
-                            tool_span,
-                            ok=False,
-                            error_type=type(exc).__name__,
-                        )
+                    if active_recorder is not None and tool_span is not None:
+                        try:
+                            active_recorder.finish_tool_call(
+                                tool_span,
+                                ok=False,
+                                error_type=type(exc).__name__,
+                            )
+                        except Exception:
+                            active_recorder = None
                     raise
-                if recorder is not None and tool_span is not None:
-                    recorder.finish_tool_call(
-                        tool_span,
-                        ok=result.ok,
-                        error_type=None if result.ok else result.code,
-                    )
+                if active_recorder is not None and tool_span is not None:
+                    try:
+                        active_recorder.finish_tool_call(
+                            tool_span,
+                            ok=result.ok,
+                            error_type=None if result.ok else result.code,
+                        )
+                    except Exception:
+                        active_recorder = None
                 completed_outputs.append((call.call_id, result.to_json()))
             outputs = tuple(completed_outputs)
             continuation = outcome.continuation
