@@ -98,9 +98,15 @@ uv run cdy-agent traces list --workspace .
 uv run cdy-agent traces show <trace-id> --workspace .
 ```
 
-两个价格变量都是可选项，但必须成对设置；未配置价格时仍会记录提供商返回的 Token 用量，只是不估算费用。`CDY_AGENT_LOG_LEVEL` 只接受 `DEBUG`、`INFO`、`WARNING`、`ERROR`，默认值为 `WARNING`；单行 JSON 日志写入 stderr。
+两个价格变量都是可选项；一旦配置，就必须成对设置，且都必须是非负十进制数。`CDY_AGENT_LOG_LEVEL` 只接受 `DEBUG`、`INFO`、`WARNING`、`ERROR`，默认值为 `WARNING`；单行 JSON 日志写入 stderr。
+
+每次实际执行 `ask` 都会创建一条轨迹；`chat` 中每个非空且不是退出命令的用户回合都会创建一条轨迹，并关联当前会话。空输入、`/exit`、`/quit` 和 EOF 不会创建轨迹。
+
+如果提供商未返回 usage，Token 用量和估算费用在查询中显示为 `unknown`，轨迹 JSON 中对应值为 `null`。如果提供商返回了 usage 但未配置价格，Token 用量仍然可用，估算费用显示为 `unknown`（JSON 中为 `null`）。
 
 轨迹文件位于 `<workspace>/.cdy-agent/traces.jsonl`。轨迹和日志均排除用户 prompt、模型回复正文以及工具参数、确认内容和返回载荷，不会保存这些敏感内容。
+
+轨迹初始化、完成或写入失败时，CLI 只向 stderr 输出通用警告，不会替换主要回复或原始错误。
 
 ### 本地工具与安全边界
 
