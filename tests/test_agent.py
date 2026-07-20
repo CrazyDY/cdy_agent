@@ -8,6 +8,7 @@ from cdy_agent.agent import Agent, AgentLoopLimitError
 from cdy_agent.conversation import Message
 from cdy_agent.openai_client import FinalResponse, ResponsesContinuation, ToolCallResponse
 from cdy_agent.openai_client import ModelGateway
+from cdy_agent.observability import TokenUsage
 from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.base import ToolCall, ToolResult
 from cdy_agent.tools.registry import ToolRegistry
@@ -20,7 +21,10 @@ class FakeGateway:
 
     def create(self, **kwargs: object) -> object:
         self.calls.append(kwargs)
-        return next(self.outcomes)
+        outcome = next(self.outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 class FakeRegistry:
@@ -30,10 +34,124 @@ class FakeRegistry:
 
     def __init__(self) -> None:
         self.calls: list[ToolCall] = []
+        self.result = ToolResult.success({"value": "echo"})
 
     def execute(self, call: ToolCall, confirm: object) -> ToolResult:
         self.calls.append(call)
-        return ToolResult.success({"value": call.name})
+        if self.result.ok:
+            return ToolResult.success({"value": call.name})
+        return self.result
+
+
+class SpyRecorder:
+    def __init__(self) -> None:
+        self.events: list[tuple[object, ...]] = []
+        self.model_sequence = 0
+        self.tool_sequence = 0
+
+    def start_model_call(self) -> int:
+        self.model_sequence += 1
+        self.events.append(("model", "start", self.model_sequence))
+        return self.model_sequence
+
+    def finish_model_call(
+        self,
+        token: int,
+        usage: TokenUsage | None,
+        error: Exception | None = None,
+    ) -> None:
+        self.events.append(("model", "finish", token, usage, error))
+
+    def start_tool_call(self, tool_name: str) -> int:
+        self.tool_sequence += 1
+        self.events.append(("tool", "start", self.tool_sequence, tool_name))
+        return self.tool_sequence
+
+    def finish_tool_call(
+        self,
+        token: int,
+        *,
+        ok: bool,
+        error_type: str | None = None,
+    ) -> None:
+        self.events.append(("tool", "finish", token, ok, error_type))
+
+
+def test_agent_records_model_and_tool_spans() -> None:
+    calls = (ToolCall("1", "echo", "{}"),)
+    gateway = FakeGateway([
+        ToolCallResponse(calls, ResponsesContinuation("next"), TokenUsage(8, 2)),
+        FinalResponse("done", TokenUsage(4, 3)),
+    ])
+    recorder = SpyRecorder()
+
+    assert Agent(gateway, FakeRegistry(), lambda _: True).run(
+        [Message("user", "secret")], recorder
+    ) == "done"
+    assert recorder.events == [
+        ("model", "start", 1),
+        ("model", "finish", 1, TokenUsage(8, 2), None),
+        ("tool", "start", 1, "echo"),
+        ("tool", "finish", 1, True, None),
+        ("model", "start", 2),
+        ("model", "finish", 2, TokenUsage(4, 3), None),
+    ]
+
+
+def test_agent_records_model_exception_and_reraises() -> None:
+    gateway = FakeGateway([RuntimeError("provider secret")])
+    recorder = SpyRecorder()
+
+    with pytest.raises(RuntimeError, match="provider secret"):
+        Agent(gateway, FakeRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
+
+    assert recorder.events[-1][0:3] == ("model", "finish", 1)
+    assert isinstance(recorder.events[-1][-1], RuntimeError)
+
+
+def test_agent_marks_structured_tool_failure() -> None:
+    registry = FakeRegistry()
+    registry.result = ToolResult.failure("approval_denied", "secret detail")
+    recorder = SpyRecorder()
+    gateway = FakeGateway([
+        ToolCallResponse(
+            (ToolCall("1", "echo", "{}"),),
+            ResponsesContinuation("next"),
+        ),
+        FinalResponse("done"),
+    ])
+
+    Agent(gateway, registry, lambda _: False).run(
+        [Message("user", "hello")], recorder
+    )
+
+    assert ("tool", "finish", 1, False, "approval_denied") in recorder.events
+
+
+def test_agent_records_unexpected_tool_exception_and_reraises() -> None:
+    class ExplodingRegistry(FakeRegistry):
+        def execute(self, call: ToolCall, confirm: object) -> ToolResult:
+            self.calls.append(call)
+            raise RuntimeError("tool secret")
+
+    recorder = SpyRecorder()
+    gateway = FakeGateway([
+        ToolCallResponse(
+            (ToolCall("1", "echo", "{}"),),
+            ResponsesContinuation("next"),
+        ),
+    ])
+
+    with pytest.raises(RuntimeError, match="tool secret"):
+        Agent(gateway, ExplodingRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
+
+    assert recorder.events[-1] == (
+        "tool", "finish", 1, False, "RuntimeError",
+    )
 
 
 def test_agent_returns_direct_response() -> None:
