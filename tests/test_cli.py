@@ -32,6 +32,7 @@ from cdy_agent.memory import (
     StoredMemory,
 )
 from cdy_agent.openai_client import FinalResponse
+from cdy_agent.observability import TraceRecord, TraceStore, TraceStoreError
 from cdy_agent.tools.base import ConfirmationRequest, ToolResult
 
 
@@ -57,11 +58,27 @@ class FakeAgent:
         self.error = error
         self.calls: list[tuple[Message, ...]] = []
 
-    def run(self, messages: Sequence[Message]) -> str:
+    def run(
+        self, messages: Sequence[Message], recorder: object | None = None
+    ) -> str:
         self.calls.append(tuple(messages))
         if self.error is not None:
             raise self.error
         return next(self.replies)
+
+
+class FakeTraceStore:
+    def __init__(self, records: Sequence[TraceRecord] = ()) -> None:
+        self.records = tuple(records)
+
+    def list_traces(self) -> tuple[TraceRecord, ...]:
+        return self.records
+
+    def get(self, trace_id: str) -> TraceRecord:
+        for record in self.records:
+            if record.trace_id == trace_id:
+                return record
+        raise TraceStoreError(f"Trace {trace_id} not found.")
 
 
 class FakeConversationStore:
@@ -224,6 +241,12 @@ class FakeMemoryStore:
 def default_model_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CDY_AGENT_MODEL", "env-model")
     monkeypatch.delenv("CDY_AGENT_API_MODE", raising=False)
+    for name in (
+        "CDY_AGENT_INPUT_COST_PER_MILLION",
+        "CDY_AGENT_OUTPUT_COST_PER_MILLION",
+        "CDY_AGENT_LOG_LEVEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_cli_help_describes_local_personal_assistant() -> None:
@@ -321,6 +344,69 @@ def test_ask_rejects_blank_prompt_before_creating_agent(
     assert calls == []
 
 
+def test_ask_saves_one_successful_trace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent("reply"))
+
+    result = runner.invoke(
+        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    records = TraceStore(tmp_path).list_traces()
+    assert len(records) == 1
+    assert records[0].command == "ask"
+    assert records[0].session_id is None
+    assert records[0].status == "succeeded"
+
+
+def test_failed_agent_still_saves_failed_trace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_create_agent",
+        lambda *args: FakeAgent(error=RuntimeError("private provider body")),
+    )
+
+    result = runner.invoke(
+        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    records = TraceStore(tmp_path).list_traces()
+    assert len(records) == 1
+    assert records[0].status == "failed"
+    assert records[0].error_type == "RuntimeError"
+    assert "private provider body" not in str(records[0].to_dict())
+
+
+def test_trace_write_failure_warns_without_hiding_reply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FailingTraceStore:
+        def __init__(self, workspace: Path) -> None:
+            pass
+
+        def append(self, record: TraceRecord) -> None:
+            raise TraceStoreError("private path")
+
+    monkeypatch.setattr(cli, "TraceStore", FailingTraceStore)
+    monkeypatch.setattr(
+        cli, "_create_agent", lambda *args: FakeAgent("visible reply")
+    )
+
+    result = runner.invoke(
+        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "visible reply\n"
+    assert "Warning: Could not save trace." in result.stderr
+    assert "private" not in result.stderr
+
+
 def test_chat_passes_accumulated_history_and_appends_final_replies(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -344,6 +430,42 @@ def test_chat_passes_accumulated_history_and_appends_final_replies(
             Message(role="user", content="Follow-up"),
         ),
     ]
+
+
+def test_chat_saves_each_turn_with_same_session_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        cli, "_create_agent", lambda *args: FakeAgent(["one", "two"])
+    )
+
+    result = runner.invoke(
+        app,
+        ["chat", "--workspace", str(tmp_path)],
+        input="first\n\nsecond\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    records = TraceStore(tmp_path).list_traces()
+    assert len(records) == 2
+    assert records[0].session_id == records[1].session_id
+    assert all(record.command == "chat" for record in records)
+
+
+@pytest.mark.parametrize("user_input", ["\n/exit\n", "/quit\n", ""])
+def test_chat_without_agent_turn_creates_no_trace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, user_input: str
+) -> None:
+    agent = FakeAgent("unused")
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(
+        app, ["chat", "--workspace", str(tmp_path)], input=user_input
+    )
+
+    assert result.exit_code == 0
+    assert agent.calls == []
+    assert TraceStore(tmp_path).list_traces() == ()
 
 
 def test_chat_persists_each_complete_turn_before_display(
@@ -442,13 +564,18 @@ def test_chat_store_failure_does_not_display_reply(
     assert result.exit_code == 1
     assert "Could not write conversation data" in result.stderr
     assert "Assistant: Unsaved reply" not in result.stdout
+    records = TraceStore(tmp_path).list_traces()
+    assert len(records) == 1
+    assert records[0].status == "succeeded"
 
 
 def test_chat_later_model_failure_keeps_only_prior_complete_turn(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     class FailSecondAgent(FakeAgent):
-        def run(self, messages: Sequence[Message]) -> str:
+        def run(
+            self, messages: Sequence[Message], recorder: object | None = None
+        ) -> str:
             self.calls.append(tuple(messages))
             if len(self.calls) == 2:
                 raise AgentLoopLimitError("second turn failed")
@@ -738,6 +865,64 @@ def test_ask_reports_invalid_api_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "CDY_AGENT_API_MODE" in result.stderr
     assert "responses" in result.stderr
     assert "chat_completions" in result.stderr
+
+
+def test_invalid_observability_configuration_fails_before_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_INPUT_COST_PER_MILLION", "1")
+    created: list[bool] = []
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: created.append(True))
+
+    result = runner.invoke(
+        app, ["ask", "hello", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "configured together" in result.stderr
+    assert created == []
+
+
+def test_invalid_log_configuration_fails_before_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_LOG_LEVEL", "info")
+    created: list[bool] = []
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: created.append(True))
+
+    result = runner.invoke(
+        app, ["ask", "hello", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "CDY_AGENT_LOG_LEVEL" in result.stderr
+    assert created == []
+
+
+def test_traces_list_and_show_render_safe_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from test_observability_models import sample_trace
+
+    record = sample_trace()
+    monkeypatch.setattr(
+        cli, "TraceStore", lambda workspace: FakeTraceStore([record])
+    )
+
+    listed = runner.invoke(
+        app, ["traces", "list", "--workspace", str(tmp_path)]
+    )
+    shown = runner.invoke(
+        app,
+        ["traces", "show", record.trace_id, "--workspace", str(tmp_path)],
+    )
+
+    assert listed.exit_code == shown.exit_code == 0
+    assert record.trace_id in listed.stdout
+    assert "14 tokens" in listed.stdout
+    assert "Model calls:" in shown.stdout
+    assert "read_file" in shown.stdout
+    assert "private prompt" not in listed.stdout + shown.stdout
 
 
 REQUEST = httpx.Request("POST", "https://api.openai.com/v1/responses")

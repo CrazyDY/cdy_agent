@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, NoReturn
 from uuid import uuid4
@@ -27,6 +28,14 @@ from .memory import (
     StoredMemory,
 )
 from .openai_client import MissingAPIKeyError, ModelGateway
+from .observability import (
+    TraceRecord,
+    TraceRecorder,
+    TraceStore,
+    TraceStoreError,
+    resolve_pricing,
+)
+from .observability.logging import configure_structured_logging, resolve_log_level
 from .skills import SkillManager, create_skill_tools
 from .tools import create_builtin_registry
 from .tools.base import ConfirmationRequest
@@ -36,8 +45,10 @@ from .tools.filesystem import resolve_workspace
 app = typer.Typer(help="Run the CDY local personal AI assistant.")
 sessions_app = typer.Typer(help="List and delete saved conversations.")
 memories_app = typer.Typer(help="Manage explicit long-term memories.")
+traces_app = typer.Typer(help="List and inspect saved call traces.")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memories_app, name="memories")
+app.add_typer(traces_app, name="traces")
 
 REQUEST_ERRORS = (
     MissingAPIKeyError,
@@ -51,6 +62,7 @@ REQUEST_ERRORS = (
     AgentLoopLimitError,
     ConversationStoreError,
     MemoryStoreError,
+    TraceStoreError,
 )
 
 
@@ -96,6 +108,72 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
     return Agent(gateway, registry, _confirm_tool)
+
+
+def _run_traced(
+    agent: Agent,
+    messages: Sequence[Message],
+    recorder: TraceRecorder,
+    store: TraceStore,
+) -> str:
+    """Run one agent turn while isolating trace persistence failures."""
+    error = None
+    try:
+        return agent.run(messages, recorder)
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        try:
+            store.append(recorder.finish(error))
+        except (TraceStoreError, RuntimeError, ValueError, OSError):
+            typer.echo("Warning: Could not save trace.", err=True)
+
+
+def _render_trace(record: TraceRecord) -> None:
+    """Render only the metadata retained in a trace record."""
+    typer.echo(f"ID: {record.trace_id}")
+    typer.echo(f"Started: {record.started_at}")
+    typer.echo(f"Status: {record.status}")
+    typer.echo(f"Command: {record.command}")
+    typer.echo(f"Model: {record.model}")
+    typer.echo(f"API mode: {record.api_mode}")
+    typer.echo(f"Session: {record.session_id or '-'}")
+    typer.echo(f"Duration: {record.duration_ms} ms")
+    typer.echo(f"Error type: {record.error_type or '-'}")
+    if record.usage is None:
+        typer.echo("Usage: unknown")
+    else:
+        typer.echo(
+            f"Usage: {record.usage.input_tokens} input, "
+            f"{record.usage.output_tokens} output, "
+            f"{record.usage.total_tokens} total"
+        )
+    if record.estimated_cost is None:
+        typer.echo("Estimated cost: unknown")
+    else:
+        typer.echo(
+            f"Estimated cost: {record.estimated_cost.input_cost} input, "
+            f"{record.estimated_cost.output_cost} output, "
+            f"{record.estimated_cost.total_cost} total"
+        )
+    typer.echo("Model calls:")
+    for span in record.model_calls:
+        tokens = (
+            "unknown tokens"
+            if span.usage is None
+            else f"{span.usage.total_tokens} tokens"
+        )
+        typer.echo(
+            f"  {span.sequence}. {span.status}, {span.duration_ms} ms, "
+            f"{tokens}, error={span.error_type or '-'}"
+        )
+    typer.echo("Tool calls:")
+    for span in record.tool_calls:
+        typer.echo(
+            f"  {span.sequence}. {span.tool_name}, {span.status}, "
+            f"{span.duration_ms} ms, error={span.error_type or '-'}"
+        )
 
 
 def _render_memory(record: StoredMemory) -> None:
@@ -326,9 +404,69 @@ def delete_session(
     typer.echo(f"Deleted conversation {session_id}.")
 
 
+@traces_app.command("list")
+def list_traces(
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved traces."),
+    ] = None,
+) -> None:
+    """List saved trace metadata, newest first."""
+    try:
+        records = TraceStore(
+            resolve_workspace(workspace or Path.cwd())
+        ).list_traces()
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    if not records:
+        typer.echo("No saved traces.")
+        return
+    for record in records:
+        tokens = (
+            "unknown tokens"
+            if record.usage is None
+            else f"{record.usage.total_tokens} tokens"
+        )
+        cost = (
+            "unknown cost"
+            if record.estimated_cost is None
+            else f"{record.estimated_cost.total_cost} cost"
+        )
+        typer.echo(
+            f"{record.trace_id}  {record.started_at}  {record.status}  "
+            f"{record.command}  {record.model}  {record.duration_ms} ms  "
+            f"{tokens}  {cost}"
+        )
+
+
+@traces_app.command("show")
+def show_trace(
+    trace_id: Annotated[
+        str,
+        typer.Argument(help="Complete UUID of the trace to show."),
+    ],
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing saved traces."),
+    ] = None,
+) -> None:
+    """Show detailed metadata for one saved trace."""
+    try:
+        record = TraceStore(resolve_workspace(workspace or Path.cwd())).get(
+            trace_id
+        )
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    _render_trace(record)
+
+
 @app.callback()
 def main() -> None:
     """Run the CDY local personal AI assistant."""
+    try:
+        configure_structured_logging(resolve_log_level())
+    except ValueError as exc:
+        _fail_for_exception(exc)
 
 
 @app.command()
@@ -352,12 +490,18 @@ def ask(
         normalized_prompt = prompt.strip()
         if not normalized_prompt:
             raise ValueError("Prompt must not be empty.")
-        agent = _create_agent(
-            resolve_model(model), resolve_api_mode(), active_workspace
-        )
+        active_model = resolve_model(model)
+        api_mode = resolve_api_mode()
+        pricing = resolve_pricing()
+        agent = _create_agent(active_model, api_mode, active_workspace)
         conversation = Conversation()
         conversation.append("user", normalized_prompt)
-        reply = agent.run(conversation.history)
+        reply = _run_traced(
+            agent,
+            conversation.history,
+            TraceRecorder("ask", active_model, api_mode, pricing=pricing),
+            TraceStore(active_workspace),
+        )
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
 
@@ -384,6 +528,7 @@ def chat(
         active_model = resolve_model(model)
         api_mode = resolve_api_mode()
         active_workspace = resolve_workspace(workspace or Path.cwd())
+        pricing = resolve_pricing()
         store = ConversationStore(active_workspace)
         agent = _create_agent(active_model, api_mode, active_workspace)
         conversation = Conversation()
@@ -411,7 +556,18 @@ def chat(
 
         user_message = conversation.append("user", normalized_prompt)
         try:
-            reply = agent.run(conversation.history)
+            reply = _run_traced(
+                agent,
+                conversation.history,
+                TraceRecorder(
+                    "chat",
+                    active_model,
+                    api_mode,
+                    session_id=session_id,
+                    pricing=pricing,
+                ),
+                TraceStore(active_workspace),
+            )
             assistant_message = Message(role="assistant", content=reply.strip())
             store.append_turn(session_id, user_message, assistant_message)
         except REQUEST_ERRORS as exc:
