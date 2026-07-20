@@ -9,6 +9,7 @@ from .models import (
 )
 from .pricing import Pricing, estimate_cost, resolve_pricing
 from .recorder import TraceRecorder
+from .store import TraceNotFoundError, TraceStore, TraceStoreError
 
 __all__ = [
     "EstimatedCost",
@@ -18,6 +19,9 @@ __all__ = [
     "ToolCallSpan",
     "TraceRecorder",
     "TraceRecord",
+    "TraceNotFoundError",
+    "TraceStore",
+    "TraceStoreError",
     "estimate_cost",
     "resolve_pricing",
 ]
