@@ -5,6 +5,7 @@ import pytest
 
 from cdy_agent import openai_client
 from cdy_agent.conversation import Message
+from cdy_agent.observability.models import TokenUsage
 from cdy_agent.openai_client import generate_reply
 from cdy_agent.tools.base import ToolCall
 
@@ -41,7 +42,7 @@ class FakeResponses:
 
     def create(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(output_text=self.output_text)
+        return SimpleNamespace(id="response-1", output_text=self.output_text, output=[])
 
 
 class FakeCompletions:
@@ -51,7 +52,7 @@ class FakeCompletions:
 
     def create(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
-        message = SimpleNamespace(content=self.output_text)
+        message = SimpleNamespace(content=self.output_text, tool_calls=[])
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
@@ -65,6 +66,39 @@ class FakeClient:
         self.chat = SimpleNamespace(
             completions=FakeCompletions(chat_output),
         )
+
+
+def test_gateway_normalizes_responses_usage() -> None:
+    client = FakeClient()
+    client.responses.create = FakeResponsesSequence(SimpleNamespace(
+        id="response-1", output_text="Done", output=[],
+        usage=SimpleNamespace(input_tokens=12, output_tokens=3),
+    ))
+    outcome = openai_client.ModelGateway(model="m", api_mode="responses", client=client).create(
+        (Message("user", "secret prompt"),), ()
+    )
+    assert outcome == openai_client.FinalResponse("Done", TokenUsage(12, 3))
+
+
+def test_gateway_normalizes_chat_usage() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeChatSequence(SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="Done", tool_calls=[]))],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=2),
+    ))
+    outcome = openai_client.ModelGateway(model="m", api_mode="chat_completions", client=client).create(
+        (Message("user", "secret prompt"),), ()
+    )
+    assert outcome == openai_client.FinalResponse("Done", TokenUsage(9, 2))
+
+
+@pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
+def test_gateway_allows_missing_usage(api_mode: str) -> None:
+    client = FakeClient(responses_output="Done", chat_output="Done")
+    outcome = openai_client.ModelGateway(model="m", api_mode=api_mode, client=client).create(
+        (Message("user", "Hello"),), ()
+    )
+    assert outcome.usage is None
 
 
 def test_generate_reply_sends_normalized_prompt_and_model(

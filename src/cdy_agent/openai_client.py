@@ -10,6 +10,7 @@ from typing import Any
 from openai import OpenAI
 
 from .conversation import Message
+from .observability.models import TokenUsage
 from .tools.base import ToolCall
 
 
@@ -20,6 +21,7 @@ class MissingAPIKeyError(RuntimeError):
 @dataclass(frozen=True)
 class FinalResponse:
     text: str
+    usage: TokenUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class ChatContinuation:
 class ToolCallResponse:
     calls: tuple[ToolCall, ...]
     continuation: ResponsesContinuation | ChatContinuation
+    usage: TokenUsage | None = None
 
 
 ModelResponse = FinalResponse | ToolCallResponse
@@ -99,6 +102,7 @@ class ModelGateway:
             request["tools"] = list(tools)
 
         response = self.client.responses.create(**request)
+        usage = _response_usage(response, "input_tokens", "output_tokens")
         output_items = _sdk_sequence(getattr(response, "output", ()))
         calls = tuple(
             _tool_call(
@@ -113,8 +117,8 @@ class ModelGateway:
             response_id = getattr(response, "id", None)
             if not isinstance(response_id, str) or not response_id.strip():
                 raise RuntimeError("OpenAI returned an unsupported response.")
-            return ToolCallResponse(calls, ResponsesContinuation(response_id))
-        return _final_response(getattr(response, "output_text", None))
+            return ToolCallResponse(calls, ResponsesContinuation(response_id), usage)
+        return _final_response(getattr(response, "output_text", None), usage)
 
     def _create_chat_completion(
         self,
@@ -149,11 +153,12 @@ class ModelGateway:
             } for tool in tools]
 
         response = self.client.chat.completions.create(**request)
+        usage = _response_usage(response, "prompt_tokens", "completion_tokens")
         choices = _sdk_sequence(getattr(response, "choices", ()))
         try:
             message = choices[0].message
         except (AttributeError, IndexError, KeyError, TypeError):
-            return _final_response(None)
+            return _final_response(None, usage)
         call_items = _sdk_sequence(
             getattr(message, "tool_calls", None), allow_none=True
         )
@@ -163,8 +168,10 @@ class ModelGateway:
             if content is not None and not isinstance(content, str):
                 raise RuntimeError("OpenAI returned an unsupported response.")
             history = tuple(request_messages[len(_message_dicts(messages)):])
-            return ToolCallResponse(calls, ChatContinuation(calls, content, history))
-        return _final_response(getattr(message, "content", None))
+            return ToolCallResponse(
+                calls, ChatContinuation(calls, content, history), usage
+            )
+        return _final_response(getattr(message, "content", None), usage)
 
 
 def _message_dicts(messages: Sequence[Message]) -> list[dict[str, str]]:
@@ -206,10 +213,26 @@ def _chat_response_tool_call(item: object) -> ToolCall:
     )
 
 
-def _final_response(text: object) -> FinalResponse:
+def _response_usage(
+    response: object, input_name: str, output_name: str
+) -> TokenUsage | None:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    input_tokens = getattr(usage, input_name, None)
+    output_tokens = getattr(usage, output_name, None)
+    try:
+        return TokenUsage(input_tokens, output_tokens)
+    except (TypeError, ValueError):
+        raise RuntimeError("OpenAI returned an unsupported response.") from None
+
+
+def _final_response(
+    text: object, usage: TokenUsage | None = None
+) -> FinalResponse:
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError("OpenAI returned an unsupported response.")
-    return FinalResponse(text)
+    return FinalResponse(text, usage)
 
 
 def generate_reply(
