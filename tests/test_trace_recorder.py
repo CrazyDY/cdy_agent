@@ -1,3 +1,4 @@
+from copy import copy
 from decimal import Decimal
 
 import pytest
@@ -80,3 +81,100 @@ def test_recorder_orders_overlapping_spans_by_start_sequence() -> None:
 
     assert [span.sequence for span in record.model_calls] == [1, 2]
     assert [span.sequence for span in record.tool_calls] == [1, 2]
+
+
+@pytest.mark.parametrize("error_type", ["secret response body", ""])
+def test_recorder_rejects_tool_error_messages(error_type: str) -> None:
+    recorder = TraceRecorder("ask", "m", "responses")
+    token = recorder.start_tool_call("read_file")
+
+    with pytest.raises(ValueError, match="error type"):
+        recorder.finish_tool_call(
+            token,
+            ok=False,
+            error_type=error_type,
+        )
+
+
+def test_recorder_accepts_tool_error_identifiers() -> None:
+    recorder = TraceRecorder("ask", "m", "responses")
+    first = recorder.start_tool_call("read_file")
+    second = recorder.start_tool_call("read_file")
+    recorder.finish_tool_call(first, ok=False, error_type="invalid_arguments")
+    recorder.finish_tool_call(second, ok=False, error_type="RuntimeError")
+
+    record = recorder.finish()
+
+    assert [span.error_type for span in record.tool_calls] == [
+        "invalid_arguments",
+        "RuntimeError",
+    ]
+
+
+def test_recorder_rejects_span_work_after_finalization() -> None:
+    recorder = TraceRecorder("ask", "m", "responses")
+    model_token = recorder.start_model_call()
+    tool_token = recorder.start_tool_call("read_file")
+    recorder.finish()
+
+    with pytest.raises(RuntimeError, match="already finished"):
+        recorder.start_model_call()
+    with pytest.raises(RuntimeError, match="already finished"):
+        recorder.start_tool_call("read_file")
+    with pytest.raises(RuntimeError, match="already finished"):
+        recorder.finish_model_call(model_token, None)
+    with pytest.raises(RuntimeError, match="already finished"):
+        recorder.finish_tool_call(tool_token, ok=True)
+
+
+def test_recorder_rejects_duplicate_span_completion() -> None:
+    recorder = TraceRecorder("ask", "m", "responses")
+    model_token = recorder.start_model_call()
+    recorder.finish_model_call(model_token, None)
+    tool_token = recorder.start_tool_call("read_file")
+    recorder.finish_tool_call(tool_token, ok=True)
+
+    with pytest.raises(ValueError, match="span token"):
+        recorder.finish_model_call(model_token, None)
+    with pytest.raises(ValueError, match="span token"):
+        recorder.finish_tool_call(tool_token, ok=True)
+
+
+def test_recorder_rejects_model_and_tool_token_swapping() -> None:
+    recorder = TraceRecorder("ask", "m", "responses")
+    model_token = recorder.start_model_call()
+    tool_token = recorder.start_tool_call("read_file")
+
+    with pytest.raises(ValueError, match="span token"):
+        recorder.finish_model_call(tool_token, None)
+    with pytest.raises(ValueError, match="span token"):
+        recorder.finish_tool_call(model_token, ok=True)
+
+    recorder.finish_model_call(model_token, None)
+    recorder.finish_tool_call(tool_token, ok=True)
+
+
+def test_recorder_rejects_tokens_from_another_recorder() -> None:
+    first = TraceRecorder("ask", "m", "responses")
+    second = TraceRecorder("ask", "m", "responses")
+    model_token = first.start_model_call()
+    tool_token = first.start_tool_call("read_file")
+
+    with pytest.raises(ValueError, match="span token"):
+        second.finish_model_call(model_token, None)
+    with pytest.raises(ValueError, match="span token"):
+        second.finish_tool_call(tool_token, ok=True)
+
+
+def test_recorder_rejects_copied_tokens() -> None:
+    recorder = TraceRecorder("ask", "m", "responses")
+    model_token = recorder.start_model_call()
+    tool_token = recorder.start_tool_call("read_file")
+
+    with pytest.raises(ValueError, match="span token"):
+        recorder.finish_model_call(copy(model_token), None)
+    with pytest.raises(ValueError, match="span token"):
+        recorder.finish_tool_call(copy(tool_token), ok=True)
+
+    recorder.finish_model_call(model_token, None)
+    recorder.finish_tool_call(tool_token, ok=True)

@@ -9,6 +9,9 @@ from cdy_agent.observability.logging import (
     resolve_log_level,
 )
 
+TRACE_ID = "f8605a17-cf86-46ce-87ad-7db57533e5dc"
+SPAN_ID = "87c9c45f-20ee-4bbe-93df-97cf337fc065"
+
 
 def test_log_level_defaults_and_rejects_invalid(
     monkeypatch: pytest.MonkeyPatch,
@@ -20,18 +23,29 @@ def test_log_level_defaults_and_rejects_invalid(
         resolve_log_level()
 
 
+@pytest.mark.parametrize("configured", ["debug", " info", "INFO "])
+def test_log_level_requires_exact_uppercase(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_LOG_LEVEL", configured)
+
+    with pytest.raises(ValueError, match="CDY_AGENT_LOG_LEVEL"):
+        resolve_log_level()
+
+
 def test_structured_log_contains_only_explicit_safe_fields(capsys) -> None:
     configure_structured_logging(logging.DEBUG)
     log_event(
         logging.INFO,
         "trace_finished",
-        trace_id="safe-id",
+        trace_id=TRACE_ID,
         status="failed",
         duration_ms=4,
     )
     payload = json.loads(capsys.readouterr().err)
     assert payload["event"] == "trace_finished"
-    assert payload["trace_id"] == "safe-id"
+    assert payload["trace_id"] == TRACE_ID
     assert set(payload) == {
         "timestamp",
         "level",
@@ -42,10 +56,89 @@ def test_structured_log_contains_only_explicit_safe_fields(capsys) -> None:
     }
 
 
-def test_structured_log_does_not_overwrite_formatter_metadata(capsys) -> None:
+@pytest.mark.parametrize(
+    "unsafe_field",
+    ["prompt", "reply", "arguments", "result", "api_key", "environment", "message"],
+)
+def test_structured_log_rejects_unsafe_fields(unsafe_field: str) -> None:
     configure_structured_logging(logging.DEBUG)
-    log_event(logging.INFO, "trace_finished", timestamp="caller-value")
+    fields = {
+        "trace_id": TRACE_ID,
+        "status": "failed",
+        "duration_ms": 4,
+        unsafe_field: "secret-value",
+    }
+
+    with pytest.raises(ValueError, match="fields"):
+        log_event(logging.INFO, "trace_finished", **fields)
+
+
+@pytest.mark.parametrize(
+    ("event", "fields"),
+    [
+        ("trace_started", {"trace_id": TRACE_ID, "status": "started"}),
+        (
+            "trace_finished",
+            {"trace_id": TRACE_ID, "status": "succeeded", "duration_ms": 4},
+        ),
+        (
+            "model_call_finished",
+            {
+                "trace_id": TRACE_ID,
+                "span_id": SPAN_ID,
+                "status": "succeeded",
+                "duration_ms": 2,
+            },
+        ),
+        (
+            "tool_call_finished",
+            {
+                "trace_id": TRACE_ID,
+                "span_id": SPAN_ID,
+                "status": "failed",
+                "duration_ms": 3,
+            },
+        ),
+    ],
+)
+def test_structured_log_accepts_only_complete_event_schemas(
+    capsys,
+    event: str,
+    fields: dict[str, object],
+) -> None:
+    configure_structured_logging(logging.DEBUG)
+
+    log_event(logging.INFO, event, **fields)
 
     payload = json.loads(capsys.readouterr().err)
+    assert set(payload) == {"timestamp", "level", "event", *fields}
 
-    assert payload["timestamp"] != "caller-value"
+
+def test_structured_log_rejects_unknown_events_and_missing_fields() -> None:
+    with pytest.raises(ValueError, match="event"):
+        log_event(logging.INFO, "prompt_received", prompt="secret")
+    with pytest.raises(ValueError, match="fields"):
+        log_event(logging.INFO, "trace_finished", trace_id=TRACE_ID)
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("trace_id", "sk-secret-api-key"),
+        ("status", "secret exception message"),
+        ("duration_ms", {"arguments": {"path": "/secret"}}),
+    ],
+)
+def test_structured_log_rejects_payloads_in_safe_field_slots(
+    field: str,
+    unsafe_value: object,
+) -> None:
+    fields: dict[str, object] = {
+        "trace_id": TRACE_ID,
+        "status": "failed",
+        "duration_ms": 4,
+    }
+    fields[field] = unsafe_value
+
+    with pytest.raises(ValueError, match="field"):
+        log_event(logging.INFO, "trace_finished", **fields)
