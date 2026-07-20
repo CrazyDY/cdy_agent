@@ -29,6 +29,7 @@ from .memory import (
 )
 from .openai_client import MissingAPIKeyError, ModelGateway
 from .observability import (
+    Pricing,
     TraceRecord,
     TraceRecorder,
     TraceStore,
@@ -128,6 +129,33 @@ def _run_traced(
             store.append(recorder.finish(error))
         except (TraceStoreError, RuntimeError, ValueError, OSError):
             typer.echo("Warning: Could not save trace.", err=True)
+
+
+def _run_with_best_effort_trace(
+    agent: Agent,
+    messages: Sequence[Message],
+    *,
+    command: str,
+    model: str,
+    api_mode: str,
+    workspace: Path,
+    pricing: Pricing | None,
+    session_id: str | None = None,
+) -> str:
+    """Run one agent turn even when trace setup cannot be completed."""
+    try:
+        recorder = TraceRecorder(
+            command,
+            model,
+            api_mode,
+            session_id=session_id,
+            pricing=pricing,
+        )
+        store = TraceStore(workspace)
+    except (TraceStoreError, RuntimeError, ValueError, OSError):
+        typer.echo("Warning: Could not save trace.", err=True)
+        return agent.run(messages)
+    return _run_traced(agent, messages, recorder, store)
 
 
 def _render_trace(record: TraceRecord) -> None:
@@ -496,11 +524,14 @@ def ask(
         agent = _create_agent(active_model, api_mode, active_workspace)
         conversation = Conversation()
         conversation.append("user", normalized_prompt)
-        reply = _run_traced(
+        reply = _run_with_best_effort_trace(
             agent,
             conversation.history,
-            TraceRecorder("ask", active_model, api_mode, pricing=pricing),
-            TraceStore(active_workspace),
+            command="ask",
+            model=active_model,
+            api_mode=api_mode,
+            workspace=active_workspace,
+            pricing=pricing,
         )
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
@@ -556,17 +587,15 @@ def chat(
 
         user_message = conversation.append("user", normalized_prompt)
         try:
-            reply = _run_traced(
+            reply = _run_with_best_effort_trace(
                 agent,
                 conversation.history,
-                TraceRecorder(
-                    "chat",
-                    active_model,
-                    api_mode,
-                    session_id=session_id,
-                    pricing=pricing,
-                ),
-                TraceStore(active_workspace),
+                command="chat",
+                model=active_model,
+                api_mode=api_mode,
+                workspace=active_workspace,
+                pricing=pricing,
+                session_id=session_id,
             )
             assistant_message = Message(role="assistant", content=reply.strip())
             store.append_turn(session_id, user_message, assistant_message)

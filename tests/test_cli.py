@@ -57,11 +57,13 @@ class FakeAgent:
         self.replies = iter([replies] if isinstance(replies, str) else replies)
         self.error = error
         self.calls: list[tuple[Message, ...]] = []
+        self.recorders: list[object | None] = []
 
     def run(
         self, messages: Sequence[Message], recorder: object | None = None
     ) -> str:
         self.calls.append(tuple(messages))
+        self.recorders.append(recorder)
         if self.error is not None:
             raise self.error
         return next(self.replies)
@@ -407,6 +409,70 @@ def test_trace_write_failure_warns_without_hiding_reply(
     assert "private" not in result.stderr
 
 
+def test_trace_recorder_construction_failure_warns_and_runs_ask(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FailingTraceRecorder:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise ValueError("private recorder setup")
+
+    agent = FakeAgent("visible reply")
+    monkeypatch.setattr(cli, "TraceRecorder", FailingTraceRecorder)
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(
+        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "visible reply\n"
+    assert result.stderr == "Warning: Could not save trace.\n"
+    assert "private recorder setup" not in result.stderr
+    assert agent.calls == [(Message("user", "private prompt"),)]
+    assert agent.recorders == [None]
+    assert TraceStore(tmp_path).list_traces() == ()
+
+
+@pytest.mark.parametrize("failure_point", ["finish", "append"])
+def test_agent_error_survives_trace_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure_point: str
+) -> None:
+    private_error = f"private {failure_point} failure"
+
+    if failure_point == "finish":
+        class FailingTraceRecorder:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            def finish(self, error: Exception | None) -> TraceRecord:
+                assert isinstance(error, AgentLoopLimitError)
+                raise ValueError(private_error)
+
+        monkeypatch.setattr(cli, "TraceRecorder", FailingTraceRecorder)
+    else:
+        class FailingTraceStore:
+            def __init__(self, workspace: Path) -> None:
+                pass
+
+            def append(self, record: TraceRecord) -> None:
+                raise TraceStoreError(private_error)
+
+        monkeypatch.setattr(cli, "TraceStore", FailingTraceStore)
+
+    agent = FakeAgent(error=AgentLoopLimitError("primary agent failure"))
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(
+        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "primary agent failure" in result.stderr
+    assert "Warning: Could not save trace." in result.stderr
+    assert private_error not in result.stderr
+    assert len(agent.calls) == 1
+
+
 def test_chat_passes_accumulated_history_and_appends_final_replies(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -450,6 +516,32 @@ def test_chat_saves_each_turn_with_same_session_id(
     assert len(records) == 2
     assert records[0].session_id == records[1].session_id
     assert all(record.command == "chat" for record in records)
+
+
+def test_trace_store_construction_failure_warns_and_runs_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FailingTraceStore:
+        def __init__(self, workspace: Path) -> None:
+            raise TraceStoreError("private store setup")
+
+    agent = FakeAgent("visible reply")
+    monkeypatch.setattr(cli, "TraceStore", FailingTraceStore)
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(
+        app,
+        ["chat", "--workspace", str(tmp_path)],
+        input="private question\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Assistant: visible reply" in result.stdout
+    assert result.stderr == "Warning: Could not save trace.\n"
+    assert "private store setup" not in result.stderr
+    assert agent.calls == [(Message("user", "private question"),)]
+    assert agent.recorders == [None]
+    assert TraceStore(tmp_path).list_traces() == ()
 
 
 @pytest.mark.parametrize("user_input", ["\n/exit\n", "/quit\n", ""])
