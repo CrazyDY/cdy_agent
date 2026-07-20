@@ -85,6 +85,23 @@ uv run cdy-agent memories delete <memory-id> --workspace .
 
 `ask` 和 `chat` 只会在用户明确要求检索长期记忆后调用记忆检索工具。系统不会从对话中自动提取记忆，也不会把已保存记忆自动注入提示或上下文。
 
+### 调用轨迹与费用统计
+
+可以为本次 CLI 选择的提供商和模型配置每百万 Token 的输入、输出单价，并查询按 workspace 保存的调用轨迹：
+
+```powershell
+$env:CDY_AGENT_INPUT_COST_PER_MILLION = "1.25"
+$env:CDY_AGENT_OUTPUT_COST_PER_MILLION = "2.50"
+$env:CDY_AGENT_LOG_LEVEL = "INFO"
+
+uv run cdy-agent traces list --workspace .
+uv run cdy-agent traces show <trace-id> --workspace .
+```
+
+两个价格变量都是可选项，但必须成对设置；未配置价格时仍会记录提供商返回的 Token 用量，只是不估算费用。`CDY_AGENT_LOG_LEVEL` 只接受 `DEBUG`、`INFO`、`WARNING`、`ERROR`，默认值为 `WARNING`；单行 JSON 日志写入 stderr。
+
+轨迹文件位于 `<workspace>/.cdy-agent/traces.jsonl`。轨迹和日志均排除用户 prompt、模型回复正文以及工具参数、确认内容和返回载荷，不会保存这些敏感内容。
+
 ### 本地工具与安全边界
 
 `ask` 和 `chat` 都向模型提供以下工具：
