@@ -303,6 +303,31 @@ def test_ask_model_and_api_mode_are_resolved(
     assert seen == [("cli-model", "chat_completions", tmp_path.resolve())]
 
 
+def test_ask_uses_workspace_config_when_environment_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("CDY_AGENT_API_MODE", raising=False)
+    (tmp_path / ".cdy-agent").mkdir()
+    (tmp_path / ".cdy-agent" / "config.yaml").write_text(
+        "model: workspace-model\napi_mode: chat_completions\n",
+        encoding="utf-8",
+    )
+    seen: list[tuple[str, str, Path]] = []
+    monkeypatch.setattr(
+        cli,
+        "_create_agent",
+        lambda model, api_mode, workspace: seen.append(
+            (model, api_mode, workspace)
+        ) or FakeAgent(),
+    )
+
+    result = runner.invoke(app, ["ask", "Hello", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert seen == [("workspace-model", "chat_completions", tmp_path.resolve())]
+
+
 def test_ask_defaults_workspace_to_invocation_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1061,6 +1086,39 @@ def test_traces_list_and_show_render_safe_metadata(
     assert "Model calls:" in shown.stdout
     assert "read_file" in shown.stdout
     assert "private prompt" not in listed.stdout + shown.stdout
+
+
+def test_config_show_renders_effective_non_secret_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_MODEL", raising=False)
+    monkeypatch.setenv("CDY_AGENT_API_MODE", "responses")
+    (tmp_path / ".cdy-agent").mkdir()
+    (tmp_path / ".cdy-agent" / "config.yaml").write_text(
+        "\n".join(
+            [
+                "model: workspace-model",
+                "api_mode: chat_completions",
+                "log_level: INFO",
+                "observability:",
+                "  input_cost_per_million: '1.25'",
+                "  output_cost_per_million: '2.50'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["config", "show", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "Workspace config:" in result.stdout
+    assert "model: workspace-model" in result.stdout
+    assert "api_mode: responses" in result.stdout
+    assert "log_level: INFO" in result.stdout
+    assert "input_cost_per_million: 1.25" in result.stdout
+    assert "output_cost_per_million: 2.50" in result.stdout
+    assert "OPENAI_API_KEY" not in result.stdout
 
 
 REQUEST = httpx.Request("POST", "https://api.openai.com/v1/responses")

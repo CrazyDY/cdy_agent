@@ -1,9 +1,13 @@
+from pathlib import Path
+
 import pytest
 
 from cdy_agent.config import (
     DEFAULT_API_MODE,
     DEFAULT_MODEL,
     SUPPORTED_API_MODES,
+    WorkspaceConfig,
+    load_workspace_config,
     resolve_api_mode,
     resolve_model,
 )
@@ -90,3 +94,71 @@ def test_invalid_api_mode_lists_value_and_supported_modes(
     message = str(error.value)
     assert "legacy" in message
     assert all(mode in message for mode in SUPPORTED_API_MODES)
+
+
+def test_missing_workspace_config_is_empty_and_does_not_create_files(
+    tmp_path: Path,
+) -> None:
+    config = load_workspace_config(tmp_path)
+
+    assert config == WorkspaceConfig()
+    assert not (tmp_path / ".cdy-agent").exists()
+
+
+def test_workspace_config_supplies_model_and_api_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("CDY_AGENT_API_MODE", raising=False)
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        "model: workspace-model\napi_mode: chat_completions\n",
+        encoding="utf-8",
+    )
+    config = load_workspace_config(tmp_path)
+
+    assert resolve_model(workspace_config=config) == "workspace-model"
+    assert resolve_api_mode(workspace_config=config) == "chat_completions"
+
+
+def test_environment_wins_over_workspace_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = WorkspaceConfig(model="workspace-model", api_mode="responses")
+    monkeypatch.setenv("CDY_AGENT_MODEL", "env-model")
+    monkeypatch.setenv("CDY_AGENT_API_MODE", "chat_completions")
+
+    assert resolve_model(workspace_config=config) == "env-model"
+    assert resolve_api_mode(workspace_config=config) == "chat_completions"
+
+
+def test_cli_model_override_wins_over_environment_and_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_MODEL", "env-model")
+    config = WorkspaceConfig(model="workspace-model")
+
+    assert resolve_model("cli-model", workspace_config=config) == "cli-model"
+
+
+def test_workspace_config_rejects_unknown_keys(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        "model: test-model\nOPENAI_API_KEY: secret\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported config key"):
+        load_workspace_config(tmp_path)
+
+
+def test_workspace_config_rejects_invalid_shape(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mapping"):
+        load_workspace_config(tmp_path)

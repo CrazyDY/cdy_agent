@@ -3,6 +3,7 @@ import logging
 
 import pytest
 
+from cdy_agent.config import WorkspaceConfig
 from cdy_agent.observability.logging import (
     configure_structured_logging,
     log_event,
@@ -21,6 +22,22 @@ def test_log_level_defaults_and_rejects_invalid(
     monkeypatch.setenv("CDY_AGENT_LOG_LEVEL", "verbose")
     with pytest.raises(ValueError, match="CDY_AGENT_LOG_LEVEL"):
         resolve_log_level()
+
+
+def test_workspace_config_supplies_log_level_when_environment_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_LOG_LEVEL", raising=False)
+
+    assert resolve_log_level(WorkspaceConfig(log_level="INFO")) == logging.INFO
+
+
+def test_environment_log_level_wins_over_workspace_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_LOG_LEVEL", "ERROR")
+
+    assert resolve_log_level(WorkspaceConfig(log_level="INFO")) == logging.ERROR
 
 
 @pytest.mark.parametrize("configured", ["debug", " info", "INFO "])

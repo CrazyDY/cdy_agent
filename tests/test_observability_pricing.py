@@ -4,6 +4,7 @@ import pytest
 
 from cdy_agent.observability.models import TokenUsage
 from cdy_agent.observability.pricing import Pricing, estimate_cost, resolve_pricing
+from cdy_agent.config import WorkspaceConfig
 
 
 def test_resolve_pricing_and_estimate_exact_cost(
@@ -24,6 +25,32 @@ def test_absent_pricing_keeps_cost_unknown(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.delenv("CDY_AGENT_OUTPUT_COST_PER_MILLION", raising=False)
     assert resolve_pricing() is None
     assert estimate_cost(TokenUsage(1, 1), None) is None
+
+
+def test_workspace_config_supplies_pricing_when_environment_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_INPUT_COST_PER_MILLION", raising=False)
+    monkeypatch.delenv("CDY_AGENT_OUTPUT_COST_PER_MILLION", raising=False)
+    config = WorkspaceConfig(
+        input_cost_per_million="3.25",
+        output_cost_per_million="4.5",
+    )
+
+    assert resolve_pricing(config) == Pricing(Decimal("3.25"), Decimal("4.5"))
+
+
+def test_environment_pricing_wins_over_workspace_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_INPUT_COST_PER_MILLION", "1")
+    monkeypatch.setenv("CDY_AGENT_OUTPUT_COST_PER_MILLION", "2")
+    config = WorkspaceConfig(
+        input_cost_per_million="3.25",
+        output_cost_per_million="4.5",
+    )
+
+    assert resolve_pricing(config) == Pricing(Decimal("1"), Decimal("2"))
 
 
 @pytest.mark.parametrize(

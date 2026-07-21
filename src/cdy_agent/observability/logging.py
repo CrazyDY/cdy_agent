@@ -6,6 +6,8 @@ import os
 from datetime import datetime, timezone
 from uuid import UUID
 
+from cdy_agent.config import WorkspaceConfig
+
 LOGGER = logging.getLogger("cdy_agent.observability")
 LEVELS = {
     "DEBUG": logging.DEBUG,
@@ -44,8 +46,12 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def resolve_log_level() -> int:
-    configured = os.getenv("CDY_AGENT_LOG_LEVEL", "WARNING")
+def resolve_log_level(workspace_config: WorkspaceConfig | None = None) -> int:
+    configured = os.getenv("CDY_AGENT_LOG_LEVEL")
+    if configured is None and workspace_config and workspace_config.log_level is not None:
+        configured = workspace_config.log_level
+    if configured is None:
+        configured = "WARNING"
     if configured not in LEVELS:
         raise ValueError(
             "CDY_AGENT_LOG_LEVEL must be one of: DEBUG, INFO, WARNING, ERROR."

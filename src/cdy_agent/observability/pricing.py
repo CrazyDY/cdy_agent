@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
+from cdy_agent.config import WorkspaceConfig
+
 from .models import EstimatedCost, TokenUsage
 
 MILLION = Decimal(1_000_000)
@@ -15,9 +17,14 @@ class Pricing:
     output_per_million: Decimal
 
 
-def resolve_pricing() -> Pricing | None:
+def resolve_pricing(workspace_config: WorkspaceConfig | None = None) -> Pricing | None:
     raw_input = os.getenv("CDY_AGENT_INPUT_COST_PER_MILLION")
     raw_output = os.getenv("CDY_AGENT_OUTPUT_COST_PER_MILLION")
+    if workspace_config:
+        if raw_input is None:
+            raw_input = workspace_config.input_cost_per_million
+        if raw_output is None:
+            raw_output = workspace_config.output_cost_per_million
     if raw_input is None and raw_output is None:
         return None
     if raw_input is None or raw_output is None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -17,7 +18,13 @@ from openai import (
 )
 
 from .agent import Agent, AgentLoopLimitError
-from .config import resolve_api_mode, resolve_model
+from .config import (
+    CONFIG_RELATIVE_PATH,
+    WorkspaceConfig,
+    load_workspace_config,
+    resolve_api_mode,
+    resolve_model,
+)
 from .conversation import Conversation, Message
 from .memory import (
     ConversationStore,
@@ -47,9 +54,11 @@ app = typer.Typer(help="Run the CDY local personal AI assistant.")
 sessions_app = typer.Typer(help="List and delete saved conversations.")
 memories_app = typer.Typer(help="Manage explicit long-term memories.")
 traces_app = typer.Typer(help="List and inspect saved call traces.")
+config_app = typer.Typer(help="Inspect effective non-secret configuration.")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memories_app, name="memories")
 app.add_typer(traces_app, name="traces")
+app.add_typer(config_app, name="config")
 
 REQUEST_ERRORS = (
     MissingAPIKeyError,
@@ -109,6 +118,23 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
     return Agent(gateway, registry, _confirm_tool)
+
+
+def _load_configured_workspace(workspace: Path | None) -> tuple[Path, WorkspaceConfig]:
+    active_workspace = resolve_workspace(workspace or Path.cwd())
+    return active_workspace, load_workspace_config(active_workspace)
+
+
+def _configure_logging_for_workspace(workspace_config: WorkspaceConfig) -> None:
+    configure_structured_logging(resolve_log_level(workspace_config))
+
+
+def _effective_log_level_name(workspace_config: WorkspaceConfig) -> str:
+    if (configured := os.getenv("CDY_AGENT_LOG_LEVEL")) is not None:
+        return configured
+    if workspace_config.log_level is not None:
+        return workspace_config.log_level
+    return "WARNING"
 
 
 def _run_traced(
@@ -491,6 +517,37 @@ def show_trace(
     _render_trace(record)
 
 
+@config_app.command("show")
+def show_config(
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing optional config.yaml."),
+    ] = None,
+) -> None:
+    """Show effective non-secret configuration for one workspace."""
+    try:
+        active_workspace, workspace_config = _load_configured_workspace(workspace)
+        model = resolve_model(workspace_config=workspace_config)
+        api_mode = resolve_api_mode(workspace_config)
+        pricing = resolve_pricing(workspace_config)
+        resolve_log_level(workspace_config)
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+
+    config_path = active_workspace / CONFIG_RELATIVE_PATH
+    typer.echo(f"Workspace: {active_workspace}")
+    typer.echo(f"Workspace config: {config_path if config_path.exists() else '-'}")
+    typer.echo(f"model: {model}")
+    typer.echo(f"api_mode: {api_mode}")
+    typer.echo(f"log_level: {_effective_log_level_name(workspace_config)}")
+    if pricing is None:
+        typer.echo("input_cost_per_million: -")
+        typer.echo("output_cost_per_million: -")
+    else:
+        typer.echo(f"input_cost_per_million: {pricing.input_per_million}")
+        typer.echo(f"output_cost_per_million: {pricing.output_per_million}")
+
+
 @app.callback()
 def main() -> None:
     """Run the CDY local personal AI assistant."""
@@ -517,13 +574,14 @@ def ask(
 ) -> None:
     """Send one prompt and print one model reply."""
     try:
-        active_workspace = resolve_workspace(workspace or Path.cwd())
+        active_workspace, workspace_config = _load_configured_workspace(workspace)
+        _configure_logging_for_workspace(workspace_config)
         normalized_prompt = prompt.strip()
         if not normalized_prompt:
             raise ValueError("Prompt must not be empty.")
-        active_model = resolve_model(model)
-        api_mode = resolve_api_mode()
-        pricing = resolve_pricing()
+        active_model = resolve_model(model, workspace_config)
+        api_mode = resolve_api_mode(workspace_config)
+        pricing = resolve_pricing(workspace_config)
         agent = _create_agent(active_model, api_mode, active_workspace)
         conversation = Conversation()
         conversation.append("user", normalized_prompt)
@@ -559,10 +617,11 @@ def chat(
 ) -> None:
     """Start a new conversation or explicitly resume a saved one."""
     try:
-        active_model = resolve_model(model)
-        api_mode = resolve_api_mode()
-        active_workspace = resolve_workspace(workspace or Path.cwd())
-        pricing = resolve_pricing()
+        active_workspace, workspace_config = _load_configured_workspace(workspace)
+        _configure_logging_for_workspace(workspace_config)
+        active_model = resolve_model(model, workspace_config)
+        api_mode = resolve_api_mode(workspace_config)
+        pricing = resolve_pricing(workspace_config)
         store = ConversationStore(active_workspace)
         agent = _create_agent(active_model, api_mode, active_workspace)
         conversation = Conversation()

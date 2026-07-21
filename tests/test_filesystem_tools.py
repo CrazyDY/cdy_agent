@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -223,7 +224,10 @@ def test_registry_rejects_bad_writes_before_confirmation(tmp_path: Path) -> None
     for payload, code in [
         ('{"path":1,"content":"x"}', "invalid_arguments"),
         ('{"path":"existing.txt","content":"x"}', "overwrite_not_allowed"),
-        (f'{{"path":"{outside}","content":"x"}}', "path_outside_workspace"),
+        (
+            json.dumps({"path": str(outside), "content": "x"}),
+            "path_outside_workspace",
+        ),
     ]:
         result = registry.execute(
             ToolCall("1", "write_file", payload),
