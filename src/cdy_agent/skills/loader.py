@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from cdy_agent.tools.filesystem import resolve_workspace
+import yaml
+
 
 from .models import DiscoveredSkill, SkillDiagnostic, SkillDiscovery, SkillMetadata
-
+from ..tools.filesystem import resolve_workspace
 
 MAX_SKILL_BYTES = 256 * 1024
 MAX_TOOLS_BYTES = 1024 * 1024
@@ -15,6 +16,46 @@ NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 
 class InvalidSkillError(ValueError):
     pass
+
+
+class _SkillMetadataLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_mapping_without_duplicates(
+    loader: yaml.SafeLoader, node: yaml.Node, deep: bool = False
+) -> dict[object, object]:
+    if not isinstance(node, yaml.MappingNode):
+        raise yaml.constructor.ConstructorError(
+            None, None, "expected a mapping node", node.start_mark
+        )
+    mapping: dict[object, object] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as error:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found unhashable key",
+                key_node.start_mark,
+            ) from error
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_SkillMetadataLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_without_duplicates,
+)
 
 
 def discover_skills(workspace: Path) -> SkillDiscovery:
@@ -102,22 +143,30 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
         closing = lines.index("---", 1)
     except ValueError as error:
         raise InvalidSkillError("SKILL.md metadata is not closed.") from error
-    values: dict[str, str] = {}
-    for line in lines[1:closing]:
-        if ":" not in line:
-            raise InvalidSkillError("Metadata must use key: value lines.")
-        key, value = (part.strip() for part in line.split(":", 1))
-        if key not in {"name", "description"} or key in values or not value:
-            raise InvalidSkillError("Metadata fields are invalid.")
-        values[key] = value
-    if set(values) != {"name", "description"}:
+    try:
+        values = yaml.load(
+            "\n".join(lines[1:closing]),
+            Loader=_SkillMetadataLoader,
+        )
+    except yaml.YAMLError as error:
+        raise InvalidSkillError("SKILL.md metadata is invalid YAML.") from error
+    if (
+        not isinstance(values, dict)
+        or not all(isinstance(key, str) for key in values)
+        or set(values) != {"name", "description"}
+    ):
         raise InvalidSkillError("name and description are required.")
-    if NAME_PATTERN.fullmatch(values["name"]) is None:
+    name = values["name"]
+    description = values["description"]
+    if not isinstance(name, str) or not isinstance(description, str):
+        raise InvalidSkillError("Metadata fields must be strings.")
+    name = name.strip()
+    description = description.strip()
+    if NAME_PATTERN.fullmatch(name) is None:
         raise InvalidSkillError("Skill name is invalid.")
-    description = values["description"].strip()
     if not description or len(description) > 500:
         raise InvalidSkillError("Skill description must be 1 to 500 characters.")
     instructions = "\n".join(lines[closing + 1 :]).strip()
     if not instructions:
         raise InvalidSkillError("Skill instructions must not be empty.")
-    return SkillMetadata(values["name"], description), instructions
+    return SkillMetadata(name, description), instructions

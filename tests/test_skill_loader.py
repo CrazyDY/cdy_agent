@@ -69,6 +69,59 @@ def test_discovers_sorted_metadata_instructions_and_optional_tools(
     assert discovery.skills[1].tools_path is None
 
 
+def test_parses_yaml_metadata_with_quotes_colons_and_multiline_text(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / ".cdy-agent" / "skills" / "yaml_skill"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        """---
+name: "yaml_skill"
+description: |
+  Use YAML: quotes, colons, and block scalars.
+---
+
+# Instructions
+""",
+        encoding="utf-8",
+    )
+
+    discovery = discover_skills(tmp_path)
+
+    assert discovery.diagnostics == ()
+    assert discovery.skills[0].metadata.name == "yaml_skill"
+    assert (
+        discovery.skills[0].metadata.description
+        == "Use YAML: quotes, colons, and block scalars."
+    )
+    assert discovery.skills[0].instructions == "# Instructions"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "name: typed\ndescription: 123\n",
+        "name: true\ndescription: Use typed.\n",
+        "name: duplicate\nname: duplicate\ndescription: Use duplicate.\n",
+    ],
+)
+def test_rejects_invalid_yaml_metadata_types_and_duplicate_keys(
+    tmp_path: Path, metadata: str
+) -> None:
+    directory = tmp_path / ".cdy-agent" / "skills" / "typed"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        f"---\n{metadata}---\n\n# Instructions\n",
+        encoding="utf-8",
+    )
+
+    discovery = discover_skills(tmp_path)
+
+    assert discovery.skills == ()
+    assert discovery.diagnostics[0].entry == "typed"
+    assert discovery.diagnostics[0].code == "invalid_skill"
+
+
 @pytest.mark.parametrize(
     "content",
     [
