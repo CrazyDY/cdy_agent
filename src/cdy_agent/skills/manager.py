@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -10,6 +11,9 @@ from cdy_agent.tools.registry import ToolRegistry
 
 from .loader import InvalidSkillError, discover_skills, revalidate_tools_file
 from .models import DiscoveredSkill
+
+TOKEN_PATTERN = re.compile(r"[^\W_]+", re.IGNORECASE)
+MAX_KEYWORDS = 8
 
 
 class SkillManager:
@@ -30,6 +34,7 @@ class SkillManager:
                 {
                     "name": skill.metadata.name,
                     "description": skill.metadata.description,
+                    "keywords": _keywords_for(skill),
                     "has_tools": skill.has_tools,
                     "active": skill.metadata.name in self._active,
                 }
@@ -40,6 +45,31 @@ class SkillManager:
                 for item in self._diagnostics
             ],
         }
+
+    def search_skills(self, query: str, limit: int = 5) -> dict[str, object]:
+        normalized_query = query.strip()
+        terms = _tokens(normalized_query)
+        if not normalized_query or not terms:
+            return {"query": normalized_query, "matches": []}
+
+        matches = []
+        for skill in self._skills.values():
+            score, matched_terms, reason = _score_skill(skill, normalized_query, terms)
+            if score <= 0:
+                continue
+            matches.append(
+                {
+                    "name": skill.metadata.name,
+                    "description": skill.metadata.description,
+                    "score": score,
+                    "matched_terms": matched_terms,
+                    "reason": reason,
+                    "has_tools": skill.has_tools,
+                    "active": skill.metadata.name in self._active,
+                }
+            )
+        matches.sort(key=lambda item: (-item["score"], item["name"]))
+        return {"query": normalized_query, "matches": matches[:limit]}
 
     def activate(self, name: str) -> ToolResult:
         skill = self._skills.get(name)
@@ -126,3 +156,65 @@ class SkillManager:
         names = tuple(registered.data["names"])
         self._active[skill.metadata.name] = names
         return self._success(skill, "activated", names)
+
+
+def _tokens(text: str) -> tuple[str, ...]:
+    return tuple(match.group(0).lower() for match in TOKEN_PATTERN.finditer(text))
+
+
+def _unique_ordered(values: tuple[str, ...]) -> tuple[str, ...]:
+    seen = set()
+    unique = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return tuple(unique)
+
+
+def _keywords_for(skill: DiscoveredSkill) -> list[str]:
+    text = f"{skill.metadata.name.replace('_', ' ')} {skill.metadata.description}"
+    return list(_unique_ordered(_tokens(text))[:MAX_KEYWORDS])
+
+
+def _contains(text: str, term: str) -> bool:
+    return term in text.lower()
+
+
+def _score_skill(
+    skill: DiscoveredSkill, normalized_query: str, terms: tuple[str, ...]
+) -> tuple[int, list[str], str]:
+    name_text = skill.metadata.name.replace("_", " ").lower()
+    description_text = skill.metadata.description.lower()
+    instruction_text = skill.instructions[:4000].lower()
+    phrase = normalized_query.lower()
+    score = 0
+    matched: list[str] = []
+    reasons: list[str] = []
+
+    if phrase and phrase in name_text:
+        score += 90
+        reasons.append("name phrase")
+    if phrase and phrase in description_text:
+        score += 60
+        reasons.append("description phrase")
+    if phrase and phrase in instruction_text:
+        score += 30
+        reasons.append("instruction phrase")
+
+    for term in _unique_ordered(terms):
+        term_score = 0
+        if _contains(name_text, term):
+            term_score += 20
+        if _contains(description_text, term):
+            term_score += 10
+        if _contains(instruction_text, term):
+            term_score += 3
+        if term_score:
+            score += term_score
+            matched.append(term)
+
+    if matched and not reasons:
+        reasons.append("term match")
+    return score, matched, ", ".join(reasons)

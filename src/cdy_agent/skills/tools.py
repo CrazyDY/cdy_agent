@@ -39,6 +39,62 @@ class ListSkillsTool:
 
 
 @dataclass
+class SearchSkillsTool:
+    manager: SkillManager
+    name: str = "search_skills"
+    description: str = (
+        "Search workspace Skills by natural-language task description."
+    )
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        }
+    )
+    requires_confirmation: bool = False
+
+    def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+        if set(arguments) - {"query", "limit"}:
+            return ToolResult.failure(
+                "invalid_arguments",
+                "query is required and limit must be between 1 and 10.",
+            )
+        query = arguments.get("query")
+        limit = arguments.get("limit", 5)
+        if (
+            not isinstance(query, str)
+            or not query.strip()
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or limit < 1
+            or limit > 10
+        ):
+            return ToolResult.failure(
+                "invalid_arguments",
+                "query is required and limit must be between 1 and 10.",
+            )
+        return None
+
+    def confirmation_description(self, arguments: dict[str, Any]) -> str:
+        return "Search workspace Skills."
+
+    def execute(self, arguments: dict[str, Any]) -> ToolResult:
+        invalid = self.preflight(arguments)
+        if invalid:
+            return invalid
+        return ToolResult.success(
+            self.manager.search_skills(
+                arguments["query"], arguments.get("limit", 5)
+            )
+        )
+
+
+@dataclass
 class ActivateSkillTool:
     manager: SkillManager
     name: str = "activate_skill"
@@ -76,5 +132,9 @@ class ActivateSkillTool:
 
 def create_skill_tools(
     manager: SkillManager,
-) -> tuple[ListSkillsTool, ActivateSkillTool]:
-    return ListSkillsTool(manager), ActivateSkillTool(manager)
+) -> tuple[ListSkillsTool, SearchSkillsTool, ActivateSkillTool]:
+    return (
+        ListSkillsTool(manager),
+        SearchSkillsTool(manager),
+        ActivateSkillTool(manager),
+    )

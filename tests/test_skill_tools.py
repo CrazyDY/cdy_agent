@@ -4,6 +4,7 @@ import cdy_agent.skills as skills_package
 from cdy_agent.skills.tools import (
     ActivateSkillTool,
     ListSkillsTool,
+    SearchSkillsTool,
     create_skill_tools,
 )
 from cdy_agent.tools.base import ToolResult
@@ -12,6 +13,9 @@ from cdy_agent.tools.base import ToolResult
 class FakeManager:
     def list_skills(self) -> dict[str, list[object]]:
         return {"skills": [], "diagnostics": []}
+
+    def search_skills(self, query: str, limit: int) -> dict[str, object]:
+        return {"query": query, "limit": limit, "matches": []}
 
     def activate(self, name: str) -> ToolResult:
         return ToolResult.success({"name": name})
@@ -37,6 +41,29 @@ def test_activate_skill_requires_exactly_one_valid_name() -> None:
     assert tool.requires_confirmation is False
 
 
+def test_search_skills_requires_query_and_accepts_optional_limit() -> None:
+    tool = SearchSkillsTool(FakeManager())
+
+    assert tool.execute({"query": "durable notes"}).data == {
+        "query": "durable notes",
+        "limit": 5,
+        "matches": [],
+    }
+    assert tool.execute({"query": "durable notes", "limit": 3}).data == {
+        "query": "durable notes",
+        "limit": 3,
+        "matches": [],
+    }
+    assert tool.preflight({}).code == "invalid_arguments"
+    assert tool.preflight({"query": ""}).code == "invalid_arguments"
+    assert tool.preflight({"query": "x", "limit": 0}).code == "invalid_arguments"
+    assert tool.preflight({"query": "x", "limit": 11}).code == "invalid_arguments"
+    assert tool.preflight({"query": "x", "extra": True}).code == (
+        "invalid_arguments"
+    )
+    assert tool.requires_confirmation is False
+
+
 def test_management_tools_expose_exact_schemas() -> None:
     manager = FakeManager()
 
@@ -51,6 +78,15 @@ def test_management_tools_expose_exact_schemas() -> None:
         "required": ["name"],
         "additionalProperties": False,
     }
+    assert SearchSkillsTool(manager).parameters == {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
 
 
 def test_management_tool_factory_has_stable_order_and_types() -> None:
@@ -58,8 +94,16 @@ def test_management_tool_factory_has_stable_order_and_types() -> None:
 
     tools = create_skill_tools(manager)
 
-    assert tuple(type(tool) for tool in tools) == (ListSkillsTool, ActivateSkillTool)
-    assert [tool.name for tool in tools] == ["list_skills", "activate_skill"]
+    assert tuple(type(tool) for tool in tools) == (
+        ListSkillsTool,
+        SearchSkillsTool,
+        ActivateSkillTool,
+    )
+    assert [tool.name for tool in tools] == [
+        "list_skills",
+        "search_skills",
+        "activate_skill",
+    ]
     assert all(tool.manager is manager for tool in tools)
 
 

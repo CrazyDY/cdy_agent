@@ -10,11 +10,17 @@ from cdy_agent.tools.base import ToolResult
 from cdy_agent.tools.registry import ToolRegistry
 
 
-def write_skill(tmp_path: Path, name: str, tools: str | None = None) -> Path:
+def write_skill(
+    tmp_path: Path,
+    name: str,
+    tools: str | None = None,
+    body: str | None = None,
+) -> Path:
     directory = tmp_path / ".cdy-agent" / "skills" / name
     directory.mkdir(parents=True)
+    instructions = body or f"# {name}"
     (directory / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: Use {name}.\n---\n\n# {name}\n",
+        f"---\nname: {name}\ndescription: Use {name}.\n---\n\n{instructions}\n",
         encoding="utf-8",
     )
     if tools is not None:
@@ -141,6 +147,7 @@ def test_list_skills_and_activation_errors_preserve_public_codes(
         {
             "name": "valid",
             "description": "Use valid.",
+            "keywords": ["valid", "use"],
             "has_tools": False,
             "active": False,
         }
@@ -148,6 +155,92 @@ def test_list_skills_and_activation_errors_preserve_public_codes(
     assert listing["diagnostics"][0]["entry"] == "invalid"
     assert manager.activate("invalid").code == "invalid_skill"
     assert manager.activate("missing").code == "unknown_skill"
+
+
+def test_search_skills_recalls_relevant_skill_from_natural_language(
+    tmp_path: Path,
+) -> None:
+    write_skill(
+        tmp_path,
+        "memory_notes",
+        body="# Long term memory\n\nStore durable user facts and recall notes.",
+    )
+    write_skill(
+        tmp_path,
+        "shell_runner",
+        body="# Shell commands\n\nRun approved PowerShell commands.",
+    )
+    manager = SkillManager(tmp_path, ToolRegistry([]), lambda request: True)
+
+    result = manager.search_skills("remember durable user facts", limit=5)
+
+    assert result["query"] == "remember durable user facts"
+    assert [item["name"] for item in result["matches"]] == ["memory_notes"]
+    match = result["matches"][0]
+    assert match["score"] > 0
+    assert match["matched_terms"] == ["durable", "user", "facts"]
+    assert "instructions" not in match
+
+
+def test_search_skills_ranks_name_and_description_over_body_matches(
+    tmp_path: Path,
+) -> None:
+    write_skill(
+        tmp_path,
+        "filesystem_tools",
+        body="# Workspace file helpers\n\nRead and write project files.",
+    )
+    write_skill(
+        tmp_path,
+        "writer",
+        body="# File drafts\n\nThis body mentions filesystem operations once.",
+    )
+    manager = SkillManager(tmp_path, ToolRegistry([]), lambda request: True)
+
+    result = manager.search_skills("filesystem", limit=5)
+
+    assert [item["name"] for item in result["matches"]] == [
+        "filesystem_tools",
+        "writer",
+    ]
+    assert result["matches"][0]["score"] > result["matches"][1]["score"]
+
+
+def test_search_skills_includes_activation_state_and_respects_limit(
+    tmp_path: Path,
+) -> None:
+    write_skill(tmp_path, "alpha", body="# Alpha\n\nShared matching term.")
+    write_skill(tmp_path, "beta", body="# Beta\n\nShared matching term.")
+    manager = SkillManager(tmp_path, ToolRegistry([]), lambda request: True)
+    assert manager.activate("alpha").ok
+
+    result = manager.search_skills("matching", limit=1)
+
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["name"] == "alpha"
+    assert result["matches"][0]["active"] is True
+
+
+def test_search_skills_empty_query_returns_no_matches(tmp_path: Path) -> None:
+    write_skill(tmp_path, "writer")
+    manager = SkillManager(tmp_path, ToolRegistry([]), lambda request: True)
+
+    result = manager.search_skills("   ", limit=5)
+
+    assert result == {"query": "", "matches": []}
+
+
+def test_search_skills_supports_unicode_substring_queries(tmp_path: Path) -> None:
+    write_skill(
+        tmp_path,
+        "code_review",
+        body="# Review\n\n检查代码缺陷，发现回归风险，并给出测试建议。",
+    )
+    manager = SkillManager(tmp_path, ToolRegistry([]), lambda request: True)
+
+    result = manager.search_skills("代码缺陷", limit=5)
+
+    assert [item["name"] for item in result["matches"]] == ["code_review"]
 
 
 def test_tools_are_revalidated_before_requesting_approval(tmp_path: Path) -> None:

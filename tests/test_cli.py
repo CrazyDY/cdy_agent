@@ -1199,7 +1199,7 @@ def test_create_agent_registers_skill_management_tools(
     agent = cli._create_agent("model", "responses", tmp_path)
 
     names = [definition["name"] for definition in agent._registry.definitions]
-    assert names[-2:] == ["list_skills", "activate_skill"]
+    assert names[-3:] == ["list_skills", "search_skills", "activate_skill"]
 
 
 def test_ask_reports_management_tool_registration_failure_without_model_execution(
