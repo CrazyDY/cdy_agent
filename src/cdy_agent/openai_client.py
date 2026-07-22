@@ -18,10 +18,6 @@ class MissingAPIKeyError(RuntimeError):
     """Raised when the default OpenAI client has no configured API key."""
 
 
-class StreamingToolCallUnsupported(RuntimeError):
-    """Raised when a streaming response requests tools."""
-
-
 @dataclass(frozen=True)
 class FinalResponse:
     text: str

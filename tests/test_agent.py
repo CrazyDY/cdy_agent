@@ -10,7 +10,6 @@ from cdy_agent.conversation import Message
 from cdy_agent.openai_client import (
     FinalResponse,
     ResponsesContinuation,
-    StreamingToolCallUnsupported,
     ToolCallResponse,
 )
 from cdy_agent.openai_client import ModelGateway
@@ -36,24 +35,24 @@ class FakeGateway:
 class FakeStreamingGateway(FakeGateway):
     def __init__(
         self,
-        outcomes: list[object],
-        stream_chunks: Sequence[str] = (),
-        stream_error: Exception | None = None,
+        stream_outcomes: Sequence[object],
+        stream_chunks: Sequence[Sequence[str]] = (),
     ) -> None:
-        super().__init__(outcomes)
-        self.stream_chunks = tuple(stream_chunks)
-        self.stream_error = stream_error
+        super().__init__([])
+        self.stream_outcomes = iter(stream_outcomes)
+        self.stream_chunks = iter(stream_chunks)
         self.stream_calls: list[dict[str, object]] = []
 
     def stream(self, **kwargs: object) -> object:
         self.stream_calls.append(kwargs)
-        if self.stream_error is not None:
-            raise self.stream_error
+        outcome = next(self.stream_outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
         on_text = kwargs["on_text"]
         assert callable(on_text)
-        for chunk in self.stream_chunks:
+        for chunk in next(self.stream_chunks, ()):
             on_text(chunk)
-        return FinalResponse("".join(self.stream_chunks))
+        return outcome
 
 
 class FakeRegistry:
@@ -373,7 +372,7 @@ def test_agent_returns_direct_response() -> None:
 
 
 def test_agent_streams_direct_response_chunks() -> None:
-    gateway = FakeStreamingGateway([], ("Hel", "lo"))
+    gateway = FakeStreamingGateway([FinalResponse("Hello")], [("Hel", "lo")])
     chunks: list[str] = []
 
     result = Agent(gateway, FakeRegistry(), lambda _: False).run_stream(
@@ -385,25 +384,105 @@ def test_agent_streams_direct_response_chunks() -> None:
     assert gateway.stream_calls[0]["messages"] == (Message("user", "hello"),)
 
 
-def test_agent_streaming_tool_call_falls_back_to_regular_loop() -> None:
+def test_agent_executes_streamed_tool_call_without_non_streaming_replay() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
+    continuation = ResponsesContinuation("next")
     gateway = FakeStreamingGateway(
-        [
-            ToolCallResponse(calls, ResponsesContinuation("next")),
-            FinalResponse("done"),
-        ],
-        stream_error=StreamingToolCallUnsupported("tool"),
+        [ToolCallResponse(calls, continuation), FinalResponse("done")],
+        [(), ("do", "ne")],
     )
+    registry = FakeRegistry()
     chunks: list[str] = []
 
-    result = Agent(gateway, FakeRegistry(), lambda _: True).run_stream(
+    result = Agent(gateway, registry, lambda _: True).run_stream(
         [Message("user", "go")], chunks.append
     )
 
     assert result == "done"
-    assert chunks == ["done"]
-    assert len(gateway.stream_calls) == 1
-    assert len(gateway.calls) == 2
+    assert chunks == ["do", "ne"]
+    assert gateway.calls == []
+    assert registry.calls == list(calls)
+    assert gateway.stream_calls[1]["continuation"] == continuation
+    assert gateway.stream_calls[1]["tool_outputs"] == (
+        ("1", ToolResult.success({"value": "echo"}).to_json()),
+    )
+
+
+def test_streaming_agent_records_model_and_tool_spans() -> None:
+    calls = (ToolCall("1", "echo", "{}"),)
+    gateway = FakeStreamingGateway([
+        ToolCallResponse(
+            calls, ResponsesContinuation("next"), TokenUsage(8, 2)
+        ),
+        FinalResponse("done", TokenUsage(4, 3)),
+    ])
+    recorder = SpyRecorder()
+
+    assert Agent(gateway, FakeRegistry(), lambda _: True).run_stream(
+        [Message("user", "secret")], lambda _: None, recorder
+    ) == "done"
+    assert recorder.events == [
+        ("model", "start", 1),
+        ("model", "finish", 1, TokenUsage(8, 2), None),
+        ("tool", "start", 1, "echo"),
+        ("tool", "finish", 1, True, None),
+        ("model", "start", 2),
+        ("model", "finish", 2, TokenUsage(4, 3), None),
+    ]
+
+
+def test_streaming_agent_records_provider_exception_and_reraises() -> None:
+    provider_error = RuntimeError("provider secret")
+    recorder = SpyRecorder()
+
+    with pytest.raises(RuntimeError) as raised:
+        Agent(
+            FakeStreamingGateway([provider_error]),
+            FakeRegistry(),
+            lambda _: True,
+        ).run_stream([Message("user", "hello")], lambda _: None, recorder)
+
+    assert raised.value is provider_error
+    assert recorder.events[-1][0:3] == ("model", "finish", 1)
+    assert recorder.events[-1][-1] is provider_error
+
+
+def test_streaming_agent_serializes_structured_tool_failure() -> None:
+    registry = FakeRegistry()
+    registry.result = ToolResult.failure("approval_denied", "secret detail")
+    gateway = FakeStreamingGateway([
+        ToolCallResponse(
+            (ToolCall("1", "echo", "{}"),),
+            ResponsesContinuation("next"),
+        ),
+        FinalResponse("done"),
+    ])
+    recorder = SpyRecorder()
+
+    Agent(gateway, registry, lambda _: False).run_stream(
+        [Message("user", "hello")], lambda _: None, recorder
+    )
+
+    assert gateway.stream_calls[1]["tool_outputs"] == (
+        ("1", registry.result.to_json()),
+    )
+    assert ("tool", "finish", 1, False, "approval_denied") in recorder.events
+
+
+def test_streaming_agent_stops_at_model_call_limit() -> None:
+    outcome = ToolCallResponse(
+        (ToolCall("1", "echo", "{}"),),
+        ResponsesContinuation("next"),
+    )
+    gateway = FakeStreamingGateway([outcome, outcome])
+
+    with pytest.raises(AgentLoopLimitError, match="maximum of 2"):
+        Agent(
+            gateway, FakeRegistry(), lambda _: True, max_model_calls=2
+        ).run_stream([Message("user", "loop")], lambda _: None)
+
+    assert len(gateway.stream_calls) == 2
+    assert gateway.calls == []
 
 
 def test_agent_prepends_initialized_system_prompt_to_model_calls() -> None:

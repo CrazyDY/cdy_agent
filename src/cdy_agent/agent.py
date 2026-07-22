@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from .conversation import Message
 from .observability import TraceRecorder
-from .openai_client import FinalResponse, StreamingToolCallUnsupported
+from .openai_client import FinalResponse, ModelResponse
 from .tools.base import ConfirmationCallback
 
 
@@ -45,6 +45,28 @@ class Agent:
         messages: Sequence[Message],
         recorder: TraceRecorder | None = None,
     ) -> str:
+        def create_model_call(**kwargs: object) -> ModelResponse:
+            return self._gateway.create(**kwargs)
+
+        return self._run_loop(messages, create_model_call, recorder)
+
+    def run_stream(
+        self,
+        messages: Sequence[Message],
+        on_text: Callable[[str], None],
+        recorder: TraceRecorder | None = None,
+    ) -> str:
+        def stream_model_call(**kwargs: object) -> ModelResponse:
+            return self._gateway.stream(on_text=on_text, **kwargs)
+
+        return self._run_loop(messages, stream_model_call, recorder)
+
+    def _run_loop(
+        self,
+        messages: Sequence[Message],
+        model_call: Callable[..., ModelResponse],
+        recorder: TraceRecorder | None = None,
+    ) -> str:
         if not messages:
             raise ValueError("Conversation history must not be empty.")
 
@@ -60,7 +82,7 @@ class Agent:
                     _invalidate_recorder(active_recorder)
                     active_recorder = None
             try:
-                outcome = self._gateway.create(
+                outcome = model_call(
                     messages=self._messages_with_system_prompt(messages),
                     tools=self._registry.definitions,
                     continuation=continuation,
@@ -124,49 +146,6 @@ class Agent:
         raise AgentLoopLimitError(
             f"Agent exceeded the maximum of {self._max_model_calls} model calls."
         )
-
-    def run_stream(
-        self,
-        messages: Sequence[Message],
-        on_text: Callable[[str], None],
-        recorder: TraceRecorder | None = None,
-    ) -> str:
-        if not messages:
-            raise ValueError("Conversation history must not be empty.")
-
-        active_recorder = recorder
-        model_span = None
-        if active_recorder is not None:
-            try:
-                model_span = active_recorder.start_model_call()
-            except Exception:
-                _invalidate_recorder(active_recorder)
-                active_recorder = None
-        try:
-            outcome = self._gateway.stream(
-                messages=self._messages_with_system_prompt(messages),
-                tools=self._registry.definitions,
-                on_text=on_text,
-            )
-        except StreamingToolCallUnsupported:
-            reply = self.run(messages, recorder)
-            on_text(reply)
-            return reply
-        except Exception as exc:
-            if active_recorder is not None and model_span is not None:
-                try:
-                    active_recorder.finish_model_call(model_span, None, exc)
-                except Exception:
-                    _invalidate_recorder(active_recorder)
-            raise
-        if active_recorder is not None and model_span is not None:
-            try:
-                active_recorder.finish_model_call(model_span, outcome.usage)
-            except Exception:
-                _invalidate_recorder(active_recorder)
-        if not isinstance(outcome, FinalResponse):
-            raise RuntimeError("OpenAI returned an unsupported response.")
-        return outcome.text
 
     def _messages_with_system_prompt(
         self, messages: Sequence[Message]
