@@ -6,15 +6,17 @@ from cdy_agent.conversation import Conversation, Message
 def test_conversation_appends_normalized_messages_in_order() -> None:
     conversation = Conversation()
 
+    system_message = conversation.append("system", "  Follow instructions.  ")
     user_message = conversation.append("user", "  Hello  ")
     assistant_message = conversation.append("assistant", " Hi there. ")
 
+    assert system_message == Message(role="system", content="Follow instructions.")
     assert user_message == Message(role="user", content="Hello")
     assert assistant_message == Message(
         role="assistant",
         content="Hi there.",
     )
-    assert conversation.history == (user_message, assistant_message)
+    assert conversation.history == (system_message, user_message, assistant_message)
 
 
 def test_history_is_an_immutable_snapshot() -> None:
@@ -42,6 +44,6 @@ def test_conversation_rejects_unsupported_role() -> None:
     conversation = Conversation()
 
     with pytest.raises(ValueError, match="Unsupported message role"):
-        conversation.append("system", "Instructions")  # type: ignore[arg-type]
+        conversation.append("tool", "Result")  # type: ignore[arg-type]
 
     assert conversation.history == ()

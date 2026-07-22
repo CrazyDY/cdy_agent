@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from openai import OpenAI
 
@@ -16,6 +16,10 @@ from .tools.base import ToolCall
 
 class MissingAPIKeyError(RuntimeError):
     """Raised when the default OpenAI client has no configured API key."""
+
+
+class StreamingToolCallUnsupported(RuntimeError):
+    """Raised when a streaming response requests tools."""
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,22 @@ class ModelGateway:
         if self.api_mode == "responses":
             return self._create_response(messages, tools, continuation, tool_outputs)
         return self._create_chat_completion(messages, tools, continuation, tool_outputs)
+
+    def stream(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        on_text: Callable[[str], None],
+        continuation: Continuation | None = None,
+        tool_outputs: Sequence[tuple[str, str]] = (),
+    ) -> FinalResponse:
+        if self.api_mode == "responses":
+            return self._stream_response(
+                messages, tools, on_text, continuation, tool_outputs
+            )
+        return self._stream_chat_completion(
+            messages, tools, on_text, continuation, tool_outputs
+        )
 
     def _create_response(
         self,
@@ -172,6 +192,105 @@ class ModelGateway:
                 calls, ChatContinuation(calls, content, history), usage
             )
         return _final_response(getattr(message, "content", None), usage)
+
+    def _stream_response(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        on_text: Callable[[str], None],
+        continuation: Continuation | None,
+        tool_outputs: Sequence[tuple[str, str]],
+    ) -> FinalResponse:
+        request: dict[str, Any] = {"model": self.model, "stream": True}
+        if continuation is None:
+            request["input"] = _message_dicts(messages)
+        else:
+            if not isinstance(continuation, ResponsesContinuation):
+                raise ValueError("Continuation does not match Responses API mode.")
+            request["input"] = [
+                {"type": "function_call_output", "call_id": call_id, "output": output}
+                for call_id, output in tool_outputs
+            ]
+            request["previous_response_id"] = continuation.response_id
+        if tools:
+            request["tools"] = list(tools)
+
+        chunks: list[str] = []
+        for event in self.client.responses.create(**request):
+            event_type = getattr(event, "type", None)
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", None)
+                if not isinstance(delta, str):
+                    raise RuntimeError("OpenAI returned an unsupported response.")
+                if delta:
+                    chunks.append(delta)
+                    on_text(delta)
+            elif event_type == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if getattr(item, "type", None) == "function_call":
+                    raise StreamingToolCallUnsupported(
+                        "Streaming tool calls are not supported."
+                    )
+        return _final_response("".join(chunks))
+
+    def _stream_chat_completion(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        on_text: Callable[[str], None],
+        continuation: Continuation | None,
+        tool_outputs: Sequence[tuple[str, str]],
+    ) -> FinalResponse:
+        request_messages: list[dict[str, Any]] = _message_dicts(messages)
+        if continuation is not None:
+            if not isinstance(continuation, ChatContinuation):
+                raise ValueError("Continuation does not match Chat Completions API mode.")
+            request_messages.extend(continuation.history)
+            request_messages.append({
+                "role": "assistant",
+                "content": continuation.content,
+                "tool_calls": [_chat_tool_call(call) for call in continuation.calls],
+            })
+            request_messages.extend(
+                {"role": "tool", "tool_call_id": call_id, "content": output}
+                for call_id, output in tool_outputs
+            )
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": request_messages,
+            "stream": True,
+        }
+        if tools:
+            request["tools"] = [{
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["parameters"],
+                },
+            } for tool in tools]
+
+        chunks: list[str] = []
+        for event in self.client.chat.completions.create(**request):
+            choices = _sdk_sequence(getattr(event, "choices", ()))
+            for choice in choices:
+                delta = getattr(choice, "delta", None)
+                tool_calls = _sdk_sequence(
+                    getattr(delta, "tool_calls", None), allow_none=True
+                )
+                if tool_calls:
+                    raise StreamingToolCallUnsupported(
+                        "Streaming tool calls are not supported."
+                    )
+                content = getattr(delta, "content", None)
+                if content is None:
+                    continue
+                if not isinstance(content, str):
+                    raise RuntimeError("OpenAI returned an unsupported response.")
+                if content:
+                    chunks.append(content)
+                    on_text(content)
+        return _final_response("".join(chunks))
 
 
 def _message_dicts(messages: Sequence[Message]) -> list[dict[str, str]]:

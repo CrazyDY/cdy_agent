@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Callable
 
 from .conversation import Message
 from .observability import TraceRecorder
-from .openai_client import FinalResponse
+from .openai_client import FinalResponse, StreamingToolCallUnsupported
 from .tools.base import ConfirmationCallback
 
 
@@ -30,6 +30,7 @@ class Agent:
         registry: Any,
         confirm: ConfirmationCallback,
         max_model_calls: int = 8,
+        system_prompt: str | None = None,
     ) -> None:
         if max_model_calls < 1:
             raise ValueError("max_model_calls must be at least 1.")
@@ -37,6 +38,7 @@ class Agent:
         self._registry = registry
         self._confirm = confirm
         self._max_model_calls = max_model_calls
+        self._system_message = _normalize_system_message(system_prompt)
 
     def run(
         self,
@@ -59,7 +61,7 @@ class Agent:
                     active_recorder = None
             try:
                 outcome = self._gateway.create(
-                    messages=messages,
+                    messages=self._messages_with_system_prompt(messages),
                     tools=self._registry.definitions,
                     continuation=continuation,
                     tool_outputs=outputs,
@@ -122,3 +124,65 @@ class Agent:
         raise AgentLoopLimitError(
             f"Agent exceeded the maximum of {self._max_model_calls} model calls."
         )
+
+    def run_stream(
+        self,
+        messages: Sequence[Message],
+        on_text: Callable[[str], None],
+        recorder: TraceRecorder | None = None,
+    ) -> str:
+        if not messages:
+            raise ValueError("Conversation history must not be empty.")
+
+        active_recorder = recorder
+        model_span = None
+        if active_recorder is not None:
+            try:
+                model_span = active_recorder.start_model_call()
+            except Exception:
+                _invalidate_recorder(active_recorder)
+                active_recorder = None
+        try:
+            outcome = self._gateway.stream(
+                messages=self._messages_with_system_prompt(messages),
+                tools=self._registry.definitions,
+                on_text=on_text,
+            )
+        except StreamingToolCallUnsupported:
+            reply = self.run(messages, recorder)
+            on_text(reply)
+            return reply
+        except Exception as exc:
+            if active_recorder is not None and model_span is not None:
+                try:
+                    active_recorder.finish_model_call(model_span, None, exc)
+                except Exception:
+                    _invalidate_recorder(active_recorder)
+            raise
+        if active_recorder is not None and model_span is not None:
+            try:
+                active_recorder.finish_model_call(model_span, outcome.usage)
+            except Exception:
+                _invalidate_recorder(active_recorder)
+        if not isinstance(outcome, FinalResponse):
+            raise RuntimeError("OpenAI returned an unsupported response.")
+        return outcome.text
+
+    def _messages_with_system_prompt(
+        self, messages: Sequence[Message]
+    ) -> tuple[Message, ...]:
+        current = tuple(messages)
+        if self._system_message is None:
+            return current
+        if current and current[0].role == "system":
+            return (self._system_message, *current[1:])
+        return (self._system_message, *current)
+
+
+def _normalize_system_message(system_prompt: str | None) -> Message | None:
+    if system_prompt is None:
+        return None
+    normalized_prompt = system_prompt.strip()
+    if not normalized_prompt:
+        return None
+    return Message("system", normalized_prompt)

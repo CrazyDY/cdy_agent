@@ -56,12 +56,16 @@ class FakeAgent:
     def __init__(
         self,
         replies: str | Sequence[str] = "Model reply",
+        stream_chunks: Sequence[str] = (),
         error: Exception | None = None,
     ) -> None:
         self.replies = iter([replies] if isinstance(replies, str) else replies)
+        self.stream_chunks = tuple(stream_chunks)
         self.error = error
         self.calls: list[tuple[Message, ...]] = []
+        self.stream_calls: list[tuple[Message, ...]] = []
         self.recorders: list[object | None] = []
+        self.stream_recorders: list[object | None] = []
 
     def run(
         self, messages: Sequence[Message], recorder: object | None = None
@@ -71,6 +75,22 @@ class FakeAgent:
         if self.error is not None:
             raise self.error
         return next(self.replies)
+
+    def run_stream(
+        self,
+        messages: Sequence[Message],
+        on_text: object,
+        recorder: object | None = None,
+    ) -> str:
+        self.stream_calls.append(tuple(messages))
+        self.stream_recorders.append(recorder)
+        if self.error is not None:
+            raise self.error
+        assert callable(on_text)
+        chunks = self.stream_chunks or (next(self.replies),)
+        for chunk in chunks:
+            on_text(chunk)
+        return "".join(chunks)
 
 
 class FakeTraceStore:
@@ -251,6 +271,7 @@ def default_model_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "CDY_AGENT_INPUT_COST_PER_MILLION",
         "CDY_AGENT_OUTPUT_COST_PER_MILLION",
         "CDY_AGENT_LOG_LEVEL",
+        "CDY_AGENT_STREAM",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -326,6 +347,46 @@ def test_ask_uses_workspace_config_when_environment_is_absent(
 
     assert result.exit_code == 0
     assert seen == [("workspace-model", "chat_completions", tmp_path.resolve())]
+
+
+def test_ask_streams_when_workspace_config_enables_streaming(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    agent = FakeAgent(stream_chunks=("Hel", "lo"))
+    (tmp_path / ".cdy-agent").mkdir()
+    (tmp_path / ".cdy-agent" / "config.yaml").write_text(
+        "stream: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(app, ["ask", "Hello", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert result.stdout == "Hello\n"
+    assert agent.stream_calls == [(Message("user", "Hello"),)]
+    assert agent.calls == []
+
+
+def test_ask_no_stream_overrides_workspace_streaming(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    agent = FakeAgent("non-stream reply", stream_chunks=("stream",))
+    (tmp_path / ".cdy-agent").mkdir()
+    (tmp_path / ".cdy-agent" / "config.yaml").write_text(
+        "stream: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(
+        app, ["ask", "Hello", "--no-stream", "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "non-stream reply\n"
+    assert agent.calls == [(Message("user", "Hello"),)]
+    assert agent.stream_calls == []
 
 
 def test_ask_defaults_workspace_to_invocation_directory(
@@ -943,7 +1004,7 @@ def test_create_agent_wires_gateway_registry_and_confirmation(
             return ToolResult.success({})
 
     registry = FakeRegistry()
-    seen: list[tuple[object, object, object]] = []
+    seen: list[tuple[object, object, object, dict[str, object]]] = []
     monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: gateway)
     monkeypatch.setattr(cli, "create_builtin_registry", lambda workspace: registry)
     monkeypatch.setattr(
@@ -957,8 +1018,8 @@ def test_create_agent_wires_gateway_registry_and_confirmation(
     monkeypatch.setattr(
         cli,
         "Agent",
-        lambda built_gateway, built_registry, confirm: seen.append(
-            (built_gateway, built_registry, confirm)
+        lambda built_gateway, built_registry, confirm, **kwargs: seen.append(
+            (built_gateway, built_registry, confirm, kwargs)
         ) or "agent",
     )
 
@@ -967,7 +1028,14 @@ def test_create_agent_wires_gateway_registry_and_confirmation(
     assert result == "agent"
     assert manager_calls == [(tmp_path, registry, cli._confirm_tool)]
     assert registered == [skill_tools]
-    assert seen == [(gateway, registry, cli._confirm_tool)]
+    assert seen == [
+        (
+            gateway,
+            registry,
+            cli._confirm_tool,
+            {"system_prompt": cli.resolve_system_prompt(cli.WorkspaceConfig())},
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1099,6 +1167,7 @@ def test_config_show_renders_effective_non_secret_configuration(
             [
                 "model: workspace-model",
                 "api_mode: chat_completions",
+                "stream: true",
                 "log_level: INFO",
                 "observability:",
                 "  input_cost_per_million: '1.25'",
@@ -1115,10 +1184,50 @@ def test_config_show_renders_effective_non_secret_configuration(
     assert "Workspace config:" in result.stdout
     assert "model: workspace-model" in result.stdout
     assert "api_mode: responses" in result.stdout
+    assert "stream: true" in result.stdout
     assert "log_level: INFO" in result.stdout
     assert "input_cost_per_million: 1.25" in result.stdout
     assert "output_cost_per_million: 2.50" in result.stdout
     assert "OPENAI_API_KEY" not in result.stdout
+
+
+def test_evals_run_reports_summary_and_failure_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    eval_file = tmp_path / "evals.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - name: pass case",
+                "    prompt: say ok",
+                "    expect:",
+                "      exact: ok",
+                "  - name: fail case",
+                "    prompt: say missing",
+                "    expect:",
+                "      contains: expected",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    agent = FakeAgent(("ok", "actual"))
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
+
+    result = runner.invoke(
+        app, ["evals", "run", str(eval_file), "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "PASS pass case" in result.stdout
+    assert "FAIL fail case" in result.stdout
+    assert "1 passed, 1 failed, 2 total" in result.stdout
+    assert agent.calls == [
+        (Message("user", "say ok"),),
+        (Message("user", "say missing"),),
+    ]
 
 
 REQUEST = httpx.Request("POST", "https://api.openai.com/v1/responses")
@@ -1200,6 +1309,21 @@ def test_create_agent_registers_skill_management_tools(
 
     names = [definition["name"] for definition in agent._registry.definitions]
     assert names[-3:] == ["list_skills", "search_skills", "activate_skill"]
+
+
+def test_create_agent_loads_system_prompt_from_workspace_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: object())
+    (tmp_path / ".cdy-agent").mkdir()
+    (tmp_path / ".cdy-agent" / "config.yaml").write_text(
+        "system_prompt: Workspace instructions.\n",
+        encoding="utf-8",
+    )
+
+    agent = cli._create_agent("model", "responses", tmp_path)
+
+    assert agent._system_message == Message("system", "Workspace instructions.")
 
 
 def test_ask_reports_management_tool_registration_failure_without_model_execution(

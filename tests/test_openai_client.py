@@ -80,6 +80,75 @@ def test_gateway_normalizes_responses_usage() -> None:
     assert outcome == openai_client.FinalResponse("Done", TokenUsage(12, 3))
 
 
+def test_responses_gateway_streams_text_deltas() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(type="response.output_text.delta", delta="Hel"),
+        SimpleNamespace(type="response.output_text.delta", delta="lo"),
+        SimpleNamespace(type="response.completed"),
+    )
+    chunks: list[str] = []
+
+    result = openai_client.ModelGateway(
+        model="m", api_mode="responses", client=client
+    ).stream((Message("user", "Hello"),), (), chunks.append)
+
+    assert result == openai_client.FinalResponse("Hello")
+    assert chunks == ["Hel", "lo"]
+    assert client.responses.create.calls == [
+        {
+            "model": "m",
+            "input": [{"role": "user", "content": "Hello"}],
+            "stream": True,
+        }
+    ]
+
+
+def test_chat_gateway_streams_text_deltas() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(delta=SimpleNamespace(content="Hel"))
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(delta=SimpleNamespace(content="lo"))
+            ]
+        ),
+    )
+    chunks: list[str] = []
+
+    result = openai_client.ModelGateway(
+        model="m", api_mode="chat_completions", client=client
+    ).stream((Message("user", "Hello"),), (), chunks.append)
+
+    assert result == openai_client.FinalResponse("Hello")
+    assert chunks == ["Hel", "lo"]
+    assert client.chat.completions.create.calls == [
+        {
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "stream": True,
+        }
+    ]
+
+
+def test_gateway_reports_streaming_tool_call_as_unsupported() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(type="response.output_item.added", item=SimpleNamespace(
+            type="function_call"
+        )),
+    )
+
+    with pytest.raises(openai_client.StreamingToolCallUnsupported):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Use a tool"),), TOOL_DEFINITIONS, lambda _: None)
+
+
 def test_gateway_normalizes_chat_usage() -> None:
     client = FakeClient()
     client.chat.completions.create = FakeChatSequence(SimpleNamespace(
@@ -816,3 +885,13 @@ class FakeResponsesSequence:
 
 class FakeChatSequence(FakeResponsesSequence):
     pass
+
+
+class FakeStream:
+    def __init__(self, *events: SimpleNamespace) -> None:
+        self.events = events
+        self.calls: list[dict[str, Any]] = []
+
+    def __call__(self, **kwargs: Any) -> tuple[SimpleNamespace, ...]:
+        self.calls.append(kwargs)
+        return self.events

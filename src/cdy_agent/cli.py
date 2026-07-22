@@ -24,8 +24,11 @@ from .config import (
     load_workspace_config,
     resolve_api_mode,
     resolve_model,
+    resolve_streaming,
+    resolve_system_prompt,
 )
 from .conversation import Conversation, Message
+from .evals import EvalFileError, run_eval_file
 from .memory import (
     ConversationStore,
     ConversationStoreError,
@@ -55,10 +58,12 @@ sessions_app = typer.Typer(help="List and delete saved conversations.")
 memories_app = typer.Typer(help="Manage explicit long-term memories.")
 traces_app = typer.Typer(help="List and inspect saved call traces.")
 config_app = typer.Typer(help="Inspect effective non-secret configuration.")
+evals_app = typer.Typer(help="Run offline evaluation cases.")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memories_app, name="memories")
 app.add_typer(traces_app, name="traces")
 app.add_typer(config_app, name="config")
+app.add_typer(evals_app, name="evals")
 
 REQUEST_ERRORS = (
     MissingAPIKeyError,
@@ -73,6 +78,7 @@ REQUEST_ERRORS = (
     ConversationStoreError,
     MemoryStoreError,
     TraceStoreError,
+    EvalFileError,
 )
 
 
@@ -112,12 +118,13 @@ def _confirm_tool(request: ConfirmationRequest) -> bool:
 def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     """Construct the CLI's shared model-and-local-tools boundary."""
     gateway = ModelGateway(model=model, api_mode=api_mode)
+    system_prompt = resolve_system_prompt(load_workspace_config(workspace))
     registry = create_builtin_registry(workspace)
     manager = SkillManager(workspace, registry, _confirm_tool)
     registered = registry.register_many(create_skill_tools(manager))
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
-    return Agent(gateway, registry, _confirm_tool)
+    return Agent(gateway, registry, _confirm_tool, system_prompt=system_prompt)
 
 
 def _load_configured_workspace(workspace: Path | None) -> tuple[Path, WorkspaceConfig]:
@@ -185,6 +192,50 @@ def _run_with_best_effort_trace(
         typer.echo("Warning: Could not save trace.", err=True)
         return agent.run(messages)
     return _run_traced(agent, messages, recorder, store)
+
+
+def _run_stream_with_best_effort_trace(
+    agent: Agent,
+    messages: Sequence[Message],
+    *,
+    command: str,
+    model: str,
+    api_mode: str,
+    workspace: Path,
+    pricing: Pricing | None,
+    session_id: str | None = None,
+) -> str:
+    """Run one streamed agent turn while preserving best-effort traces."""
+    def write_chunk(chunk: str) -> None:
+        typer.echo(chunk, nl=False)
+
+    try:
+        recorder = TraceRecorder(
+            command,
+            model,
+            api_mode,
+            session_id=session_id,
+            pricing=pricing,
+        )
+        store = TraceStore(workspace)
+    except (TraceStoreError, RuntimeError, ValueError, OSError):
+        typer.echo("Warning: Could not save trace.", err=True)
+        return agent.run_stream(messages, write_chunk)
+
+    error = None
+    try:
+        return agent.run_stream(messages, write_chunk, recorder)
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        if not recorder.healthy:
+            typer.echo("Warning: Could not save trace.", err=True)
+        else:
+            try:
+                store.append(recorder.finish(error))
+            except (TraceStoreError, RuntimeError, ValueError, OSError):
+                typer.echo("Warning: Could not save trace.", err=True)
 
 
 def _render_trace(record: TraceRecord) -> None:
@@ -529,6 +580,8 @@ def show_config(
         active_workspace, workspace_config = _load_configured_workspace(workspace)
         model = resolve_model(workspace_config=workspace_config)
         api_mode = resolve_api_mode(workspace_config)
+        system_prompt = resolve_system_prompt(workspace_config)
+        stream = resolve_streaming(workspace_config=workspace_config)
         pricing = resolve_pricing(workspace_config)
         resolve_log_level(workspace_config)
     except REQUEST_ERRORS as exc:
@@ -539,6 +592,8 @@ def show_config(
     typer.echo(f"Workspace config: {config_path if config_path.exists() else '-'}")
     typer.echo(f"model: {model}")
     typer.echo(f"api_mode: {api_mode}")
+    typer.echo(f"stream: {str(stream).lower()}")
+    typer.echo(f"system_prompt: {system_prompt}")
     typer.echo(f"log_level: {_effective_log_level_name(workspace_config)}")
     if pricing is None:
         typer.echo("input_cost_per_million: -")
@@ -546,6 +601,44 @@ def show_config(
     else:
         typer.echo(f"input_cost_per_million: {pricing.input_per_million}")
         typer.echo(f"output_cost_per_million: {pricing.output_per_million}")
+
+
+@evals_app.command("run")
+def run_evals(
+    eval_file: Annotated[
+        Path,
+        typer.Argument(help="YAML or JSON eval case file to run."),
+    ],
+    model: Annotated[
+        str | None,
+        typer.Option(help="Model override for this eval run."),
+    ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Directory available to local tools."),
+    ] = None,
+) -> None:
+    """Run offline eval cases and summarize exact or contains assertions."""
+    try:
+        active_workspace, workspace_config = _load_configured_workspace(workspace)
+        _configure_logging_for_workspace(workspace_config)
+        active_model = resolve_model(model, workspace_config)
+        api_mode = resolve_api_mode(workspace_config)
+        agent = _create_agent(active_model, api_mode, active_workspace)
+        report = run_eval_file(eval_file, agent)
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+
+    for result in report.results:
+        status = "PASS" if result.passed else "FAIL"
+        typer.echo(f"{status} {result.name}")
+        if not result.passed:
+            typer.echo(f"  {result.message}")
+    typer.echo(
+        f"{report.passed} passed, {report.failed} failed, {report.total} total"
+    )
+    if report.failed:
+        raise typer.Exit(code=1)
 
 
 @app.callback()
@@ -571,6 +664,13 @@ def ask(
         Path | None,
         typer.Option(help="Directory available to local tools."),
     ] = None,
+    stream: Annotated[
+        bool | None,
+        typer.Option(
+            "--stream/--no-stream",
+            help="Override streamed output for this request.",
+        ),
+    ] = None,
 ) -> None:
     """Send one prompt and print one model reply."""
     try:
@@ -581,23 +681,38 @@ def ask(
             raise ValueError("Prompt must not be empty.")
         active_model = resolve_model(model, workspace_config)
         api_mode = resolve_api_mode(workspace_config)
+        stream_output = resolve_streaming(stream, workspace_config)
         pricing = resolve_pricing(workspace_config)
         agent = _create_agent(active_model, api_mode, active_workspace)
         conversation = Conversation()
         conversation.append("user", normalized_prompt)
-        reply = _run_with_best_effort_trace(
-            agent,
-            conversation.history,
-            command="ask",
-            model=active_model,
-            api_mode=api_mode,
-            workspace=active_workspace,
-            pricing=pricing,
-        )
+        if stream_output:
+            reply = _run_stream_with_best_effort_trace(
+                agent,
+                conversation.history,
+                command="ask",
+                model=active_model,
+                api_mode=api_mode,
+                workspace=active_workspace,
+                pricing=pricing,
+            )
+        else:
+            reply = _run_with_best_effort_trace(
+                agent,
+                conversation.history,
+                command="ask",
+                model=active_model,
+                api_mode=api_mode,
+                workspace=active_workspace,
+                pricing=pricing,
+            )
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
 
-    typer.echo(reply)
+    if stream_output:
+        typer.echo()
+    else:
+        typer.echo(reply)
 
 
 @app.command()
@@ -614,6 +729,13 @@ def chat(
         str | None,
         typer.Option(help="Resume a saved conversation by its complete ID."),
     ] = None,
+    stream: Annotated[
+        bool | None,
+        typer.Option(
+            "--stream/--no-stream",
+            help="Override streamed output for this conversation.",
+        ),
+    ] = None,
 ) -> None:
     """Start a new conversation or explicitly resume a saved one."""
     try:
@@ -621,6 +743,7 @@ def chat(
         _configure_logging_for_workspace(workspace_config)
         active_model = resolve_model(model, workspace_config)
         api_mode = resolve_api_mode(workspace_config)
+        stream_output = resolve_streaming(stream, workspace_config)
         pricing = resolve_pricing(workspace_config)
         store = ConversationStore(active_workspace)
         agent = _create_agent(active_model, api_mode, active_workspace)
@@ -649,19 +772,34 @@ def chat(
 
         user_message = conversation.append("user", normalized_prompt)
         try:
-            reply = _run_with_best_effort_trace(
-                agent,
-                conversation.history,
-                command="chat",
-                model=active_model,
-                api_mode=api_mode,
-                workspace=active_workspace,
-                pricing=pricing,
-                session_id=session_id,
-            )
+            if stream_output:
+                typer.echo("Assistant: ", nl=False)
+                reply = _run_stream_with_best_effort_trace(
+                    agent,
+                    conversation.history,
+                    command="chat",
+                    model=active_model,
+                    api_mode=api_mode,
+                    workspace=active_workspace,
+                    pricing=pricing,
+                    session_id=session_id,
+                )
+                typer.echo()
+            else:
+                reply = _run_with_best_effort_trace(
+                    agent,
+                    conversation.history,
+                    command="chat",
+                    model=active_model,
+                    api_mode=api_mode,
+                    workspace=active_workspace,
+                    pricing=pricing,
+                    session_id=session_id,
+                )
             assistant_message = Message(role="assistant", content=reply.strip())
             store.append_turn(session_id, user_message, assistant_message)
         except REQUEST_ERRORS as exc:
             _fail_for_exception(exc)
         conversation.append(assistant_message.role, assistant_message.content)
-        typer.echo(f"Assistant: {assistant_message.content}")
+        if not stream_output:
+            typer.echo(f"Assistant: {assistant_message.content}")

@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
-MessageRole = Literal["user", "assistant"]
-SUPPORTED_MESSAGE_ROLES = ("user", "assistant")
+MessageRole = Literal["system", "user", "assistant"]
+SUPPORTED_MESSAGE_ROLES = ("system", "user", "assistant")
 
 
 @dataclass(frozen=True)

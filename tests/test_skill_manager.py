@@ -29,17 +29,17 @@ def write_skill(
 
 
 def test_instruction_only_skill_activates_without_confirmation(tmp_path: Path) -> None:
-    write_skill(tmp_path, "writer")
+    write_skill(tmp_path, "content_summary")
     confirmations = []
     manager = SkillManager(tmp_path, ToolRegistry([]), confirmations.append)
 
-    first = manager.activate("writer")
-    second = manager.activate("writer")
+    first = manager.activate("content_summary")
+    second = manager.activate("content_summary")
 
     assert first.data == {
-        "name": "writer",
+        "name": "content_summary",
         "status": "activated",
-        "instructions": "# writer",
+        "instructions": "# content_summary",
         "tools": [],
     }
     assert second.data["status"] == "already_active"
@@ -192,7 +192,7 @@ def test_search_skills_ranks_name_and_description_over_body_matches(
     )
     write_skill(
         tmp_path,
-        "writer",
+        "content_summary",
         body="# File drafts\n\nThis body mentions filesystem operations once.",
     )
     manager = SkillManager(tmp_path, ToolRegistry([]), lambda request: True)
@@ -201,7 +201,7 @@ def test_search_skills_ranks_name_and_description_over_body_matches(
 
     assert [item["name"] for item in result["matches"]] == [
         "filesystem_tools",
-        "writer",
+        "content_summary",
     ]
     assert result["matches"][0]["score"] > result["matches"][1]["score"]
 
@@ -222,7 +222,7 @@ def test_search_skills_includes_activation_state_and_respects_limit(
 
 
 def test_search_skills_empty_query_returns_no_matches(tmp_path: Path) -> None:
-    write_skill(tmp_path, "writer")
+    write_skill(tmp_path, "content_summary")
     manager = SkillManager(tmp_path, ToolRegistry([]), lambda request: True)
 
     result = manager.search_skills("   ", limit=5)

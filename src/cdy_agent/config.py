@@ -12,6 +12,10 @@ import yaml
 
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_API_MODE = "responses"
+DEFAULT_SYSTEM_PROMPT = (
+    "You are CDY Agent, a local personal AI assistant. Follow the user's "
+    "instructions, use local tools only when useful, and avoid exposing secrets."
+)
 SUPPORTED_API_MODES = ("responses", "chat_completions")
 CONFIG_RELATIVE_PATH = Path(".cdy-agent") / "config.yaml"
 
@@ -20,6 +24,8 @@ CONFIG_RELATIVE_PATH = Path(".cdy-agent") / "config.yaml"
 class WorkspaceConfig:
     model: str | None = None
     api_mode: str | None = None
+    system_prompt: str | None = None
+    stream: bool | None = None
     log_level: str | None = None
     input_cost_per_million: str | None = None
     output_cost_per_million: str | None = None
@@ -39,7 +45,14 @@ def load_workspace_config(workspace: Path) -> WorkspaceConfig:
     if not isinstance(raw_config, dict):
         raise ValueError("Workspace config must be a mapping.")
 
-    allowed_top_level = {"model", "api_mode", "log_level", "observability"}
+    allowed_top_level = {
+        "model",
+        "api_mode",
+        "system_prompt",
+        "stream",
+        "log_level",
+        "observability",
+    }
     unknown = set(raw_config) - allowed_top_level
     if unknown:
         keys = ", ".join(sorted(str(key) for key in unknown))
@@ -62,6 +75,10 @@ def load_workspace_config(workspace: Path) -> WorkspaceConfig:
     return WorkspaceConfig(
         model=_optional_string(raw_config.get("model"), "model"),
         api_mode=_optional_string(raw_config.get("api_mode"), "api_mode"),
+        system_prompt=_optional_string(
+            raw_config.get("system_prompt"), "system_prompt"
+        ),
+        stream=_optional_bool(raw_config.get("stream"), "stream"),
         log_level=_optional_string(raw_config.get("log_level"), "log_level"),
         input_cost_per_million=_optional_string(
             observability.get("input_cost_per_million"),
@@ -110,9 +127,55 @@ def resolve_api_mode(workspace_config: WorkspaceConfig | None = None) -> str:
     return normalized_mode
 
 
+def resolve_system_prompt(workspace_config: WorkspaceConfig | None = None) -> str:
+    """Resolve the initialized system prompt from workspace config or default."""
+    if (
+        workspace_config
+        and workspace_config.system_prompt
+        and workspace_config.system_prompt.strip()
+    ):
+        return workspace_config.system_prompt.strip()
+    return DEFAULT_SYSTEM_PROMPT
+
+
+def resolve_streaming(
+    stream_override: bool | None = None,
+    workspace_config: WorkspaceConfig | None = None,
+) -> bool:
+    """Resolve streaming output from CLI, environment, workspace config, or default."""
+    if stream_override is not None:
+        return stream_override
+
+    environment_stream = os.getenv("CDY_AGENT_STREAM")
+    if environment_stream is not None:
+        return _parse_bool(environment_stream, "CDY_AGENT_STREAM")
+
+    if workspace_config and workspace_config.stream is not None:
+        return workspace_config.stream
+
+    return False
+
+
 def _optional_string(value: Any, name: str) -> str | None:
     if value is None:
         return None
     if isinstance(value, bool) or isinstance(value, (dict, list)):
         raise ValueError(f"Workspace config {name} must be a scalar value.")
     return str(value)
+
+
+def _optional_bool(value: Any, name: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"Workspace config {name} must be true or false.")
+    return value
+
+
+def _parse_bool(value: str, name: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Unsupported {name} value {value!r}. Choose true or false.")

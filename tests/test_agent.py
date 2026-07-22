@@ -1,4 +1,5 @@
 from pathlib import Path
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
@@ -6,7 +7,12 @@ import pytest
 
 from cdy_agent.agent import Agent, AgentLoopLimitError
 from cdy_agent.conversation import Message
-from cdy_agent.openai_client import FinalResponse, ResponsesContinuation, ToolCallResponse
+from cdy_agent.openai_client import (
+    FinalResponse,
+    ResponsesContinuation,
+    StreamingToolCallUnsupported,
+    ToolCallResponse,
+)
 from cdy_agent.openai_client import ModelGateway
 from cdy_agent.observability import TokenUsage
 from cdy_agent.tools import create_builtin_registry
@@ -25,6 +31,29 @@ class FakeGateway:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+class FakeStreamingGateway(FakeGateway):
+    def __init__(
+        self,
+        outcomes: list[object],
+        stream_chunks: Sequence[str] = (),
+        stream_error: Exception | None = None,
+    ) -> None:
+        super().__init__(outcomes)
+        self.stream_chunks = tuple(stream_chunks)
+        self.stream_error = stream_error
+        self.stream_calls: list[dict[str, object]] = []
+
+    def stream(self, **kwargs: object) -> object:
+        self.stream_calls.append(kwargs)
+        if self.stream_error is not None:
+            raise self.stream_error
+        on_text = kwargs["on_text"]
+        assert callable(on_text)
+        for chunk in self.stream_chunks:
+            on_text(chunk)
+        return FinalResponse("".join(self.stream_chunks))
 
 
 class FakeRegistry:
@@ -341,6 +370,64 @@ def test_agent_returns_direct_response() -> None:
     assert Agent(gateway, FakeRegistry(), lambda _: False).run(
         [Message("user", "hello")]
     ) == "done"
+
+
+def test_agent_streams_direct_response_chunks() -> None:
+    gateway = FakeStreamingGateway([], ("Hel", "lo"))
+    chunks: list[str] = []
+
+    result = Agent(gateway, FakeRegistry(), lambda _: False).run_stream(
+        [Message("user", "hello")], chunks.append
+    )
+
+    assert result == "Hello"
+    assert chunks == ["Hel", "lo"]
+    assert gateway.stream_calls[0]["messages"] == (Message("user", "hello"),)
+
+
+def test_agent_streaming_tool_call_falls_back_to_regular_loop() -> None:
+    calls = (ToolCall("1", "echo", "{}"),)
+    gateway = FakeStreamingGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next")),
+            FinalResponse("done"),
+        ],
+        stream_error=StreamingToolCallUnsupported("tool"),
+    )
+    chunks: list[str] = []
+
+    result = Agent(gateway, FakeRegistry(), lambda _: True).run_stream(
+        [Message("user", "go")], chunks.append
+    )
+
+    assert result == "done"
+    assert chunks == ["done"]
+    assert len(gateway.stream_calls) == 1
+    assert len(gateway.calls) == 2
+
+
+def test_agent_prepends_initialized_system_prompt_to_model_calls() -> None:
+    calls = (ToolCall("1", "echo", "{}"),)
+    gateway = FakeGateway([
+        ToolCallResponse(calls, ResponsesContinuation("next")),
+        FinalResponse("done"),
+    ])
+
+    assert Agent(
+        gateway,
+        FakeRegistry(),
+        lambda _: True,
+        system_prompt="  Use local tools carefully.  ",
+    ).run([Message("user", "go")]) == "done"
+
+    assert gateway.calls[0]["messages"] == (
+        Message("system", "Use local tools carefully."),
+        Message("user", "go"),
+    )
+    assert gateway.calls[1]["messages"] == (
+        Message("system", "Use local tools carefully."),
+        Message("user", "go"),
+    )
 
 
 def test_agent_executes_batch_and_continues() -> None:

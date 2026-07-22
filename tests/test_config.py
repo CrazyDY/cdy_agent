@@ -5,11 +5,14 @@ import pytest
 from cdy_agent.config import (
     DEFAULT_API_MODE,
     DEFAULT_MODEL,
+    DEFAULT_SYSTEM_PROMPT,
     SUPPORTED_API_MODES,
     WorkspaceConfig,
     load_workspace_config,
     resolve_api_mode,
     resolve_model,
+    resolve_streaming,
+    resolve_system_prompt,
 )
 
 
@@ -121,6 +124,106 @@ def test_workspace_config_supplies_model_and_api_mode(
 
     assert resolve_model(workspace_config=config) == "workspace-model"
     assert resolve_api_mode(workspace_config=config) == "chat_completions"
+
+
+def test_streaming_defaults_to_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_STREAM", raising=False)
+
+    assert resolve_streaming() is False
+
+
+def test_workspace_config_supplies_streaming(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_STREAM", raising=False)
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text("stream: true\n", encoding="utf-8")
+
+    config = load_workspace_config(tmp_path)
+
+    assert config.stream is True
+    assert resolve_streaming(workspace_config=config) is True
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (" true ", True),
+        ("YES", True),
+        ("1", True),
+        (" false ", False),
+        ("NO", False),
+        ("0", False),
+    ],
+)
+def test_streaming_environment_is_trimmed_and_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+    expected: bool,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_STREAM", configured)
+
+    assert resolve_streaming() is expected
+
+
+def test_streaming_override_wins_over_environment_and_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_STREAM", "true")
+    config = WorkspaceConfig(stream=True)
+
+    assert resolve_streaming(False, config) is False
+
+
+def test_streaming_environment_wins_over_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_STREAM", "false")
+    config = WorkspaceConfig(stream=True)
+
+    assert resolve_streaming(workspace_config=config) is False
+
+
+@pytest.mark.parametrize("configured", ["sometimes", ""])
+def test_invalid_streaming_environment_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_STREAM", configured)
+
+    with pytest.raises(ValueError, match="CDY_AGENT_STREAM"):
+        resolve_streaming()
+
+
+def test_workspace_config_rejects_non_boolean_stream(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text("stream: maybe\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="stream"):
+        load_workspace_config(tmp_path)
+
+
+def test_workspace_config_supplies_system_prompt(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        "system_prompt: |\n  You are a local coding assistant.\n",
+        encoding="utf-8",
+    )
+    config = load_workspace_config(tmp_path)
+
+    assert resolve_system_prompt(config) == "You are a local coding assistant."
+
+
+def test_blank_system_prompt_falls_back_to_default() -> None:
+    config = WorkspaceConfig(system_prompt="   ")
+
+    assert resolve_system_prompt(config) == DEFAULT_SYSTEM_PROMPT
 
 
 def test_environment_wins_over_workspace_config(
