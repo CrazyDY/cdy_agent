@@ -85,7 +85,10 @@ def test_responses_gateway_streams_text_deltas() -> None:
     client.responses.create = FakeStream(
         SimpleNamespace(type="response.output_text.delta", delta="Hel"),
         SimpleNamespace(type="response.output_text.delta", delta="lo"),
-        SimpleNamespace(type="response.completed"),
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(id="response-1"),
+        ),
     )
     chunks: list[str] = []
 
@@ -109,12 +112,16 @@ def test_chat_gateway_streams_text_deltas() -> None:
     client.chat.completions.create = FakeStream(
         SimpleNamespace(
             choices=[
-                SimpleNamespace(delta=SimpleNamespace(content="Hel"))
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="Hel"), finish_reason=None
+                )
             ]
         ),
         SimpleNamespace(
             choices=[
-                SimpleNamespace(delta=SimpleNamespace(content="lo"))
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="lo"), finish_reason="stop"
+                )
             ]
         ),
     )
@@ -131,6 +138,7 @@ def test_chat_gateway_streams_text_deltas() -> None:
             "model": "m",
             "messages": [{"role": "user", "content": "Hello"}],
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
     ]
 
@@ -311,6 +319,161 @@ def test_chat_gateway_rejects_malformed_streamed_tool_call_completion(
         ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
 
 
+def test_chat_gateway_rejects_tool_call_finished_for_length() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(SimpleNamespace(
+        choices=[SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                index=0,
+                id="call-1",
+                function=SimpleNamespace(name="read_file", arguments="{}"),
+            )]),
+            finish_reason="length",
+        )],
+    ))
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="chat_completions", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+def test_chat_gateway_rejects_tool_call_without_terminal_reason() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(SimpleNamespace(
+        choices=[SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                index=0,
+                id="call-1",
+                function=SimpleNamespace(name="read_file", arguments="{}"),
+            )]),
+            finish_reason=None,
+        )],
+    ))
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="chat_completions", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="partial"),
+                finish_reason="content_filter",
+            )]),
+        ),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="partial"),
+                finish_reason="function_call",
+            )]),
+        ),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="done"),
+                finish_reason="stop",
+            )]),
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=None),
+                finish_reason="tool_calls",
+            )]),
+        ),
+    ],
+)
+def test_chat_gateway_rejects_unsupported_or_conflicting_terminal_reasons(
+    events: tuple[SimpleNamespace, ...],
+) -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(*events)
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="chat_completions", client=client
+        ).stream((Message("user", "Hello"),), (), lambda _: None)
+
+
+def test_chat_text_stream_captures_usage_from_empty_choice_chunk() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="done"), finish_reason="stop"
+            )],
+            usage=None,
+        ),
+        SimpleNamespace(
+            choices=[],
+            usage=SimpleNamespace(prompt_tokens=5, completion_tokens=1),
+        ),
+    )
+
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="chat_completions", client=client
+    ).stream((Message("user", "Hello"),), (), lambda _: None)
+
+    assert outcome == openai_client.FinalResponse("done", TokenUsage(5, 1))
+    assert client.chat.completions.create.calls[0]["stream_options"] == {
+        "include_usage": True
+    }
+
+
+def test_chat_tool_call_stream_captures_usage_from_empty_choice_chunk() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index=0,
+                    id="call-1",
+                    function=SimpleNamespace(name="read_file", arguments="{}"),
+                )]),
+                finish_reason="tool_calls",
+            )],
+            usage=None,
+        ),
+        SimpleNamespace(
+            choices=[],
+            usage=SimpleNamespace(prompt_tokens=8, completion_tokens=2),
+        ),
+    )
+
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="chat_completions", client=client
+    ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+    calls = (ToolCall("call-1", "read_file", "{}"),)
+    assert outcome == openai_client.ToolCallResponse(
+        calls,
+        openai_client.ChatContinuation(calls, None, ()),
+        TokenUsage(8, 2),
+    )
+
+
+def test_chat_gateway_rejects_conflicting_streamed_usage() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="done"), finish_reason="stop"
+            )],
+            usage=SimpleNamespace(prompt_tokens=5, completion_tokens=1),
+        ),
+        SimpleNamespace(
+            choices=[],
+            usage=SimpleNamespace(prompt_tokens=6, completion_tokens=1),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="chat_completions", client=client
+        ).stream((Message("user", "Hello"),), (), lambda _: None)
+
+
 def test_responses_gateway_aggregates_streamed_function_call() -> None:
     client = FakeClient()
     client.responses.create = FakeStream(
@@ -369,6 +532,263 @@ def test_responses_gateway_aggregates_streamed_function_call() -> None:
         (ToolCall("call-1", "read_file", '{"path":"a"}'),),
         openai_client.ResponsesContinuation("response-1"),
         TokenUsage(7, 3),
+    )
+
+
+def test_responses_gateway_rejects_function_call_without_done_event() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(
+            type="response.output_item.added",
+            output_index=0,
+            item=SimpleNamespace(
+                id="item-1",
+                type="function_call",
+                call_id="call-1",
+                name="read_file",
+                arguments="",
+            ),
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            item_id="item-1",
+            output_index=0,
+            delta="{}",
+        ),
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(id="response-1"),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+def test_responses_gateway_rejects_tool_call_without_completed_event() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(
+            type="response.output_item.done",
+            output_index=0,
+            item=SimpleNamespace(
+                id="item-1",
+                type="function_call",
+                call_id="call-1",
+                name="read_file",
+                arguments="{}",
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+def test_responses_gateway_rejects_text_without_completed_event() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(type="response.output_text.delta", delta="partial")
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Hello"),), (), lambda _: None)
+
+
+@pytest.mark.parametrize(
+    "terminal_event",
+    [
+        SimpleNamespace(
+            type="response.failed", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(
+            type="response.incomplete", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(type="error", message="provider failure"),
+    ],
+)
+def test_responses_gateway_rejects_non_completed_terminal_events(
+    terminal_event: SimpleNamespace,
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(type="response.output_text.delta", delta="partial"),
+        terminal_event,
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Hello"),), (), lambda _: None)
+
+
+def test_responses_gateway_rejects_conflicting_terminal_events() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(type="response.output_text.delta", delta="done"),
+        SimpleNamespace(
+            type="response.completed", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(
+            type="response.incomplete", response=SimpleNamespace(id="response-1")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Hello"),), (), lambda _: None)
+
+
+def test_responses_gateway_rejects_item_id_reused_at_two_indexes() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        *(
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=index,
+                item=SimpleNamespace(
+                    id="item-shared",
+                    type="function_call",
+                    call_id=f"call-{index}",
+                    name="read_file",
+                    arguments="",
+                ),
+            )
+            for index in (0, 1)
+        ),
+        *(
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=index,
+                item=SimpleNamespace(
+                    id="item-shared",
+                    type="function_call",
+                    call_id=f"call-{index}",
+                    name="read_file",
+                    arguments=f'{{"path":"{index}"}}',
+                ),
+            )
+            for index in (0, 1)
+        ),
+        SimpleNamespace(
+            type="response.completed", response=SimpleNamespace(id="response-1")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Read files"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+@pytest.mark.parametrize("second_arguments", ["{}", '{"path":"other"}'])
+def test_responses_gateway_rejects_duplicate_done_events(
+    second_arguments: str,
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(
+            type="response.output_item.added",
+            output_index=0,
+            item=SimpleNamespace(
+                id="item-1",
+                type="function_call",
+                call_id="call-1",
+                name="read_file",
+                arguments="",
+            ),
+        ),
+        *(
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=0,
+                item=SimpleNamespace(
+                    id="item-1",
+                    type="function_call",
+                    call_id="call-1",
+                    name="read_file",
+                    arguments=arguments,
+                ),
+            )
+            for arguments in ("{}", second_arguments)
+        ),
+        SimpleNamespace(
+            type="response.completed", response=SimpleNamespace(id="response-1")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+def test_responses_gateway_orders_parallel_calls_by_output_index() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        *(
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=index,
+                item=SimpleNamespace(
+                    id=f"item-{index}",
+                    type="function_call",
+                    call_id=f"call-{index}",
+                    name="read_file",
+                    arguments="",
+                ),
+            )
+            for index in (1, 0)
+        ),
+        *(
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=index,
+                item=SimpleNamespace(
+                    id=f"item-{index}",
+                    type="function_call",
+                    call_id=f"call-{index}",
+                    name="read_file",
+                    arguments=f'{{"path":"{index}"}}',
+                ),
+            )
+            for index in (1, 0)
+        ),
+        SimpleNamespace(
+            type="response.completed", response=SimpleNamespace(id="response-1")
+        ),
+    )
+
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="responses", client=client
+    ).stream((Message("user", "Read files"),), TOOL_DEFINITIONS, lambda _: None)
+
+    assert isinstance(outcome, openai_client.ToolCallResponse)
+    assert outcome.calls == (
+        ToolCall("call-0", "read_file", '{"path":"0"}'),
+        ToolCall("call-1", "read_file", '{"path":"1"}'),
     )
 
 
@@ -580,6 +1000,166 @@ def test_responses_text_stream_captures_completed_usage() -> None:
     ).stream((Message("user", "Hello"),), (), lambda _: None)
 
     assert outcome == openai_client.FinalResponse("done", TokenUsage(5, 1))
+
+
+def test_responses_stream_continuation_sends_only_tool_outputs_and_response_id(
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeStreamSequence(
+        (
+            SimpleNamespace(
+                type="response.created", response=SimpleNamespace(id="response-1")
+            ),
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=0,
+                item=SimpleNamespace(
+                    id="item-1",
+                    type="function_call",
+                    call_id="call-1",
+                    name="read_file",
+                    arguments="",
+                ),
+            ),
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=0,
+                item=SimpleNamespace(
+                    id="item-1",
+                    type="function_call",
+                    call_id="call-1",
+                    name="read_file",
+                    arguments='{"path":"README.md"}',
+                ),
+            ),
+            SimpleNamespace(
+                type="response.completed", response=SimpleNamespace(id="response-1")
+            ),
+        ),
+        (
+            SimpleNamespace(type="response.output_text.delta", delta="Done"),
+            SimpleNamespace(
+                type="response.completed", response=SimpleNamespace(id="response-2")
+            ),
+        ),
+    )
+    gateway = openai_client.ModelGateway(
+        model="m", api_mode="responses", client=client
+    )
+    messages = (Message("user", "Inspect"),)
+
+    first = gateway.stream(messages, TOOL_DEFINITIONS, lambda _: None)
+    assert isinstance(first, openai_client.ToolCallResponse)
+    second = gateway.stream(
+        messages,
+        TOOL_DEFINITIONS,
+        lambda _: None,
+        continuation=first.continuation,
+        tool_outputs=(("call-1", '{"ok":true}'),),
+    )
+
+    assert second == openai_client.FinalResponse("Done")
+    assert client.responses.create.calls == [
+        {
+            "model": "m",
+            "stream": True,
+            "input": [{"role": "user", "content": "Inspect"}],
+            "tools": list(TOOL_DEFINITIONS),
+        },
+        {
+            "model": "m",
+            "stream": True,
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": '{"ok":true}',
+            }],
+            "previous_response_id": "response-1",
+            "tools": list(TOOL_DEFINITIONS),
+        },
+    ]
+
+
+def test_chat_stream_continuation_adds_tool_messages_exactly_once() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStreamSequence(
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index=0,
+                    id="call-1",
+                    function=SimpleNamespace(
+                        name="read_file", arguments='{"path":"README.md"}'
+                    ),
+                )]),
+                finish_reason="tool_calls",
+            )]),
+        ),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="Done"), finish_reason="stop"
+            )]),
+        ),
+    )
+    gateway = openai_client.ModelGateway(
+        model="m", api_mode="chat_completions", client=client
+    )
+    messages = (Message("user", "Inspect"),)
+
+    first = gateway.stream(messages, TOOL_DEFINITIONS, lambda _: None)
+    assert isinstance(first, openai_client.ToolCallResponse)
+    second = gateway.stream(
+        messages,
+        TOOL_DEFINITIONS,
+        lambda _: None,
+        continuation=first.continuation,
+        tool_outputs=(("call-1", '{"ok":true}'),),
+    )
+
+    assert second == openai_client.FinalResponse("Done")
+    tool_definition = {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file.",
+            "parameters": FakeTool.parameters,
+        },
+    }
+    assert client.chat.completions.create.calls == [
+        {
+            "model": "m",
+            "messages": [{"role": "user", "content": "Inspect"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "tools": [tool_definition],
+        },
+        {
+            "model": "m",
+            "messages": [
+                {"role": "user", "content": "Inspect"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-1",
+                    "content": '{"ok":true}',
+                },
+            ],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "tools": [tool_definition],
+        },
+    ]
 
 
 def test_gateway_normalizes_chat_usage() -> None:
@@ -1328,3 +1908,13 @@ class FakeStream:
     def __call__(self, **kwargs: Any) -> tuple[SimpleNamespace, ...]:
         self.calls.append(kwargs)
         return self.events
+
+
+class FakeStreamSequence:
+    def __init__(self, *streams: tuple[SimpleNamespace, ...]) -> None:
+        self.streams = iter(streams)
+        self.calls: list[dict[str, Any]] = []
+
+    def __call__(self, **kwargs: Any) -> tuple[SimpleNamespace, ...]:
+        self.calls.append(kwargs)
+        return next(self.streams)

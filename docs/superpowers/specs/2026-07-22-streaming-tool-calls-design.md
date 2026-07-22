@@ -33,14 +33,26 @@ name fragments and argument fragments in arrival order, and validates the comple
 fields with the existing `ToolCall` normalization rules. Parallel calls preserve
 ascending index order. If calls are present, the method returns
 `ToolCallResponse(calls, ChatContinuation(...), usage)`; otherwise it returns the
-aggregated final text.
+aggregated final text. Streaming requests set
+`stream_options={"include_usage": True}` and normalize usage from any chunk,
+including an empty-choice final chunk. Repeated usage is accepted only when values
+agree. A tool-call stream is executable only after one consistent terminal
+`finish_reason` of `tool_calls`; a text stream requires `stop`. Missing, conflicting,
+truncated, filtered, or legacy function-call terminal reasons are unsupported.
 
 For Responses, `_stream_response()` records the response ID from response lifecycle
 events and collects completed `function_call` output items. It accepts providers
 that expose the completed item through `response.output_item.done`, while retaining
-the initial item metadata needed to associate deltas. Once the stream completes, it
-returns `ToolCallResponse(calls, ResponsesContinuation(response_id), usage)` when
-calls exist, or the aggregated final text otherwise.
+the initial item metadata needed to associate deltas. It maintains both
+`output_index -> item_id` and `item_id -> output_index` identity maps and rejects
+changes or reuse in either direction. Every accumulated function-call index must
+receive exactly one valid done event. Duplicate done events and partial calls are
+never executable. Only `response.completed` is a successful terminal lifecycle
+event; failed, incomplete, explicit error, missing, or conflicting terminal states
+are unsupported. After valid completion, the method returns
+`ToolCallResponse(calls, ResponsesContinuation(response_id), usage)` when calls
+exist, or the aggregated final text otherwise. Parallel calls preserve ascending
+output-index order.
 
 Malformed, incomplete, or mismatched stream data raises the existing unsupported
 response `RuntimeError`; it never triggers an automatic second model request.
@@ -76,8 +88,12 @@ Offline tests use fake SDK events and cover:
 
 - Chat tool-call fields split across multiple chunks.
 - Multiple parallel Chat tool calls interleaved by index.
+- Chat terminal-state validation and final empty-choice usage chunks.
 - Responses function-call completion and response ID capture.
+- Responses terminal lifecycle, reverse identity, and duplicate completion checks.
 - Malformed or incomplete streamed tool calls.
+- Real second streamed requests for both provider modes, proving continuation data
+  is included exactly once without replaying message history.
 - A streamed Agent tool loop that executes tools and continues streaming without
   calling the non-streaming gateway.
 - Model and tool trace spans on success and failure.
@@ -85,3 +101,6 @@ Offline tests use fake SDK events and cover:
 
 Verification runs the focused OpenAI and Agent tests first, then the complete
 `uv run pytest` suite and CLI help smoke checks.
+
+These terminal-state, usage, identity, and completion rules are mandatory final
+review corrections to the approved design, not optional follow-up work.

@@ -224,6 +224,9 @@ class ModelGateway:
         usage: TokenUsage | None = None
         tool_call_parts: dict[int, _StreamedToolCall] = {}
         item_ids: dict[int, str] = {}
+        item_indexes: dict[str, int] = {}
+        completed_indexes: set[int] = set()
+        terminal_event: str | None = None
         for event in self.client.responses.create(**request):
             event_type = getattr(event, "type", None)
             if event_type == "response.output_text.delta":
@@ -233,7 +236,7 @@ class ModelGateway:
                 if delta:
                     chunks.append(delta)
                     on_text(delta)
-            elif event_type in {"response.created", "response.completed"}:
+            elif event_type == "response.created":
                 response = getattr(event, "response", None)
                 if response is not None:
                     event_response_id = getattr(response, "id", None)
@@ -245,20 +248,47 @@ class ModelGateway:
                     if response_id is not None and response_id != event_response_id:
                         raise _unsupported_response()
                     response_id = event_response_id
-                if event_type == "response.completed":
-                    usage = _response_usage(response, "input_tokens", "output_tokens")
+            elif event_type == "response.completed":
+                if terminal_event is not None:
+                    raise _unsupported_response()
+                terminal_event = event_type
+                response = getattr(event, "response", None)
+                if response is not None:
+                    event_response_id = getattr(response, "id", None)
+                    if (
+                        not isinstance(event_response_id, str)
+                        or not event_response_id.strip()
+                    ):
+                        raise _unsupported_response()
+                    if response_id is not None and response_id != event_response_id:
+                        raise _unsupported_response()
+                    response_id = event_response_id
+                usage = _response_usage(response, "input_tokens", "output_tokens")
+            elif event_type in {
+                "response.failed",
+                "response.incomplete",
+                "error",
+                "response.error",
+            }:
+                raise _unsupported_response()
             elif event_type == "response.output_item.added":
                 item = getattr(event, "item", None)
                 if getattr(item, "type", None) == "function_call":
                     output_index = _stream_output_index(event)
+                    if output_index in completed_indexes:
+                        raise _unsupported_response()
                     item_id = _stream_item_id(item)
-                    _merge_stream_item_id(item_ids, output_index, item_id)
+                    _merge_stream_item_id(
+                        item_ids, item_indexes, output_index, item_id
+                    )
                     part = tool_call_parts.setdefault(
                         output_index, _StreamedToolCall()
                     )
                     _merge_responses_tool_metadata(part, item)
             elif event_type == "response.function_call_arguments.delta":
                 output_index = _stream_output_index(event)
+                if output_index in completed_indexes:
+                    raise _unsupported_response()
                 item_id = getattr(event, "item_id", None)
                 expected_item_id = item_ids.get(output_index)
                 if (
@@ -278,8 +308,12 @@ class ModelGateway:
                 item = getattr(event, "item", None)
                 if getattr(item, "type", None) == "function_call":
                     output_index = _stream_output_index(event)
+                    if output_index in completed_indexes:
+                        raise _unsupported_response()
                     item_id = _stream_item_id(item)
-                    _merge_stream_item_id(item_ids, output_index, item_id)
+                    _merge_stream_item_id(
+                        item_ids, item_indexes, output_index, item_id
+                    )
                     call_id = getattr(item, "call_id", None)
                     name = getattr(item, "name", None)
                     arguments = getattr(item, "arguments", None)
@@ -296,6 +330,11 @@ class ModelGateway:
                     )
                     _merge_responses_tool_metadata(part, item)
                     part.final_arguments = arguments
+                    completed_indexes.add(output_index)
+        if terminal_event != "response.completed":
+            raise _unsupported_response()
+        if set(tool_call_parts) != completed_indexes:
+            raise _unsupported_response()
         calls = tuple(
             _tool_call(
                 part.call_id,
@@ -340,6 +379,7 @@ class ModelGateway:
             "model": self.model,
             "messages": request_messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             request["tools"] = [{
@@ -352,10 +392,29 @@ class ModelGateway:
             } for tool in tools]
 
         chunks: list[str] = []
+        usage: TokenUsage | None = None
+        terminal_reason: str | None = None
         tool_call_parts: dict[int, _StreamedToolCall] = {}
         for event in self.client.chat.completions.create(**request):
+            event_usage = _response_usage(
+                event, "prompt_tokens", "completion_tokens"
+            )
+            if event_usage is not None:
+                if usage is not None and usage != event_usage:
+                    raise _unsupported_response()
+                usage = event_usage
             choices = _sdk_sequence(getattr(event, "choices", ()))
             for choice in choices:
+                finish_reason = getattr(choice, "finish_reason", None)
+                if finish_reason is not None:
+                    if not isinstance(finish_reason, str):
+                        raise _unsupported_response()
+                    if (
+                        terminal_reason is not None
+                        and terminal_reason != finish_reason
+                    ):
+                        raise _unsupported_response()
+                    terminal_reason = finish_reason
                 delta = getattr(choice, "delta", None)
                 tool_calls = _sdk_sequence(
                     getattr(delta, "tool_calls", None), allow_none=True
@@ -378,6 +437,9 @@ class ModelGateway:
                 if content:
                     chunks.append(content)
                     on_text(content)
+        expected_reason = "tool_calls" if tool_call_parts else "stop"
+        if terminal_reason != expected_reason:
+            raise _unsupported_response()
         calls = tuple(
             _tool_call(
                 part.call_id,
@@ -389,8 +451,10 @@ class ModelGateway:
         if calls:
             history = tuple(request_messages[len(_message_dicts(messages)):])
             content = "".join(chunks) or None
-            return ToolCallResponse(calls, ChatContinuation(calls, content, history))
-        return _final_response("".join(chunks))
+            return ToolCallResponse(
+                calls, ChatContinuation(calls, content, history), usage
+            )
+        return _final_response("".join(chunks), usage)
 
 
 def _message_dicts(messages: Sequence[Message]) -> list[dict[str, str]]:
@@ -454,10 +518,16 @@ def _stream_item_id(item: object) -> str:
 
 
 def _merge_stream_item_id(
-    item_ids: dict[int, str], output_index: int, item_id: str
+    item_ids: dict[int, str],
+    item_indexes: dict[str, int],
+    output_index: int,
+    item_id: str,
 ) -> None:
     existing_item_id = item_ids.setdefault(output_index, item_id)
     if existing_item_id != item_id:
+        raise _unsupported_response()
+    existing_output_index = item_indexes.setdefault(item_id, output_index)
+    if existing_output_index != output_index:
         raise _unsupported_response()
 
 

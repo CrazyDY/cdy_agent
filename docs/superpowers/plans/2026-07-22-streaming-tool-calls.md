@@ -634,3 +634,27 @@ Only when Step 1 required an additional CLI regression fix:
 git add -- src/cdy_agent/cli.py tests/test_cli.py
 git commit -m "Preserve CLI streaming behavior"
 ```
+
+## Final Review Corrections (Required)
+
+These corrections are part of the approved implementation and supersede any
+earlier plan language that allowed a stream to be normalized from accumulated
+data without a validated terminal state. They are not optional follow-up work.
+
+- [x] Chat streaming requests include usage and normalize the final empty-choice
+  usage chunk through `_response_usage`, rejecting conflicting duplicate values.
+- [x] Chat tool calls require a consistent terminal `finish_reason` of
+  `tool_calls`; text requires `stop`. Missing, conflicting, `length`,
+  `content_filter`, and legacy `function_call` terminals are rejected.
+- [x] Responses text and tool calls require `response.completed`; failed,
+  incomplete, explicit error, missing, and conflicting terminal lifecycle states
+  are rejected.
+- [x] Responses tracks identity in both directions, requires exactly one valid
+  `response.output_item.done` per accumulated function-call index, rejects every
+  duplicate done event, and returns parallel calls in ascending output-index order.
+- [x] Offline tests make real second `ModelGateway.stream()` calls and assert that
+  Responses sends only function-call outputs plus `previous_response_id`, while
+  Chat sends assistant tool calls and tool-result messages exactly once.
+
+Final verification remains the focused gateway and Agent suites, the full pytest
+suite, both CLI help commands, and `git diff --check` before one correction commit.
