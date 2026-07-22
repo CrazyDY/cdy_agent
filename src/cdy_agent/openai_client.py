@@ -224,6 +224,10 @@ class ModelGateway:
             request["tools"] = list(tools)
 
         chunks: list[str] = []
+        response_id: str | None = None
+        usage: TokenUsage | None = None
+        tool_call_parts: dict[int, _StreamedToolCall] = {}
+        item_ids: dict[int, str] = {}
         for event in self.client.responses.create(**request):
             event_type = getattr(event, "type", None)
             if event_type == "response.output_text.delta":
@@ -233,13 +237,72 @@ class ModelGateway:
                 if delta:
                     chunks.append(delta)
                     on_text(delta)
+            elif event_type in {"response.created", "response.completed"}:
+                response = getattr(event, "response", None)
+                if response is not None:
+                    event_response_id = getattr(response, "id", None)
+                    if (
+                        not isinstance(event_response_id, str)
+                        or not event_response_id.strip()
+                    ):
+                        raise _unsupported_response()
+                    if response_id is not None and response_id != event_response_id:
+                        raise _unsupported_response()
+                    response_id = event_response_id
+                if event_type == "response.completed":
+                    usage = _response_usage(response, "input_tokens", "output_tokens")
             elif event_type == "response.output_item.added":
                 item = getattr(event, "item", None)
                 if getattr(item, "type", None) == "function_call":
-                    raise StreamingToolCallUnsupported(
-                        "Streaming tool calls are not supported."
+                    output_index = _stream_output_index(event)
+                    item_id = _stream_item_id(item)
+                    _merge_stream_item_id(item_ids, output_index, item_id)
+                    part = tool_call_parts.setdefault(
+                        output_index, _StreamedToolCall()
                     )
-        return _final_response("".join(chunks))
+                    _merge_responses_tool_metadata(part, item)
+            elif event_type == "response.function_call_arguments.delta":
+                output_index = _stream_output_index(event)
+                item_id = getattr(event, "item_id", None)
+                if item_ids.get(output_index) != item_id:
+                    raise _unsupported_response()
+                delta = getattr(event, "delta", None)
+                if not isinstance(delta, str):
+                    raise _unsupported_response()
+                tool_call_parts.setdefault(
+                    output_index, _StreamedToolCall()
+                ).argument_parts.append(delta)
+            elif event_type == "response.output_item.done":
+                item = getattr(event, "item", None)
+                if getattr(item, "type", None) == "function_call":
+                    output_index = _stream_output_index(event)
+                    item_id = _stream_item_id(item)
+                    _merge_stream_item_id(item_ids, output_index, item_id)
+                    arguments = getattr(item, "arguments", None)
+                    if not isinstance(arguments, str):
+                        raise _unsupported_response()
+                    part = tool_call_parts.setdefault(
+                        output_index, _StreamedToolCall()
+                    )
+                    _merge_responses_tool_metadata(part, item)
+                    part.final_arguments = arguments
+        calls = tuple(
+            _tool_call(
+                part.call_id,
+                "".join(part.name_parts),
+                part.final_arguments
+                if part.final_arguments is not None
+                else "".join(part.argument_parts),
+            )
+            for _, part in sorted(tool_call_parts.items())
+        )
+        if calls:
+            if response_id is None:
+                raise _unsupported_response()
+            return ToolCallResponse(
+                calls, ResponsesContinuation(response_id), usage
+            )
+        return _final_response("".join(chunks), usage)
 
     def _stream_chat_completion(
         self,
@@ -360,6 +423,51 @@ def _merge_chat_tool_delta(
         if not isinstance(arguments, str):
             raise _unsupported_response()
         part.argument_parts.append(arguments)
+
+
+def _stream_output_index(event: object) -> int:
+    output_index = getattr(event, "output_index", None)
+    if (
+        not isinstance(output_index, int)
+        or isinstance(output_index, bool)
+        or output_index < 0
+    ):
+        raise _unsupported_response()
+    return output_index
+
+
+def _stream_item_id(item: object) -> str:
+    item_id = getattr(item, "id", None)
+    if not isinstance(item_id, str) or not item_id.strip():
+        raise _unsupported_response()
+    return item_id
+
+
+def _merge_stream_item_id(
+    item_ids: dict[int, str], output_index: int, item_id: str
+) -> None:
+    existing_item_id = item_ids.setdefault(output_index, item_id)
+    if existing_item_id != item_id:
+        raise _unsupported_response()
+
+
+def _merge_responses_tool_metadata(part: _StreamedToolCall, item: object) -> None:
+    call_id = getattr(item, "call_id", None)
+    if call_id is not None:
+        if not isinstance(call_id, str) or not call_id.strip():
+            raise _unsupported_response()
+        if part.call_id is not None and part.call_id != call_id:
+            raise _unsupported_response()
+        part.call_id = call_id
+
+    name = getattr(item, "name", None)
+    if name is not None:
+        if not isinstance(name, str) or not name.strip():
+            raise _unsupported_response()
+        if part.name_parts and "".join(part.name_parts) != name:
+            raise _unsupported_response()
+        if not part.name_parts:
+            part.name_parts.append(name)
 
 
 def _tool_call(call_id: object, name: object, arguments: object) -> ToolCall:
