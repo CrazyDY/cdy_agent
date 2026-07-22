@@ -664,4 +664,5 @@ data without a validated terminal state. They are not optional follow-up work.
   Chat sends assistant tool calls and tool-result messages exactly once.
 
 Final verification remains the focused gateway and Agent suites, the full pytest
-suite, both CLI help commands, and `git diff --check` before one correction commit.
+suite, both CLI help commands, and `git diff --check`. The final-review corrections
+are recorded in two focused correction commits.
