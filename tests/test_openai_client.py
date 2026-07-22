@@ -474,6 +474,85 @@ def test_chat_gateway_rejects_conflicting_streamed_usage() -> None:
         ).stream((Message("user", "Hello"),), (), lambda _: None)
 
 
+@pytest.mark.parametrize(
+    "later_choice",
+    [
+        SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                index=0,
+                id=None,
+                function=SimpleNamespace(name=None, arguments="late"),
+            )]),
+            finish_reason=None,
+        ),
+        SimpleNamespace(
+            delta=SimpleNamespace(content="late"), finish_reason=None
+        ),
+    ],
+)
+def test_chat_gateway_rejects_deltas_after_tool_calls_terminal(
+    later_choice: SimpleNamespace,
+) -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                index=0,
+                id="call-1",
+                function=SimpleNamespace(name="read_file", arguments="{}"),
+            )]),
+            finish_reason="tool_calls",
+        )]),
+        SimpleNamespace(choices=[later_choice]),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="chat_completions", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+def test_chat_gateway_rejects_empty_chunk_without_usage_after_terminal() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(content="done"), finish_reason="stop"
+        )]),
+        SimpleNamespace(choices=[], usage=None),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="chat_completions", client=client
+        ).stream((Message("user", "Hello"),), (), lambda _: None)
+
+
+def test_chat_gateway_rejects_call_id_reused_across_indexes() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(SimpleNamespace(
+        choices=[SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[
+                SimpleNamespace(
+                    index=0,
+                    id="call-shared",
+                    function=SimpleNamespace(name="read_file", arguments="{}"),
+                ),
+                SimpleNamespace(
+                    index=1,
+                    id="call-shared",
+                    function=SimpleNamespace(name="read_file", arguments="{}"),
+                ),
+            ]),
+            finish_reason="tool_calls",
+        )],
+    ))
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="chat_completions", client=client
+        ).stream((Message("user", "Read files"),), TOOL_DEFINITIONS, lambda _: None)
+
+
 def test_responses_gateway_aggregates_streamed_function_call() -> None:
     client = FakeClient()
     client.responses.create = FakeStream(
@@ -652,6 +731,44 @@ def test_responses_gateway_rejects_conflicting_terminal_events() -> None:
         ).stream((Message("user", "Hello"),), (), lambda _: None)
 
 
+@pytest.mark.parametrize(
+    "later_event",
+    [
+        SimpleNamespace(type="response.output_text.delta", delta="late"),
+        SimpleNamespace(
+            type="response.output_item.done",
+            output_index=0,
+            item=SimpleNamespace(
+                id="item-1",
+                type="function_call",
+                call_id="call-1",
+                name="read_file",
+                arguments="{}",
+            ),
+        ),
+    ],
+)
+def test_responses_gateway_rejects_events_after_completed(
+    later_event: SimpleNamespace,
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(type="response.output_text.delta", delta="done"),
+        SimpleNamespace(
+            type="response.completed", response=SimpleNamespace(id="response-1")
+        ),
+        later_event,
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Hello"),), TOOL_DEFINITIONS, lambda _: None)
+
+
 def test_responses_gateway_rejects_item_id_reused_at_two_indexes() -> None:
     client = FakeClient()
     client.responses.create = FakeStream(
@@ -682,6 +799,51 @@ def test_responses_gateway_rejects_item_id_reused_at_two_indexes() -> None:
                     call_id=f"call-{index}",
                     name="read_file",
                     arguments=f'{{"path":"{index}"}}',
+                ),
+            )
+            for index in (0, 1)
+        ),
+        SimpleNamespace(
+            type="response.completed", response=SimpleNamespace(id="response-1")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Read files"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+def test_responses_gateway_rejects_call_id_reused_across_indexes() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        *(
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=index,
+                item=SimpleNamespace(
+                    id=f"item-{index}",
+                    type="function_call",
+                    call_id="call-shared",
+                    name="read_file",
+                    arguments="",
+                ),
+            )
+            for index in (0, 1)
+        ),
+        *(
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=index,
+                item=SimpleNamespace(
+                    id=f"item-{index}",
+                    type="function_call",
+                    call_id="call-shared",
+                    name="read_file",
+                    arguments="{}",
                 ),
             )
             for index in (0, 1)

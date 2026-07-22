@@ -39,6 +39,9 @@ including an empty-choice final chunk. Repeated usage is accepted only when valu
 agree. A tool-call stream is executable only after one consistent terminal
 `finish_reason` of `tool_calls`; a text stream requires `stop`. Missing, conflicting,
 truncated, filtered, or legacy function-call terminal reasons are unsupported.
+Once a terminal reason is observed, it is latched: every later chunk is rejected
+except one empty-choice chunk carrying valid, non-conflicting usage. Call IDs are
+owned by their tool-call index and cannot be reused by another parallel call.
 
 For Responses, `_stream_response()` records the response ID from response lifecycle
 events and collects completed `function_call` output items. It accepts providers
@@ -49,10 +52,12 @@ changes or reuse in either direction. Every accumulated function-call index must
 receive exactly one valid done event. Duplicate done events and partial calls are
 never executable. Only `response.completed` is a successful terminal lifecycle
 event; failed, incomplete, explicit error, missing, or conflicting terminal states
-are unsupported. After valid completion, the method returns
-`ToolCallResponse(calls, ResponsesContinuation(response_id), usage)` when calls
-exist, or the aggregated final text otherwise. Parallel calls preserve ascending
-output-index order.
+are unsupported. Every terminal lifecycle event latches the stream, so any later
+provider event is malformed. Function call IDs are also owned by output index and
+cannot be reused across distinct parallel items. After valid completion, the method
+returns `ToolCallResponse(calls, ResponsesContinuation(response_id), usage)` when
+calls exist, or the aggregated final text otherwise. Parallel calls preserve
+ascending output-index order.
 
 Malformed, incomplete, or mismatched stream data raises the existing unsupported
 response `RuntimeError`; it never triggers an automatic second model request.
@@ -89,8 +94,10 @@ Offline tests use fake SDK events and cover:
 - Chat tool-call fields split across multiple chunks.
 - Multiple parallel Chat tool calls interleaved by index.
 - Chat terminal-state validation and final empty-choice usage chunks.
+- Terminal latching after Chat finish reasons and Responses lifecycle events.
 - Responses function-call completion and response ID capture.
 - Responses terminal lifecycle, reverse identity, and duplicate completion checks.
+- Cross-index call-ID uniqueness with valid distinct-ID parallel calls preserved.
 - Malformed or incomplete streamed tool calls.
 - Real second streamed requests for both provider modes, proving continuation data
   is included exactly once without replaying message history.

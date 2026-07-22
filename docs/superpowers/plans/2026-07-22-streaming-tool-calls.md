@@ -646,12 +646,19 @@ data without a validated terminal state. They are not optional follow-up work.
 - [x] Chat tool calls require a consistent terminal `finish_reason` of
   `tool_calls`; text requires `stop`. Missing, conflicting, `length`,
   `content_filter`, and legacy `function_call` terminals are rejected.
+- [x] A Chat terminal reason latches the stream. Later non-empty choices and
+  deltas are rejected; only one trailing empty-choice chunk with valid,
+  non-conflicting usage is accepted.
 - [x] Responses text and tool calls require `response.completed`; failed,
   incomplete, explicit error, missing, and conflicting terminal lifecycle states
   are rejected.
+- [x] Every Responses terminal lifecycle event latches the stream, and every
+  subsequent provider event is rejected.
 - [x] Responses tracks identity in both directions, requires exactly one valid
   `response.output_item.done` per accumulated function-call index, rejects every
   duplicate done event, and returns parallel calls in ascending output-index order.
+- [x] Responses and Chat assign each non-empty call ID to one output/tool-call
+  index and reject reuse by another parallel call while preserving distinct IDs.
 - [x] Offline tests make real second `ModelGateway.stream()` calls and assert that
   Responses sends only function-call outputs plus `previous_response_id`, while
   Chat sends assistant tool calls and tool-result messages exactly once.

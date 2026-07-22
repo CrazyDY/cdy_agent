@@ -225,10 +225,13 @@ class ModelGateway:
         tool_call_parts: dict[int, _StreamedToolCall] = {}
         item_ids: dict[int, str] = {}
         item_indexes: dict[str, int] = {}
+        call_indexes: dict[str, int] = {}
         completed_indexes: set[int] = set()
         terminal_event: str | None = None
         for event in self.client.responses.create(**request):
             event_type = getattr(event, "type", None)
+            if terminal_event is not None:
+                raise _unsupported_response()
             if event_type == "response.output_text.delta":
                 delta = getattr(event, "delta", None)
                 if not isinstance(delta, str):
@@ -281,6 +284,11 @@ class ModelGateway:
                     _merge_stream_item_id(
                         item_ids, item_indexes, output_index, item_id
                     )
+                    _claim_stream_call_id(
+                        call_indexes,
+                        output_index,
+                        getattr(item, "call_id", None),
+                    )
                     part = tool_call_parts.setdefault(
                         output_index, _StreamedToolCall()
                     )
@@ -313,6 +321,11 @@ class ModelGateway:
                     item_id = _stream_item_id(item)
                     _merge_stream_item_id(
                         item_ids, item_indexes, output_index, item_id
+                    )
+                    _claim_stream_call_id(
+                        call_indexes,
+                        output_index,
+                        getattr(item, "call_id", None),
                     )
                     call_id = getattr(item, "call_id", None)
                     name = getattr(item, "name", None)
@@ -394,27 +407,38 @@ class ModelGateway:
         chunks: list[str] = []
         usage: TokenUsage | None = None
         terminal_reason: str | None = None
+        trailing_usage_seen = False
         tool_call_parts: dict[int, _StreamedToolCall] = {}
+        call_indexes: dict[str, int] = {}
         for event in self.client.chat.completions.create(**request):
+            choices = _sdk_sequence(getattr(event, "choices", ()))
             event_usage = _response_usage(
                 event, "prompt_tokens", "completion_tokens"
             )
+            if terminal_reason is not None:
+                if choices or event_usage is None or trailing_usage_seen:
+                    raise _unsupported_response()
+                if usage is not None and usage != event_usage:
+                    raise _unsupported_response()
+                usage = event_usage
+                trailing_usage_seen = True
+                continue
             if event_usage is not None:
                 if usage is not None and usage != event_usage:
                     raise _unsupported_response()
                 usage = event_usage
-            choices = _sdk_sequence(getattr(event, "choices", ()))
+            event_terminal_reason: str | None = None
             for choice in choices:
                 finish_reason = getattr(choice, "finish_reason", None)
                 if finish_reason is not None:
                     if not isinstance(finish_reason, str):
                         raise _unsupported_response()
                     if (
-                        terminal_reason is not None
-                        and terminal_reason != finish_reason
+                        event_terminal_reason is not None
+                        and event_terminal_reason != finish_reason
                     ):
                         raise _unsupported_response()
-                    terminal_reason = finish_reason
+                    event_terminal_reason = finish_reason
                 delta = getattr(choice, "delta", None)
                 tool_calls = _sdk_sequence(
                     getattr(delta, "tool_calls", None), allow_none=True
@@ -429,6 +453,7 @@ class ModelGateway:
                         raise _unsupported_response()
                     part = tool_call_parts.setdefault(index, _StreamedToolCall())
                     _merge_chat_tool_delta(part, tool_delta)
+                    _claim_stream_call_id(call_indexes, index, part.call_id)
                 content = getattr(delta, "content", None)
                 if content is None:
                     continue
@@ -437,6 +462,8 @@ class ModelGateway:
                 if content:
                     chunks.append(content)
                     on_text(content)
+            if event_terminal_reason is not None:
+                terminal_reason = event_terminal_reason
         expected_reason = "tool_calls" if tool_call_parts else "stop"
         if terminal_reason != expected_reason:
             raise _unsupported_response()
@@ -527,6 +554,18 @@ def _merge_stream_item_id(
     if existing_item_id != item_id:
         raise _unsupported_response()
     existing_output_index = item_indexes.setdefault(item_id, output_index)
+    if existing_output_index != output_index:
+        raise _unsupported_response()
+
+
+def _claim_stream_call_id(
+    call_indexes: dict[str, int], output_index: int, call_id: object
+) -> None:
+    if call_id is None:
+        return
+    if not isinstance(call_id, str) or not call_id.strip():
+        raise _unsupported_response()
+    existing_output_index = call_indexes.setdefault(call_id, output_index)
     if existing_output_index != output_index:
         raise _unsupported_response()
 
