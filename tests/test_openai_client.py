@@ -135,6 +135,182 @@ def test_chat_gateway_streams_text_deltas() -> None:
     ]
 
 
+def test_chat_gateway_aggregates_streamed_tool_call_deltas() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(content=None, tool_calls=[SimpleNamespace(
+                index=0,
+                id="call-1",
+                function=SimpleNamespace(name="read_", arguments='{"pa'),
+            )]),
+            finish_reason=None,
+        )]),
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(content=None, tool_calls=[SimpleNamespace(
+                index=0,
+                id=None,
+                function=SimpleNamespace(name="file", arguments='th":"a"}'),
+            )]),
+            finish_reason="tool_calls",
+        )]),
+    )
+    chunks: list[str] = []
+
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="chat_completions", client=client
+    ).stream((Message("user", "Read a"),), TOOL_DEFINITIONS, chunks.append)
+
+    calls = (ToolCall("call-1", "read_file", '{"path":"a"}'),)
+    assert outcome == openai_client.ToolCallResponse(
+        calls,
+        openai_client.ChatContinuation(calls, None, ()),
+    )
+    assert chunks == []
+
+
+def test_chat_gateway_orders_interleaved_streamed_tool_calls_by_index() -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                index=1,
+                id="call-2",
+                function=SimpleNamespace(name="read_", arguments='{"path":"'),
+            )]),
+            finish_reason=None,
+        )]),
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                index=0,
+                id="call-1",
+                function=SimpleNamespace(name="read_", arguments='{"path":"'),
+            )]),
+            finish_reason=None,
+        )]),
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                index=1,
+                id=None,
+                function=SimpleNamespace(name="file", arguments='b"}'),
+            )]),
+            finish_reason=None,
+        )]),
+        SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                index=0,
+                id=None,
+                function=SimpleNamespace(name="file", arguments='a"}'),
+            )]),
+            finish_reason="tool_calls",
+        )]),
+    )
+
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="chat_completions", client=client
+    ).stream((Message("user", "Read files"),), TOOL_DEFINITIONS, lambda _: None)
+
+    assert outcome == openai_client.ToolCallResponse(
+        (
+            ToolCall("call-1", "read_file", '{"path":"a"}'),
+            ToolCall("call-2", "read_file", '{"path":"b"}'),
+        ),
+        openai_client.ChatContinuation(
+            (
+                ToolCall("call-1", "read_file", '{"path":"a"}'),
+                ToolCall("call-2", "read_file", '{"path":"b"}'),
+            ),
+            None,
+            (),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index=-1,
+                    id="call-1",
+                    function=SimpleNamespace(name="read_file", arguments="{}"),
+                )]),
+                finish_reason="tool_calls",
+            )]),
+        ),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index="0",
+                    id="call-1",
+                    function=SimpleNamespace(name="read_file", arguments="{}"),
+                )]),
+                finish_reason="tool_calls",
+            )]),
+        ),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index=0,
+                    id="call-1",
+                    function=SimpleNamespace(name="read_file", arguments="{"),
+                )]),
+                finish_reason=None,
+            )]),
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index=0,
+                    id="call-2",
+                    function=SimpleNamespace(name=None, arguments="}"),
+                )]),
+                finish_reason="tool_calls",
+            )]),
+        ),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index=0,
+                    id=None,
+                    function=SimpleNamespace(name="read_file", arguments="{}"),
+                )]),
+                finish_reason="tool_calls",
+            )]),
+        ),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index=0,
+                    id="call-1",
+                    function=SimpleNamespace(name=None, arguments="{}"),
+                )]),
+                finish_reason="tool_calls",
+            )]),
+        ),
+        (
+            SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(tool_calls=[SimpleNamespace(
+                    index=0,
+                    id="call-1",
+                    function=SimpleNamespace(name="read_file", arguments=42),
+                )]),
+                finish_reason="tool_calls",
+            )]),
+        ),
+    ],
+)
+def test_chat_gateway_rejects_malformed_streamed_tool_call_completion(
+    events: tuple[SimpleNamespace, ...],
+) -> None:
+    client = FakeClient()
+    client.chat.completions.create = FakeStream(*events)
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="chat_completions", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+
 def test_gateway_reports_streaming_tool_call_as_unsupported() -> None:
     client = FakeClient()
     client.responses.create = FakeStream(

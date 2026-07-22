@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from openai import OpenAI
@@ -38,6 +38,14 @@ class ChatContinuation:
     calls: tuple[ToolCall, ...]
     content: str | None = None
     history: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass
+class _StreamedToolCall:
+    call_id: str | None = None
+    name_parts: list[str] = field(default_factory=list)
+    argument_parts: list[str] = field(default_factory=list)
+    final_arguments: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,7 +99,7 @@ class ModelGateway:
         on_text: Callable[[str], None],
         continuation: Continuation | None = None,
         tool_outputs: Sequence[tuple[str, str]] = (),
-    ) -> FinalResponse:
+    ) -> ModelResponse:
         if self.api_mode == "responses":
             return self._stream_response(
                 messages, tools, on_text, continuation, tool_outputs
@@ -200,7 +208,7 @@ class ModelGateway:
         on_text: Callable[[str], None],
         continuation: Continuation | None,
         tool_outputs: Sequence[tuple[str, str]],
-    ) -> FinalResponse:
+    ) -> ModelResponse:
         request: dict[str, Any] = {"model": self.model, "stream": True}
         if continuation is None:
             request["input"] = _message_dicts(messages)
@@ -240,7 +248,7 @@ class ModelGateway:
         on_text: Callable[[str], None],
         continuation: Continuation | None,
         tool_outputs: Sequence[tuple[str, str]],
-    ) -> FinalResponse:
+    ) -> ModelResponse:
         request_messages: list[dict[str, Any]] = _message_dicts(messages)
         if continuation is not None:
             if not isinstance(continuation, ChatContinuation):
@@ -271,6 +279,7 @@ class ModelGateway:
             } for tool in tools]
 
         chunks: list[str] = []
+        tool_call_parts: dict[int, _StreamedToolCall] = {}
         for event in self.client.chat.completions.create(**request):
             choices = _sdk_sequence(getattr(event, "choices", ()))
             for choice in choices:
@@ -278,10 +287,16 @@ class ModelGateway:
                 tool_calls = _sdk_sequence(
                     getattr(delta, "tool_calls", None), allow_none=True
                 )
-                if tool_calls:
-                    raise StreamingToolCallUnsupported(
-                        "Streaming tool calls are not supported."
-                    )
+                for tool_delta in tool_calls:
+                    index = getattr(tool_delta, "index", None)
+                    if (
+                        not isinstance(index, int)
+                        or isinstance(index, bool)
+                        or index < 0
+                    ):
+                        raise _unsupported_response()
+                    part = tool_call_parts.setdefault(index, _StreamedToolCall())
+                    _merge_chat_tool_delta(part, tool_delta)
                 content = getattr(delta, "content", None)
                 if content is None:
                     continue
@@ -290,6 +305,18 @@ class ModelGateway:
                 if content:
                     chunks.append(content)
                     on_text(content)
+        calls = tuple(
+            _tool_call(
+                part.call_id,
+                "".join(part.name_parts),
+                "".join(part.argument_parts),
+            )
+            for _, part in sorted(tool_call_parts.items())
+        )
+        if calls:
+            history = tuple(request_messages[len(_message_dicts(messages)):])
+            content = "".join(chunks) or None
+            return ToolCallResponse(calls, ChatContinuation(calls, content, history))
         return _final_response("".join(chunks))
 
 
@@ -303,6 +330,36 @@ def _sdk_sequence(value: object, *, allow_none: bool = False) -> Sequence[Any]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise RuntimeError("OpenAI returned an unsupported response.")
     return value
+
+
+def _unsupported_response() -> RuntimeError:
+    return RuntimeError("OpenAI returned an unsupported response.")
+
+
+def _merge_chat_tool_delta(
+    part: _StreamedToolCall, tool_delta: object
+) -> None:
+    call_id = getattr(tool_delta, "id", None)
+    if call_id is not None:
+        if not isinstance(call_id, str) or not call_id.strip():
+            raise _unsupported_response()
+        if part.call_id is not None and part.call_id != call_id:
+            raise _unsupported_response()
+        part.call_id = call_id
+
+    function = getattr(tool_delta, "function", None)
+    if function is None:
+        return
+    name = getattr(function, "name", None)
+    arguments = getattr(function, "arguments", None)
+    if name is not None:
+        if not isinstance(name, str):
+            raise _unsupported_response()
+        part.name_parts.append(name)
+    if arguments is not None:
+        if not isinstance(arguments, str):
+            raise _unsupported_response()
+        part.argument_parts.append(arguments)
 
 
 def _tool_call(call_id: object, name: object, arguments: object) -> ToolCall:
