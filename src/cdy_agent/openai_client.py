@@ -264,7 +264,13 @@ class ModelGateway:
             elif event_type == "response.function_call_arguments.delta":
                 output_index = _stream_output_index(event)
                 item_id = getattr(event, "item_id", None)
-                if item_ids.get(output_index) != item_id:
+                expected_item_id = item_ids.get(output_index)
+                if (
+                    expected_item_id is None
+                    or not isinstance(item_id, str)
+                    or not item_id.strip()
+                    or expected_item_id != item_id
+                ):
                     raise _unsupported_response()
                 delta = getattr(event, "delta", None)
                 if not isinstance(delta, str):
@@ -278,8 +284,16 @@ class ModelGateway:
                     output_index = _stream_output_index(event)
                     item_id = _stream_item_id(item)
                     _merge_stream_item_id(item_ids, output_index, item_id)
+                    call_id = getattr(item, "call_id", None)
+                    name = getattr(item, "name", None)
                     arguments = getattr(item, "arguments", None)
-                    if not isinstance(arguments, str):
+                    if (
+                        not isinstance(call_id, str)
+                        or not call_id.strip()
+                        or not isinstance(name, str)
+                        or not name.strip()
+                        or not isinstance(arguments, str)
+                    ):
                         raise _unsupported_response()
                     part = tool_call_parts.setdefault(
                         output_index, _StreamedToolCall()

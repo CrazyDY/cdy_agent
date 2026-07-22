@@ -339,7 +339,7 @@ def test_responses_gateway_aggregates_streamed_function_call() -> None:
             type="response.function_call_arguments.delta",
             item_id="item-1",
             output_index=0,
-            delta='"a"}',
+            delta='"delta"}',
         ),
         SimpleNamespace(
             type="response.output_item.done",
@@ -370,6 +370,92 @@ def test_responses_gateway_aggregates_streamed_function_call() -> None:
         openai_client.ResponsesContinuation("response-1"),
         TokenUsage(7, 3),
     )
+
+
+@pytest.mark.parametrize("missing_field", ["call_id", "name"])
+def test_responses_gateway_rejects_completed_item_missing_metadata(
+    missing_field: str,
+) -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(
+            type="response.output_item.added",
+            output_index=0,
+            item=SimpleNamespace(
+                id="item-1",
+                type="function_call",
+                call_id="call-1",
+                name="read_file",
+                arguments="",
+            ),
+        ),
+        SimpleNamespace(
+            type="response.output_item.done",
+            output_index=0,
+            item=SimpleNamespace(
+                id="item-1",
+                type="function_call",
+                **{
+                    field: value
+                    for field, value in {
+                        "call_id": "call-1",
+                        "name": "read_file",
+                        "arguments": "{}",
+                    }.items()
+                    if field != missing_field
+                },
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
+
+
+def test_responses_gateway_rejects_delta_before_function_call_item() -> None:
+    client = FakeClient()
+    client.responses.create = FakeStream(
+        SimpleNamespace(
+            type="response.created", response=SimpleNamespace(id="response-1")
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            output_index=0,
+            delta='{"path":"ignored"}',
+        ),
+        SimpleNamespace(
+            type="response.output_item.added",
+            output_index=0,
+            item=SimpleNamespace(
+                id="item-1",
+                type="function_call",
+                call_id="call-1",
+                name="read_file",
+                arguments="",
+            ),
+        ),
+        SimpleNamespace(
+            type="response.output_item.done",
+            output_index=0,
+            item=SimpleNamespace(
+                id="item-1",
+                type="function_call",
+                call_id="call-1",
+                name="read_file",
+                arguments="{}",
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"OpenAI returned an unsupported response\."):
+        openai_client.ModelGateway(
+            model="m", api_mode="responses", client=client
+        ).stream((Message("user", "Read a file"),), TOOL_DEFINITIONS, lambda _: None)
 
 
 @pytest.mark.parametrize(
