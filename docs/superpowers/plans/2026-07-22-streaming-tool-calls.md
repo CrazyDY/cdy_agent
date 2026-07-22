@@ -313,9 +313,9 @@ if calls:
 return _final_response("".join(chunks), usage)
 ```
 
-- [ ] **Step 5: Remove the obsolete exception type**
+- [ ] **Step 5: Keep the obsolete exception type until Task 3**
 
-Delete `StreamingToolCallUnsupported` from `src/cdy_agent/openai_client.py` after all gateway paths return normal `ModelResponse` values. Remove corresponding imports from tests; `agent.py` is updated in Task 3.
+Do not delete `StreamingToolCallUnsupported` yet because `agent.py` still imports it. Task 3 removes the type and import together, keeping every intermediate commit importable and testable.
 
 - [ ] **Step 6: Run all gateway tests and verify GREEN**
 
@@ -481,9 +481,9 @@ def test_streaming_agent_stops_at_model_call_limit() -> None:
     assert gateway.calls == []
 ```
 
-- [ ] **Step 4: Implement the bounded streaming tool loop**
+- [ ] **Step 4: Extract and reuse the bounded model/tool loop**
 
-Remove `StreamingToolCallUnsupported` from the imports. Replace `run_stream()` with:
+Remove `StreamingToolCallUnsupported` from the imports and delete the exception type from `openai_client.py`. Extract the existing model-span, tool-execution, continuation, and loop-limit logic from `run()` into a private `_run_loop(...)` method. `run()` invokes that helper with a closure around `gateway.create()`, while `run_stream()` invokes it with a closure around `gateway.stream(..., on_text=on_text)`. This prevents two verbatim copies of the recorder and tool-execution block. The method body below is the behavioral reference for the shared helper, not a requirement to duplicate it inside `run_stream()`:
 
 ```python
 def run_stream(
