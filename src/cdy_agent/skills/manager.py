@@ -1,32 +1,44 @@
 from __future__ import annotations
 
-import importlib.util
 import re
-import sys
 from pathlib import Path
-from uuid import uuid4
 
-from cdy_agent.tools.base import ConfirmationCallback, ConfirmationRequest, ToolResult
-from cdy_agent.tools.registry import ToolRegistry
+from cdy_agent.tools.base import ToolResult
 
-from .loader import InvalidSkillError, discover_skills, revalidate_tools_file
-from .models import DiscoveredSkill
+from .loader import (
+    InvalidSkillError,
+    discover_skills,
+    revalidate_resource,
+    revalidate_skill,
+)
+from .models import (
+    DiscoveredSkill,
+    ResourceCategory,
+    SkillMetadata,
+    SkillResource,
+)
 
 TOKEN_PATTERN = re.compile(r"[^\W_]+", re.IGNORECASE)
 MAX_KEYWORDS = 8
+RESOURCE_CATEGORIES = ("scripts", "references", "assets")
 
 
 class SkillManager:
     def __init__(
-        self, workspace: Path, registry: ToolRegistry, confirm: ConfirmationCallback
+        self,
+        workspace: Path,
+        _registry: object | None = None,
+        _confirm: object | None = None,
     ) -> None:
+        # Task 5 removes the two ignored compatibility arguments after the CLI
+        # switches to SkillManager(workspace).
         self.workspace = workspace.resolve()
-        self.registry = registry
-        self.confirm = confirm
         discovery = discover_skills(self.workspace)
-        self._skills = {skill.metadata.name: skill for skill in discovery.skills}
+        self._skills = {
+            skill.metadata.name: skill for skill in discovery.skills
+        }
         self._diagnostics = discovery.diagnostics
-        self._active: dict[str, tuple[str, ...]] = {}
+        self._active: set[str] = set()
 
     def list_skills(self) -> dict[str, object]:
         return {
@@ -35,7 +47,7 @@ class SkillManager:
                     "name": skill.metadata.name,
                     "description": skill.metadata.description,
                     "keywords": _keywords_for(skill),
-                    "has_tools": skill.has_tools,
+                    "resource_counts": _resource_counts(skill),
                     "active": skill.metadata.name in self._active,
                 }
                 for skill in self._skills.values()
@@ -54,7 +66,9 @@ class SkillManager:
 
         matches = []
         for skill in self._skills.values():
-            score, matched_terms, reason = _score_skill(skill, normalized_query, terms)
+            score, matched_terms, reason = _score_skill(
+                skill, normalized_query, terms
+            )
             if score <= 0:
                 continue
             matches.append(
@@ -64,7 +78,7 @@ class SkillManager:
                     "score": score,
                     "matched_terms": matched_terms,
                     "reason": reason,
-                    "has_tools": skill.has_tools,
+                    "resource_counts": _resource_counts(skill),
                     "active": skill.metadata.name in self._active,
                 }
             )
@@ -72,90 +86,141 @@ class SkillManager:
         return {"query": normalized_query, "matches": matches[:limit]}
 
     def activate(self, name: str) -> ToolResult:
-        skill = self._skills.get(name)
-        if skill is None:
-            if any(item.entry == name for item in self._diagnostics):
-                return ToolResult.failure("invalid_skill", f"Skill '{name}' is invalid.")
-            return ToolResult.failure("unknown_skill", f"Unknown Skill: {name}.")
+        skill = self._skill_or_failure(name)
+        if isinstance(skill, ToolResult):
+            return skill
         if name in self._active:
-            return self._success(skill, "already_active", self._active[name])
-        if skill.tools_path is None:
-            self._active[name] = ()
-            return self._success(skill, "activated", ())
-        return self._activate_tools(skill)
-
-    def _success(
-        self, skill: DiscoveredSkill, status: str, names: tuple[str, ...]
-    ) -> ToolResult:
-        return ToolResult.success(
-            {
-                "name": skill.metadata.name,
-                "status": status,
-                "instructions": skill.instructions,
-                "tools": list(names),
-            }
-        )
-
-    def _activate_tools(self, skill: DiscoveredSkill) -> ToolResult:
-        assert skill.tools_path is not None
+            return ToolResult.success(
+                _activation_payload(skill, "already_active")
+            )
         try:
-            revalidate_tools_file(skill, self.workspace)
+            revalidate_skill(skill, self.workspace)
         except (InvalidSkillError, OSError):
             return ToolResult.failure(
                 "invalid_skill",
                 f"Skill '{skill.metadata.name}' changed or is invalid.",
             )
-        request = ConfirmationRequest(
-            "activate_skill",
-            {"name": skill.metadata.name},
-            f"Run Skill '{skill.metadata.name}' Python code from {skill.tools_path} "
-            "with current user permissions.",
-        )
-        if not self.confirm(request):
+        self._active.add(name)
+        return ToolResult.success(_activation_payload(skill, "activated"))
+
+    def active_resources(
+        self,
+        name: str,
+        categories: tuple[ResourceCategory, ...],
+    ) -> tuple[SkillResource, ...] | ToolResult:
+        skill = self._skill_or_failure(name)
+        if isinstance(skill, ToolResult):
+            return skill
+        if name not in self._active:
             return ToolResult.failure(
-                "approval_denied", "User declined this Skill activation."
+                "skill_not_active", f"Skill '{name}' is not active."
+            )
+        return tuple(
+            resource
+            for resource in skill.resources
+            if resource.category in categories
+        )
+
+    def resolve_active_resource(
+        self,
+        name: str,
+        path: str,
+        categories: tuple[ResourceCategory, ...],
+    ) -> SkillResource | ToolResult:
+        skill = self._skill_or_failure(name)
+        if isinstance(skill, ToolResult):
+            return skill
+        if name not in self._active:
+            return ToolResult.failure(
+                "skill_not_active", f"Skill '{name}' is not active."
+            )
+        resource = next(
+            (
+                item
+                for item in skill.resources
+                if item.relative_path == path
+            ),
+            None,
+        )
+        if resource is None:
+            return ToolResult.failure(
+                "unknown_resource",
+                f"Unknown resource for Skill '{name}': {path}.",
+            )
+        if resource.category not in categories:
+            return ToolResult.failure(
+                "wrong_resource_category",
+                f"Resource '{path}' is not in an allowed category.",
             )
         try:
-            revalidate_tools_file(skill, self.workspace)
+            revalidate_resource(
+                skill,
+                resource,
+                self.workspace,
+                expected_category=resource.category,
+            )
         except (InvalidSkillError, OSError):
             return ToolResult.failure(
-                "invalid_skill",
-                f"Skill '{skill.metadata.name}' changed or is invalid.",
+                "invalid_resource",
+                f"Resource '{path}' changed or is invalid.",
             )
+        return resource
 
-        module_name = f"_cdy_agent_skill_{skill.metadata.name}_{uuid4().hex}"
-        try:
-            spec = importlib.util.spec_from_file_location(module_name, skill.tools_path)
-            if spec is None or spec.loader is None:
-                return ToolResult.failure(
-                    "load_failed", f"Could not load Skill '{skill.metadata.name}'."
-                )
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
-            factory = getattr(module, "create_tools", None)
-            if not callable(factory):
-                return ToolResult.failure(
-                    "invalid_tools", "Skill must define create_tools(workspace)."
-                )
-            tools = factory(self.workspace)
-        except Exception:
+    def _skill_or_failure(self, name: str) -> DiscoveredSkill | ToolResult:
+        skill = self._skills.get(name)
+        if skill is not None:
+            return skill
+        if any(item.entry == name for item in self._diagnostics):
             return ToolResult.failure(
-                "load_failed", f"Could not load Skill '{skill.metadata.name}'."
+                "invalid_skill", f"Skill '{name}' is invalid."
             )
-        finally:
-            sys.modules.pop(module_name, None)
-        try:
-            registered = self.registry.register_many(tools)
-        except Exception:
-            return ToolResult.failure(
-                "invalid_tools", "Skill returned invalid tools."
-            )
-        if not registered.ok:
-            return registered
-        names = tuple(registered.data["names"])
-        self._active[skill.metadata.name] = names
-        return self._success(skill, "activated", names)
+        return ToolResult.failure(
+            "unknown_skill", f"Unknown Skill: {name}."
+        )
+
+
+def _resource_counts(skill: DiscoveredSkill) -> dict[str, int]:
+    return {
+        category: sum(
+            resource.category == category for resource in skill.resources
+        )
+        for category in RESOURCE_CATEGORIES
+    }
+
+
+def _metadata_payload(metadata: SkillMetadata) -> dict[str, object]:
+    return {
+        "name": metadata.name,
+        "description": metadata.description,
+        "license": metadata.license,
+        "compatibility": metadata.compatibility,
+        "metadata": dict(metadata.metadata),
+        "allowed-tools": metadata.allowed_tools,
+    }
+
+
+def _resource_payload(resource: SkillResource) -> dict[str, object]:
+    return {
+        "category": resource.category,
+        "path": resource.relative_path,
+        "size": resource.size,
+    }
+
+
+def _activation_payload(
+    skill: DiscoveredSkill, status: str
+) -> dict[str, object]:
+    return {
+        "name": skill.metadata.name,
+        "status": status,
+        "instructions": skill.instructions,
+        "metadata": _metadata_payload(skill.metadata),
+        "directory": str(skill.directory),
+        "relative_paths": "Resolve resource paths from the Skill directory.",
+        "resources": [
+            _resource_payload(resource) for resource in skill.resources
+        ],
+    }
 
 
 def _tokens(text: str) -> tuple[str, ...]:
@@ -174,7 +239,10 @@ def _unique_ordered(values: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _keywords_for(skill: DiscoveredSkill) -> list[str]:
-    text = f"{skill.metadata.name.replace('_', ' ')} {skill.metadata.description}"
+    text = (
+        f"{skill.metadata.name.replace('-', ' ')} "
+        f"{skill.metadata.description}"
+    )
     return list(_unique_ordered(_tokens(text))[:MAX_KEYWORDS])
 
 
@@ -185,7 +253,7 @@ def _contains(text: str, term: str) -> bool:
 def _score_skill(
     skill: DiscoveredSkill, normalized_query: str, terms: tuple[str, ...]
 ) -> tuple[int, list[str], str]:
-    name_text = skill.metadata.name.replace("_", " ").lower()
+    name_text = skill.metadata.name.replace("-", " ").lower()
     description_text = skill.metadata.description.lower()
     instruction_text = skill.instructions[:4000].lower()
     phrase = normalized_query.lower()
