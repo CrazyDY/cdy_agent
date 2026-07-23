@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -8,6 +7,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from cdy_agent.tools.base import ToolResult
+from cdy_agent.tools.process import (
+    MAX_OUTPUT_BYTES,
+    limited_output,
+    sanitized_environment,
+)
 
 
 ALLOWED_COMMANDS = frozenset(
@@ -26,7 +30,6 @@ ALLOWED_COMMANDS = frozenset(
     }
 )
 ALLOWED_GIT_SUBCOMMANDS = frozenset({"status", "diff"})
-MAX_OUTPUT_BYTES = 64 * 1024
 # Backwards-compatible name for callers that imported the original constant.
 MAX_OUTPUT_CHARS = MAX_OUTPUT_BYTES
 DEFAULT_TIMEOUT_SECONDS = 10
@@ -181,22 +184,6 @@ def _effective_argv(argv: list[str]) -> list[str]:
     return list(argv)
 
 
-def _sanitized_environment() -> dict[str, str]:
-    environment = dict(os.environ)
-    environment.pop("GIT_EXTERNAL_DIFF", None)
-    environment.pop("RIPGREP_CONFIG_PATH", None)
-    environment.update({"GIT_PAGER": "cat", "PAGER": "cat"})
-    return environment
-
-
-def _limited_output(output: str) -> tuple[str, bool]:
-    encoded = output.encode("utf-8")
-    if len(encoded) <= MAX_OUTPUT_BYTES:
-        return output, False
-    limited = encoded[:MAX_OUTPUT_BYTES]
-    return limited.decode("utf-8", errors="ignore"), True
-
-
 @dataclass
 class ShellTool:
     workspace: Path
@@ -264,7 +251,7 @@ class ShellTool:
                 shell=False,
                 capture_output=True,
                 text=True,
-                env=_sanitized_environment(),
+                env=sanitized_environment(),
                 timeout=timeout,
                 check=False,
             )
@@ -277,8 +264,8 @@ class ShellTool:
                 "execution_error", f"Could not execute command: {error}."
             )
 
-        stdout, stdout_truncated = _limited_output(completed.stdout)
-        stderr, stderr_truncated = _limited_output(completed.stderr)
+        stdout, stdout_truncated = limited_output(completed.stdout)
+        stderr, stderr_truncated = limited_output(completed.stderr)
         if completed.returncode != 0:
             return ToolResult.failure(
                 "command_failed",

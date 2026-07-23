@@ -207,3 +207,29 @@ def test_builtin_registry_exposes_tools_in_deterministic_order(tmp_path: Path) -
 def test_creating_builtin_registry_does_not_create_database(tmp_path: Path) -> None:
     create_builtin_registry(tmp_path)
     assert not (tmp_path / ".cdy-agent").exists()
+
+
+def test_failed_tool_result_serializes_optional_structured_data() -> None:
+    result = ToolResult.failure(
+        "script_failed",
+        "Script exited with return code 2.",
+        {"returncode": 2, "stdout": "out", "stderr": "err"},
+    )
+
+    assert json.loads(result.to_json()) == {
+        "ok": False,
+        "error": {
+            "code": "script_failed",
+            "message": "Script exited with return code 2.",
+            "data": {"returncode": 2, "stdout": "out", "stderr": "err"},
+        },
+    }
+
+
+def test_failed_tool_result_omits_absent_structured_data() -> None:
+    result = ToolResult.failure("failed", "No details.")
+
+    assert json.loads(result.to_json()) == {
+        "ok": False,
+        "error": {"code": "failed", "message": "No details."},
+    }

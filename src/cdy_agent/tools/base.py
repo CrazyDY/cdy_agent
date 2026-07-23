@@ -24,14 +24,19 @@ class ToolResult:
         return cls(ok=True, data=data)
 
     @classmethod
-    def failure(cls, code: str, message: str) -> "ToolResult":
-        return cls(ok=False, code=code, message=message)
+    def failure(
+        cls, code: str, message: str, data: Any = None
+    ) -> "ToolResult":
+        return cls(ok=False, data=data, code=code, message=message)
 
     def to_json(self) -> str:
-        value = {"ok": True, "data": self.data} if self.ok else {
-            "ok": False,
-            "error": {"code": self.code, "message": self.message},
-        }
+        if self.ok:
+            value = {"ok": True, "data": self.data}
+        else:
+            error = {"code": self.code, "message": self.message}
+            if self.data is not None:
+                error["data"] = self.data
+            value = {"ok": False, "error": error}
         return json.dumps(value, ensure_ascii=False)
 
 

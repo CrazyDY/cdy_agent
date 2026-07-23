@@ -1,3 +1,4 @@
+import importlib
 import subprocess
 from inspect import signature
 from pathlib import Path
@@ -5,6 +6,24 @@ from pathlib import Path
 import pytest
 
 from cdy_agent.tools.shell import MAX_OUTPUT_BYTES, ShellTool
+
+
+def test_process_helpers_sanitize_environment_and_limit_utf8_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = importlib.import_module("cdy_agent.tools.process")
+    monkeypatch.setenv("GIT_EXTERNAL_DIFF", "unsafe")
+    monkeypatch.setenv("RIPGREP_CONFIG_PATH", "unsafe")
+
+    environment = process.sanitized_environment()
+    output, truncated = process.limited_output("a" * 4 + "浣", limit=5)
+
+    assert environment["GIT_PAGER"] == "cat"
+    assert environment["PAGER"] == "cat"
+    assert "GIT_EXTERNAL_DIFF" not in environment
+    assert "RIPGREP_CONFIG_PATH" not in environment
+    assert output == "a" * 4
+    assert truncated is True
 
 
 def test_shell_constructor_cannot_disable_confirmation(tmp_path: Path) -> None:
