@@ -14,6 +14,7 @@ from .models import (
     SkillDiscovery,
     SkillMetadata,
     SkillResource,
+    _ResourceIdentity,
 )
 from ..tools.filesystem import resolve_workspace
 
@@ -162,12 +163,14 @@ def _discover_resources(
                     raise InvalidSkillError(
                         "Skill contains more than 512 resources."
                     )
+                identity = _resource_identity(path)
                 resources.append(
                     SkillResource(
                         category=category,
                         relative_path=path.relative_to(directory).as_posix(),
                         path=path.resolve(),
-                        size=path.stat().st_size,
+                        size=identity.size,
+                        _identity=identity,
                     )
                 )
     return tuple(
@@ -222,7 +225,20 @@ def revalidate_resource(
         raise InvalidSkillError(
             "Skill resource is outside its category."
         ) from error
+    if _resource_identity(resolved) != resource._identity:
+        raise InvalidSkillError("Skill resource changed.")
     return resolved
+
+
+def _resource_identity(path: Path) -> _ResourceIdentity:
+    status = path.stat()
+    return _ResourceIdentity(
+        device=status.st_dev,
+        inode=status.st_ino,
+        size=status.st_size,
+        modified_ns=status.st_mtime_ns,
+        metadata_changed_ns=status.st_ctime_ns,
+    )
 
 
 def _require_within(path: Path, directory: Path) -> None:

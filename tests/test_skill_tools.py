@@ -760,6 +760,44 @@ def test_run_skill_script_revalidates_after_confirmation(
     assert called is False
 
 
+def test_run_skill_script_rejects_regular_file_replacement_after_confirmation(
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("print('approved')", encoding="utf-8")
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    called = False
+
+    def runner(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def replace_script(request: object) -> bool:
+        script.unlink()
+        script.write_text("print('replacement')", encoding="utf-8")
+        return True
+
+    registry = ToolRegistry([RunSkillScriptTool(manager, runner=runner)])
+    result = registry.execute(
+        ToolCall(
+            "run-1",
+            "run_skill_script",
+            '{"name":"runtime-skill","argv":["python","scripts/run.py"]}',
+        ),
+        replace_script,
+    )
+
+    assert not result.ok
+    assert result.code == "invalid_resource"
+    assert called is False
+
+
 def test_run_skill_script_preserves_active_resource_failure_identity() -> None:
     failure = ToolResult.failure("skill_not_active", "Skill is not active.")
 

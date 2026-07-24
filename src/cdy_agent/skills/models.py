@@ -21,11 +21,21 @@ class SkillMetadata:
 
 
 @dataclass(frozen=True)
+class _ResourceIdentity:
+    device: int
+    inode: int
+    size: int
+    modified_ns: int
+    metadata_changed_ns: int
+
+
+@dataclass(frozen=True)
 class SkillResource:
     category: ResourceCategory
     relative_path: str
     path: Path
     size: int
+    _identity: _ResourceIdentity = field(repr=False)
 
 
 @dataclass(frozen=True)

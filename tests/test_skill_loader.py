@@ -286,6 +286,24 @@ def test_revalidate_rejects_removed_or_replaced_resource(tmp_path: Path) -> None
         revalidate_resource(skill, resource, tmp_path)
 
 
+@pytest.mark.parametrize("replace", [False, True], ids=["rewrite", "replace"])
+def test_revalidate_rejects_changed_regular_file(
+    tmp_path: Path, replace: bool
+) -> None:
+    directory = write_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("print('approved')", encoding="utf-8")
+    skill = discover_skills(tmp_path).skills[0]
+    resource = skill.resources[0]
+    if replace:
+        script.unlink()
+    script.write_text("print('replacement')", encoding="utf-8")
+
+    with pytest.raises(InvalidSkillError, match="changed"):
+        revalidate_resource(skill, resource, tmp_path)
+
+
 def test_revalidate_rejects_workspace_replacement(tmp_path: Path) -> None:
     directory = write_skill(tmp_path, "changed-skill")
     script = directory / "scripts" / "run.py"
