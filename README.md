@@ -152,22 +152,44 @@ uv run cdy-agent traces show <trace-id> --workspace .
 
 ### 工作区 Skills
 
-Skills 位于 `<workspace>/.cdy-agent/skills/<skill_name>/`。每个 Skill 必须包含 `SKILL.md`：
+只扫描 `<workspace>/.cdy-agent/skills/`；每个 Skill 使用名称相同的目录，名称只能由小写字母、数字和单个连字符组成。Skill 必须包含采用标准 frontmatter 的 `SKILL.md`，并且仅会递归识别 `scripts/`、`references/` 和 `assets/` 中的资源：
 
 ```text
----
-name: research
-description: Search and summarize local project information.
----
-
-# Research
-
-这里写激活后交给模型的完整说明。
+<workspace>/.cdy-agent/skills/pdf-processing/
+├── SKILL.md
+├── scripts/
+│   └── extract.py
+├── references/
+│   └── formats.md
+└── assets/
+    └── report-template.docx
 ```
 
-Skill 可选提供单个 `tools.py`，其中必须定义 `create_tools(workspace: Path)` 并返回符合项目 `Tool` 协议的可迭代对象。模型初始只看到 Skill 名称和摘要；调用 `activate_skill` 后才获得完整说明和新工具。
+```markdown
+---
+name: pdf-processing
+description: Extract text and tables from PDF files. Use for PDF extraction and document-processing tasks.
+license: Apache-2.0
+compatibility: Requires an installed Python runtime
+metadata:
+  author: example-org
+  version: "1.0"
+allowed-tools: Read
+---
 
-发现过程不会执行 Python。加载 `tools.py` 前，CLI 会显示绝对路径并默认拒绝；批准后代码以当前用户权限在主进程运行，因此只应激活可信工作区中的代码。授权只在当前进程有效。首版不提供沙箱、依赖安装、Skill 间依赖、辅助 Python 包、热重载或持久信任。
+# PDF processing
+
+Read `references/formats.md` when format details are needed.
+Run `python scripts/extract.py --help` before the first extraction.
+```
+
+`list_skills` 和 `search_skills` 只返回目录元数据；`activate_skill` 重新校验 Skill 后返回完整说明、元数据和资源清单，但不会读取资源内容或运行代码。激活后，可用 `read_skill_resource` 按需读取 UTF-8 文本 reference 或 asset；二进制资源只返回其路径和大小等元数据。
+
+`run_skill_script` 只能运行已激活 Skill 的 `scripts/` 清单中恰好一个脚本。每一次运行都需要单独确认，即使 frontmatter 中声明了 `allowed-tools`；该字段只用于披露，绝不会绕过确认。确认信息会展示最终 argv、Skill 目录和当前用户权限。命令以参数数组执行，不经过 shell 解释（`shell=False`），可使用任意已安装的运行时；系统不会安装依赖，也不提供脚本沙箱。脚本超时必须为 1–300 秒（默认 30 秒），stdout 和 stderr 分别最多返回 64 KiB，并标记截断。
+
+资源在发现时记录文件状态身份；读取资源或准备脚本时会重新校验，脚本在用户确认后、执行前还会再次校验，因此可检测资源被重写或替换。此校验缩小了确认与使用之间的风险窗口，但不能消除操作系统层面的最终 check/use 竞争。
+
+根目录中的额外条目不会成为资源；尤其 `tools.py` 和 `create_tools(workspace)` 均不受支持、会被忽略，且绝不会执行。
 
 ## 开发
 
