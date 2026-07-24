@@ -14,6 +14,7 @@ from cdy_agent.openai_client import (
 )
 from cdy_agent.openai_client import ModelGateway
 from cdy_agent.observability import TokenUsage
+from cdy_agent.skills import SkillManager, create_skill_tools
 from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.base import ToolCall, ToolResult
 from cdy_agent.tools.registry import ToolRegistry
@@ -597,58 +598,58 @@ def test_agent_passes_registry_definitions_to_real_gateway(tmp_path: Path) -> No
     assert responses.calls[0]["tools"] == list(registry.definitions)
 
 
-def test_agent_refreshes_definitions_after_registry_mutation() -> None:
-    class AddTool:
-        name = "add_tool"
-        description = "Add a tool."
-        parameters = {"type": "object", "properties": {}}
-        requires_confirmation = False
-
-        def __init__(self, registry: object) -> None:
-            self.registry = registry
-
-        def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
-            return None
-
-        def confirmation_description(self, arguments: dict[str, Any]) -> str:
-            return "Add."
-
-        def execute(self, arguments: dict[str, Any]) -> ToolResult:
-            result = self.registry.register_many([EchoTool()])
-            return result
-
-    class EchoTool:
-        name = "dynamic_echo"
-        description = "Echo."
-        parameters = {"type": "object", "properties": {}}
-        requires_confirmation = False
-
-        def preflight(self, arguments):
-            return None
-
-        def confirmation_description(self, arguments):
-            return "Echo."
-
-        def execute(self, arguments):
-            return ToolResult.success(arguments)
-
-    registry = ToolRegistry([])
-    registry.register_many([AddTool(registry)])
+def test_agent_keeps_fixed_skill_definitions_after_activation(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / ".cdy-agent" / "skills" / "research-skill"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        (
+            "---\n"
+            "name: research-skill\n"
+            "description: Research workspace information.\n"
+            "---\n\n"
+            "# Research\n"
+        ),
+        encoding="utf-8",
+    )
+    registry = create_builtin_registry(tmp_path)
+    registered = registry.register_many(
+        create_skill_tools(SkillManager(tmp_path))
+    )
+    assert registered.ok
     gateway = FakeGateway(
         [
             ToolCallResponse(
-                (ToolCall("1", "add_tool", "{}"),),
+                (
+                    ToolCall(
+                        "activate-1",
+                        "activate_skill",
+                        '{"name":"research-skill"}',
+                    ),
+                ),
                 ResponsesContinuation("next"),
             ),
             FinalResponse("done"),
         ]
     )
 
-    assert Agent(gateway, registry, lambda request: True).run(
-        [Message("user", "go")]
-    ) == "done"
-    assert [item["name"] for item in gateway.calls[0]["tools"]] == ["add_tool"]
-    assert [item["name"] for item in gateway.calls[1]["tools"]] == [
-        "add_tool",
-        "dynamic_echo",
-    ]
+    result = Agent(
+        gateway,
+        registry,
+        lambda request: pytest.fail(
+            f"Activation requested confirmation: {request}"
+        ),
+    ).run([Message("user", "research this workspace")])
+
+    assert result == "done"
+    assert gateway.calls[0]["tools"] == gateway.calls[1]["tools"]
+    assert {
+        definition["name"] for definition in gateway.calls[0]["tools"]
+    } >= {
+        "list_skills",
+        "search_skills",
+        "activate_skill",
+        "read_skill_resource",
+        "run_skill_script",
+    }

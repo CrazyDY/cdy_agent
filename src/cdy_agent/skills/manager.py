@@ -24,14 +24,7 @@ RESOURCE_CATEGORIES = ("scripts", "references", "assets")
 
 
 class SkillManager:
-    def __init__(
-        self,
-        workspace: Path,
-        _registry: object | None = None,
-        _confirm: object | None = None,
-    ) -> None:
-        # Task 5 removes the two ignored compatibility arguments after the CLI
-        # switches to SkillManager(workspace).
+    def __init__(self, workspace: Path) -> None:
         self.workspace = workspace.resolve()
         discovery = discover_skills(self.workspace)
         self._skills = {

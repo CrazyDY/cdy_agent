@@ -1,6 +1,15 @@
 from pathlib import Path
 
+import pytest
+
 from cdy_agent.skills.manager import SkillManager
+
+
+def test_skill_manager_constructor_accepts_only_workspace(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(TypeError):
+        SkillManager(tmp_path, object(), object())
 
 
 def write_skill(tmp_path: Path, name: str = "content-summary") -> Path:
@@ -147,27 +156,6 @@ def test_resolve_active_resource_revalidates_manifest_entry(
     )
 
     assert result.code == "invalid_resource"
-
-
-def test_legacy_constructor_arguments_are_ignored_and_tools_stay_inert(
-    tmp_path: Path,
-) -> None:
-    directory = write_skill(tmp_path)
-    marker = tmp_path / "executed"
-    (directory / "tools.py").write_text(
-        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n",
-        encoding="utf-8",
-    )
-
-    class UnusableDependency:
-        def __getattribute__(self, name: str) -> object:
-            raise AssertionError(f"legacy dependency was accessed: {name}")
-
-    dependency = UnusableDependency()
-    manager = SkillManager(tmp_path, dependency, dependency)
-
-    assert manager.activate("content-summary").ok
-    assert not marker.exists()
 
 
 def test_activation_revalidates_skill_before_marking_it_active(

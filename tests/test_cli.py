@@ -989,13 +989,13 @@ def test_chat_keyboard_interrupt_exits_cleanly(
     assert result.exit_code == 0
 
 
-def test_create_agent_wires_gateway_registry_and_confirmation(
+def test_create_agent_wires_standard_skill_tools_and_confirmation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     gateway = object()
     manager = object()
     skill_tools = object()
-    manager_calls: list[tuple[Path, object, object]] = []
+    manager_calls: list[tuple[object, ...]] = []
     registered: list[object] = []
 
     class FakeRegistry:
@@ -1010,9 +1010,7 @@ def test_create_agent_wires_gateway_registry_and_confirmation(
     monkeypatch.setattr(
         cli,
         "SkillManager",
-        lambda workspace, built_registry, confirm: manager_calls.append(
-            (workspace, built_registry, confirm)
-        ) or manager,
+        lambda *args: manager_calls.append(args) or manager,
     )
     monkeypatch.setattr(cli, "create_skill_tools", lambda built_manager: skill_tools)
     monkeypatch.setattr(
@@ -1026,7 +1024,7 @@ def test_create_agent_wires_gateway_registry_and_confirmation(
     result = cli._create_agent("model", "responses", tmp_path)
 
     assert result == "agent"
-    assert manager_calls == [(tmp_path, registry, cli._confirm_tool)]
+    assert manager_calls == [(tmp_path,)]
     assert registered == [skill_tools]
     assert seen == [
         (
@@ -1300,7 +1298,7 @@ def test_ask_reports_missing_api_key(
     assert "Check OPENAI_API_KEY" in result.stderr
 
 
-def test_create_agent_registers_skill_management_tools(
+def test_create_agent_registers_five_standard_skill_tools(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: object())
@@ -1308,7 +1306,13 @@ def test_create_agent_registers_skill_management_tools(
     agent = cli._create_agent("model", "responses", tmp_path)
 
     names = [definition["name"] for definition in agent._registry.definitions]
-    assert names[-3:] == ["list_skills", "search_skills", "activate_skill"]
+    assert names[-5:] == [
+        "list_skills",
+        "search_skills",
+        "activate_skill",
+        "read_skill_resource",
+        "run_skill_script",
+    ]
 
 
 def test_create_agent_loads_system_prompt_from_workspace_config(
@@ -1352,11 +1356,20 @@ def test_ask_reports_management_tool_registration_failure_without_model_executio
     assert "Traceback" not in result.stderr
 
 
-def test_skill_code_confirmation_warns_about_current_user_permissions() -> None:
+def test_skill_script_confirmation_warns_about_current_user_permissions() -> None:
     request = ConfirmationRequest(
-        "activate_skill",
-        {"name": "research"},
-        "Run Skill 'research' Python code from /workspace/tools.py with current user permissions.",
+        "run_skill_script",
+        {
+            "name": "research-skill",
+            "argv": ["python", "/workspace/research-skill/scripts/run.py"],
+        },
+        (
+            "Run Skill 'research-skill' script "
+            "/workspace/research-skill/scripts/run.py with argv "
+            "['python', '/workspace/research-skill/scripts/run.py'] in "
+            "directory /workspace/research-skill with current user "
+            "permissions."
+        ),
     )
     monkey_app = typer.Typer()
 
@@ -1365,6 +1378,10 @@ def test_skill_code_confirmation_warns_about_current_user_permissions() -> None:
         typer.echo("APPROVED" if cli._confirm_tool(request) else "DENIED")
 
     result = runner.invoke(monkey_app, [], input="\n")
+    assert "['python', '/workspace/research-skill/scripts/run.py']" in (
+        result.stdout
+    )
+    assert "/workspace/research-skill" in result.stdout
     assert "current user permissions" in result.stdout
     assert result.stdout.endswith("DENIED\n")
 

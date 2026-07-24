@@ -120,7 +120,7 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     gateway = ModelGateway(model=model, api_mode=api_mode)
     system_prompt = resolve_system_prompt(load_workspace_config(workspace))
     registry = create_builtin_registry(workspace)
-    manager = SkillManager(workspace, registry, _confirm_tool)
+    manager = SkillManager(workspace)
     registered = registry.register_many(create_skill_tools(manager))
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
