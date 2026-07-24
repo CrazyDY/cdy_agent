@@ -53,15 +53,21 @@ class ToolRegistry:
         if invalid is not None:
             return invalid
         if tool.requires_confirmation:
-            request = ConfirmationRequest(
-                tool.name,
-                arguments,
-                tool.confirmation_description(arguments),
-            )
-            if not confirm(request):
-                cancel = getattr(tool, "cancel", None)
-                if callable(cancel):
-                    cancel()
+            try:
+                request = ConfirmationRequest(
+                    tool.name,
+                    arguments,
+                    tool.confirmation_description(arguments),
+                )
+                approved = confirm(request)
+            except BaseException:
+                try:
+                    _cancel_tool(tool)
+                except BaseException:
+                    pass
+                raise
+            if not approved:
+                _cancel_tool(tool)
                 return ToolResult.failure("approval_denied", "User declined this tool call.")
         return tool.execute(arguments)
 
@@ -78,3 +84,9 @@ def _valid_tool(tool: object) -> bool:
         and callable(getattr(tool, "confirmation_description", None))
         and callable(getattr(tool, "execute", None))
     )
+
+
+def _cancel_tool(tool: object) -> None:
+    cancel = getattr(tool, "cancel", None)
+    if callable(cancel):
+        cancel()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -686,6 +687,52 @@ def test_default_script_runner_uses_bounded_retention_for_noisy_process(
     assert result.data["stderr_truncated"] is True
 
 
+def test_default_script_runner_times_out_inherited_pipe_descendant(
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "descendant.py"
+    survived = directory / "descendant-survived.txt"
+    descendant_code = (
+        "import pathlib, time; "
+        "time.sleep(2); "
+        f"pathlib.Path({str(survived)!r}).write_text('survived')"
+    )
+    script.parent.mkdir()
+    script.write_text(
+        (
+            "import subprocess\n"
+            "import sys\n"
+            "subprocess.Popen([\n"
+            "    sys.executable,\n"
+            "    '-c',\n"
+            f"    {descendant_code!r},\n"
+            "])\n"
+        ),
+        encoding="utf-8",
+    )
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    started = time.monotonic()
+
+    result = RunSkillScriptTool(manager).execute(
+        {
+            "name": "runtime-skill",
+            "argv": [sys.executable, "scripts/descendant.py"],
+            "timeout_seconds": 1,
+        }
+    )
+
+    elapsed = time.monotonic() - started
+    assert not result.ok
+    assert result.code == "script_timeout"
+    assert result.message == "Script timed out after 1 seconds."
+    assert elapsed < 3
+    remaining = max(0.0, started + 2.75 - time.monotonic())
+    time.sleep(remaining)
+    assert not survived.exists()
+
+
 def test_run_skill_script_returns_structured_nonzero_failure(
     tmp_path: Path,
 ) -> None:
@@ -774,6 +821,50 @@ def test_run_skill_script_registry_denial_does_not_call_runner(
     assert not result.ok
     assert result.code == "approval_denied"
     assert called is False
+    assert tool._approval_digest is None
+
+
+@pytest.mark.parametrize("failure_stage", ["description", "callback"])
+def test_registry_clears_approval_digest_on_confirmation_exception(
+    tmp_path: Path,
+    failure_stage: str,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("print('approved')", encoding="utf-8")
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    tool = RunSkillScriptTool(manager)
+    original_description = tool.confirmation_description
+    original_error = RuntimeError(f"{failure_stage} failed")
+
+    def confirmation_description(arguments: dict[str, object]) -> str:
+        description = original_description(arguments)
+        assert tool._approval_digest is not None
+        if failure_stage == "description":
+            raise original_error
+        return description
+
+    def confirm(request: object) -> bool:
+        assert tool._approval_digest is not None
+        if failure_stage == "callback":
+            raise original_error
+        return True
+
+    tool.confirmation_description = confirmation_description  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError) as captured:
+        ToolRegistry([tool]).execute(
+            ToolCall(
+                "run-1",
+                "run_skill_script",
+                '{"name":"runtime-skill","argv":["python","scripts/run.py"]}',
+            ),
+            confirm,
+        )
+
+    assert captured.value is original_error
     assert tool._approval_digest is None
 
 

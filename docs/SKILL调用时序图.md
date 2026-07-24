@@ -45,25 +45,51 @@ sequenceDiagram
         RS->>SL: 执行前校验脚本
         RS-->>R: 预检通过
         R->>RS: confirmation_description(arguments)
-        RS-->>R: 最终 argv、Skill 目录与当前用户权限
-        R->>U: ConfirmationRequest
-        alt 用户拒绝
-            U-->>R: No
-            R-->>M: approval_denied
-        else 用户批准
-            U-->>R: Yes
-            R->>RS: execute(arguments)
-            RS->>SM: active_resources(name, scripts)
-            RS->>SL: 确认后再次校验脚本
-            RS->>P: shell=False，cwd=Skill 根目录
-            alt 进程成功
-                P-->>RS: stdout、stderr、截断标记
-                RS-->>R: 成功结果
-                R-->>M: stdout、stderr、截断标记
-            else 超时或非零退出
-                P-->>RS: 进程结果或超时
-                RS-->>R: 稳定错误码与安全结构化结果
-                R-->>M: 稳定错误码与安全结构化结果
+        RS->>RS: 计算仅绑定本次确认的脚本内容摘要
+        alt 确认描述构造异常
+            RS-->>R: 原异常
+            R->>RS: cancel()
+            RS->>RS: 清除确认摘要
+            R-->>CLI: 原异常继续传播
+        else 确认描述构造成功
+            RS-->>R: 最终 argv、Skill 目录与当前用户权限
+            R->>U: ConfirmationRequest
+            alt 确认回调异常
+                U-->>R: 原异常
+                R->>RS: cancel()
+                RS->>RS: 清除确认摘要
+                R-->>CLI: 原异常继续传播
+            else 确认回调正常返回
+                alt 用户拒绝
+                    U-->>R: No
+                    R->>RS: cancel()
+                    RS->>RS: 清除确认摘要
+                    R-->>M: approval_denied
+                else 用户批准
+                    U-->>R: Yes
+                    R->>RS: execute(arguments)
+                    RS->>SM: active_resources(name, scripts)
+                    RS->>SL: 确认后再次校验脚本
+                    RS->>RS: 比较当前脚本内容摘要
+                    alt 路径、身份或摘要不匹配
+                        RS->>RS: 清除确认摘要
+                        RS-->>R: invalid_resource
+                        R-->>M: 稳定错误码
+                    else 校验与摘要匹配
+                        RS->>P: shell=False，cwd=Skill 根目录
+                        alt 进程成功
+                            P-->>RS: stdout、stderr、截断标记
+                            RS->>RS: 清除确认摘要
+                            RS-->>R: 成功结果
+                            R-->>M: stdout、stderr、截断标记
+                        else 超时、启动失败或非零退出
+                            P-->>RS: 进程结果或超时
+                            RS->>RS: 清除确认摘要
+                            RS-->>R: 稳定错误码与安全结构化结果
+                            R-->>M: 稳定错误码与安全结构化结果
+                        end
+                    end
+                end
             end
         end
     end

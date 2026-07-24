@@ -75,6 +75,42 @@ def test_registry_denies_confirmed_tool_without_executing() -> None:
     assert requests[0].tool_name == "echo"
 
 
+@pytest.mark.parametrize("failure_stage", ["description", "callback"])
+def test_registry_cancels_and_preserves_confirmation_phase_exception(
+    failure_stage: str,
+) -> None:
+    tool = EchoTool(requires_confirmation=True)
+    original_error = RuntimeError(f"{failure_stage} failed")
+    cancellations = 0
+
+    def cancel() -> None:
+        nonlocal cancellations
+        cancellations += 1
+        raise ValueError("cancellation failed")
+
+    def confirmation_description(arguments: dict[str, Any]) -> str:
+        if failure_stage == "description":
+            raise original_error
+        return "Echo text."
+
+    def confirm(request: ConfirmationRequest) -> bool:
+        if failure_stage == "callback":
+            raise original_error
+        return True
+
+    tool.cancel = cancel  # type: ignore[attr-defined]
+    tool.confirmation_description = confirmation_description  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError) as captured:
+        ToolRegistry([tool]).execute(
+            ToolCall("1", "echo", '{"text":"hello"}'),
+            confirm,
+        )
+
+    assert captured.value is original_error
+    assert cancellations == 1
+
+
 def test_registry_preflights_before_confirmation() -> None:
     requests: list[ConfirmationRequest] = []
     result = ToolRegistry([EchoTool(requires_confirmation=True)]).execute(
