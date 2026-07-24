@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import cdy_agent.skills as skills_package
+import cdy_agent.skills.loader as skill_loader
 import pytest
 from cdy_agent.skills import SkillManager
 from cdy_agent.skills.tools import (
@@ -432,6 +435,25 @@ def test_run_skill_script_rejects_invalid_script_commands(
     assert result.code in {"invalid_arguments", "invalid_script_command"}
 
 
+def test_run_skill_script_rejects_nul_in_argv(tmp_path: Path) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("", encoding="utf-8")
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+
+    result = RunSkillScriptTool(manager).preflight(
+        {
+            "name": "runtime-skill",
+            "argv": ["python", "scripts/run.py", "bad\0argument"],
+        }
+    )
+
+    assert result is not None
+    assert result.code == "invalid_arguments"
+
+
 @pytest.mark.parametrize("timeout", [1, 300])
 def test_run_skill_script_accepts_timeout_range(
     tmp_path: Path, timeout: int
@@ -532,6 +554,28 @@ def test_run_skill_script_maps_missing_executable_to_execution_error(
     assert "Traceback" not in (result.message or "")
 
 
+def test_run_skill_script_maps_value_error_to_execution_error(
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("", encoding="utf-8")
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+
+    def runner(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        raise ValueError("invalid process arguments")
+
+    result = RunSkillScriptTool(manager, runner=runner).execute(
+        {"name": "runtime-skill", "argv": ["python", "scripts/run.py"]}
+    )
+
+    assert not result.ok
+    assert result.code == "execution_error"
+    assert "Traceback" not in (result.message or "")
+
+
 def test_run_skill_script_maps_timeout(tmp_path: Path) -> None:
     _, directory = write_runtime_skill(tmp_path)
     script = directory / "scripts" / "run.py"
@@ -581,6 +625,64 @@ def test_run_skill_script_caps_stdout_and_stderr_independently(
     assert result.data["stdout"] == stdout
     assert len(result.data["stderr"].encode("utf-8")) <= MAX_OUTPUT_BYTES
     assert result.data["stdout_truncated"] is False
+    assert result.data["stderr_truncated"] is True
+
+
+def test_default_script_runner_safely_decodes_binary_output(
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "binary.py"
+    script.parent.mkdir()
+    script.write_text(
+        "import os\nos.write(1, b'valid\\xffoutput')\n",
+        encoding="utf-8",
+    )
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+
+    result = RunSkillScriptTool(manager).execute(
+        {
+            "name": "runtime-skill",
+            "argv": [sys.executable, "scripts/binary.py"],
+        }
+    )
+
+    assert result.ok
+    assert result.data["stdout"] == "valid\ufffdoutput"
+    assert result.data["stdout_truncated"] is False
+
+
+def test_default_script_runner_uses_bounded_retention_for_noisy_process(
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "noisy.py"
+    script.parent.mkdir()
+    script.write_text(
+        (
+            "import os\n"
+            f"os.write(1, b'x' * {MAX_OUTPUT_BYTES * 4})\n"
+            f"os.write(2, b'y' * {MAX_OUTPUT_BYTES * 4})\n"
+        ),
+        encoding="utf-8",
+    )
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    tool = RunSkillScriptTool(manager)
+
+    result = tool.execute(
+        {
+            "name": "runtime-skill",
+            "argv": [sys.executable, "scripts/noisy.py"],
+        }
+    )
+
+    assert tool.runner is not subprocess.run
+    assert result.ok
+    assert len(result.data["stdout"].encode("utf-8")) <= MAX_OUTPUT_BYTES
+    assert len(result.data["stderr"].encode("utf-8")) <= MAX_OUTPUT_BYTES
+    assert result.data["stdout_truncated"] is True
     assert result.data["stderr_truncated"] is True
 
 
@@ -658,7 +760,8 @@ def test_run_skill_script_registry_denial_does_not_call_runner(
         called = True
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    registry = ToolRegistry([RunSkillScriptTool(manager, runner=runner)])
+    tool = RunSkillScriptTool(manager, runner=runner)
+    registry = ToolRegistry([tool])
     result = registry.execute(
         ToolCall(
             "run-1",
@@ -671,6 +774,7 @@ def test_run_skill_script_registry_denial_does_not_call_runner(
     assert not result.ok
     assert result.code == "approval_denied"
     assert called is False
+    assert tool._approval_digest is None
 
 
 def test_run_skill_script_requires_approval_every_time_despite_allowed_tools(
@@ -707,7 +811,8 @@ def test_run_skill_script_requires_approval_every_time_despite_allowed_tools(
         approvals.append(request.description)  # type: ignore[attr-defined]
         return True
 
-    registry = ToolRegistry([RunSkillScriptTool(manager, runner=runner)])
+    tool = RunSkillScriptTool(manager, runner=runner)
+    registry = ToolRegistry([tool])
     call = ToolCall(
         "run-1",
         "run_skill_script",
@@ -720,6 +825,29 @@ def test_run_skill_script_requires_approval_every_time_despite_allowed_tools(
     assert first.ok and second.ok
     assert runs == 2
     assert len(approvals) == 2
+    assert tool._approval_digest is None
+
+
+def test_run_skill_script_next_preflight_clears_approval_digest(
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("print('approved')", encoding="utf-8")
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    arguments = {
+        "name": "runtime-skill",
+        "argv": ["python", "scripts/run.py"],
+    }
+    tool = RunSkillScriptTool(manager)
+
+    tool.confirmation_description(arguments)
+    assert tool._approval_digest is not None
+
+    assert tool.preflight(arguments) is None
+    assert tool._approval_digest is None
 
 
 def test_run_skill_script_revalidates_after_confirmation(
@@ -791,6 +919,103 @@ def test_run_skill_script_rejects_regular_file_replacement_after_confirmation(
             '{"name":"runtime-skill","argv":["python","scripts/run.py"]}',
         ),
         replace_script,
+    )
+
+    assert not result.ok
+    assert result.code == "invalid_resource"
+    assert called is False
+
+
+def test_run_skill_script_rejects_same_size_timestamp_restored_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("print('approved')", encoding="utf-8")
+    original_stat = script.stat()
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    resource = manager._skills["runtime-skill"].resources[0]
+    called = False
+
+    def runner(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def rewrite_script(request: object) -> bool:
+        script.write_text("print('modified')", encoding="utf-8")
+        os.utime(
+            script,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+        )
+        monkeypatch.setattr(
+            skill_loader,
+            "_resource_identity",
+            lambda path: resource._identity,
+        )
+        return True
+
+    tool = RunSkillScriptTool(manager, runner=runner)
+    result = ToolRegistry([tool]).execute(
+        ToolCall(
+            "run-1",
+            "run_skill_script",
+            '{"name":"runtime-skill","argv":["python","scripts/run.py"]}',
+        ),
+        rewrite_script,
+    )
+
+    assert not result.ok
+    assert result.code == "invalid_resource"
+    assert called is False
+    assert tool._approval_digest is None
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "symlink"), reason="symbolic links are unavailable"
+)
+def test_run_skill_script_rejects_nested_directory_symlink_swap(
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    nested = directory / "scripts" / "nested"
+    nested.mkdir(parents=True)
+    script = nested / "run.py"
+    script.write_text("print('approved')", encoding="utf-8")
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    called = False
+
+    def runner(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def swap_nested_directory(request: object) -> bool:
+        renamed = nested.with_name("renamed")
+        nested.rename(renamed)
+        os.symlink(renamed, nested, target_is_directory=True)
+        return True
+
+    result = ToolRegistry(
+        [RunSkillScriptTool(manager, runner=runner)]
+    ).execute(
+        ToolCall(
+            "run-1",
+            "run_skill_script",
+            (
+                '{"name":"runtime-skill",'
+                '"argv":["python","scripts/nested/run.py"]}'
+            ),
+        ),
+        swap_nested_directory,
     )
 
     assert not result.ok

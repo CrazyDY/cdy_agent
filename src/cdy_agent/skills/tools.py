@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from cdy_agent.tools.base import ToolResult
-from cdy_agent.tools.process import limited_output, sanitized_environment
+from cdy_agent.tools.process import (
+    limited_output,
+    run_bounded_process,
+    sanitized_environment,
+)
 
 from .loader import NAME_PATTERN
 from .manager import SkillManager
@@ -221,7 +226,7 @@ class ReadSkillResourceTool:
 @dataclass
 class RunSkillScriptTool:
     manager: SkillManager
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
+    runner: Callable[..., object] = run_bounded_process
     name: str = "run_skill_script"
     description: str = (
         "Run one script from an activated workspace Skill after confirmation."
@@ -243,18 +248,27 @@ class RunSkillScriptTool:
         }
     )
     requires_confirmation: bool = field(default=True, init=False)
+    _approval_digest: bytes | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+        self.cancel()
         prepared = self._prepare(arguments)
         return prepared if isinstance(prepared, ToolResult) else None
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
+        self._approval_digest = b""
         prepared = self._prepare(arguments)
         if isinstance(prepared, ToolResult):
             return (
                 "Run the requested activated Skill script with current user "
                 "permissions."
             )
+        try:
+            self._approval_digest = _content_digest(prepared.script_path)
+        except OSError:
+            pass
         return (
             f"Run Skill '{prepared.name}' script {prepared.script_path} "
             f"with argv {list(prepared.argv)!r} in directory "
@@ -262,47 +276,69 @@ class RunSkillScriptTool:
         )
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
-        prepared = self._prepare(arguments)
-        if isinstance(prepared, ToolResult):
-            return prepared
-        argv = list(prepared.argv)
         try:
-            completed = self.runner(
-                argv,
-                cwd=prepared.directory,
-                shell=False,
-                capture_output=True,
-                text=True,
-                env=sanitized_environment(),
-                timeout=prepared.timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolResult.failure(
-                "script_timeout",
-                f"Script timed out after {prepared.timeout} seconds.",
-            )
-        except OSError:
-            return ToolResult.failure(
-                "execution_error", "Could not execute the Skill script."
-            )
+            prepared = self._prepare(arguments)
+            if isinstance(prepared, ToolResult):
+                return prepared
+            if self._approval_digest is not None:
+                try:
+                    current_digest = _content_digest(prepared.script_path)
+                except OSError:
+                    return _invalid_confirmed_script()
+                if current_digest != self._approval_digest:
+                    return _invalid_confirmed_script()
+            argv = list(prepared.argv)
+            try:
+                completed = self.runner(
+                    argv,
+                    cwd=prepared.directory,
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    env=sanitized_environment(),
+                    timeout=prepared.timeout,
+                    check=False,
+                )
+                stdout = _process_output(completed, "stdout")
+                stderr = _process_output(completed, "stderr")
+                stdout, stdout_limited = limited_output(stdout)
+                stderr, stderr_limited = limited_output(stderr)
+                stdout_truncated = bool(
+                    getattr(completed, "stdout_truncated", False)
+                ) or stdout_limited
+                stderr_truncated = bool(
+                    getattr(completed, "stderr_truncated", False)
+                ) or stderr_limited
+                returncode = getattr(completed, "returncode")
+            except subprocess.TimeoutExpired:
+                return ToolResult.failure(
+                    "script_timeout",
+                    f"Script timed out after {prepared.timeout} seconds.",
+                )
+            except (OSError, ValueError, UnicodeError, TypeError, AttributeError):
+                return ToolResult.failure(
+                    "execution_error", "Could not execute the Skill script."
+                )
 
-        stdout, stdout_truncated = limited_output(completed.stdout)
-        stderr, stderr_truncated = limited_output(completed.stderr)
-        payload = {
-            "returncode": completed.returncode,
-            "stdout": stdout,
-            "stderr": stderr,
-            "stdout_truncated": stdout_truncated,
-            "stderr_truncated": stderr_truncated,
-        }
-        if completed.returncode != 0:
-            return ToolResult.failure(
-                "script_failed",
-                f"Script exited with return code {completed.returncode}.",
-                payload,
-            )
-        return ToolResult.success(payload)
+            payload = {
+                "returncode": returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "stdout_truncated": stdout_truncated,
+                "stderr_truncated": stderr_truncated,
+            }
+            if returncode != 0:
+                return ToolResult.failure(
+                    "script_failed",
+                    f"Script exited with return code {returncode}.",
+                    payload,
+                )
+            return ToolResult.success(payload)
+        finally:
+            self.cancel()
+
+    def cancel(self) -> None:
+        self._approval_digest = None
 
     def _prepare(
         self, arguments: dict[str, Any]
@@ -411,7 +447,10 @@ def _validate_script_arguments(
         or NAME_PATTERN.fullmatch(name) is None
         or not isinstance(argv, list)
         or not argv
-        or any(not isinstance(item, str) or not item for item in argv)
+        or any(
+            not isinstance(item, str) or not item or "\0" in item
+            for item in argv
+        )
     ):
         return ToolResult.failure(
             "invalid_arguments",
@@ -427,3 +466,27 @@ def _validate_script_arguments(
             "timeout_seconds must be an integer from 1 to 300.",
         )
     return name, argv, timeout
+
+
+def _content_digest(path: Path) -> bytes:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(64 * 1024):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def _invalid_confirmed_script() -> ToolResult:
+    return ToolResult.failure(
+        "invalid_resource",
+        "Skill script changed or is invalid after confirmation.",
+    )
+
+
+def _process_output(completed: object, name: str) -> str:
+    output = getattr(completed, name)
+    if isinstance(output, str):
+        return output
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    raise TypeError("Process output must be text or bytes.")

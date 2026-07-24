@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import stat
 from pathlib import Path
 from types import MappingProxyType
 
@@ -112,7 +113,7 @@ def discover_skills(workspace: Path) -> SkillDiscovery:
 def _load_entry(directory: Path, workspace: Path) -> DiscoveredSkill:
     _require_safe(directory, workspace, directory=True)
     skill_file = directory / "SKILL.md"
-    _require_safe(skill_file, workspace, directory=False)
+    _require_safe(skill_file, directory, directory=False)
     raw = skill_file.read_bytes()
     if len(raw) > MAX_SKILL_BYTES:
         raise InvalidSkillError("SKILL.md exceeds 256 KiB.")
@@ -136,20 +137,20 @@ def _discover_resources(
             category_root.lstat()
         except FileNotFoundError:
             continue
-        _require_safe(category_root, workspace, directory=True)
+        _require_safe(category_root, directory, directory=True)
         pending = [category_root]
         while pending:
             current = pending.pop()
-            _require_safe(current, workspace, directory=True)
+            _require_safe(current, category_root, directory=True)
             for path in sorted(
                 current.iterdir(), key=lambda item: item.name, reverse=True
             ):
-                if path.is_symlink():
+                if _is_link_or_reparse(path.lstat()):
                     raise InvalidSkillError(
-                        "Skill paths must not be symbolic links."
+                        "Skill paths must not be symbolic links or reparse points."
                     )
                 if path.is_dir():
-                    _require_safe(path, workspace, directory=True)
+                    _require_safe(path, category_root, directory=True)
                     _require_within(path, directory)
                     pending.append(path)
                     continue
@@ -157,7 +158,7 @@ def _discover_resources(
                     raise InvalidSkillError(
                         "Skill resources must be regular files."
                     )
-                _require_safe(path, workspace, directory=False)
+                _require_safe(path, category_root, directory=False)
                 _require_within(path, directory)
                 if len(resources) >= MAX_RESOURCES:
                     raise InvalidSkillError(
@@ -191,7 +192,7 @@ def revalidate_skill(skill: DiscoveredSkill, workspace: Path) -> None:
         raise InvalidSkillError("Workspace is invalid.") from error
     _require_safe(skill.directory, resolved_workspace, directory=True)
     skill_file = skill.directory / "SKILL.md"
-    _require_safe(skill_file, resolved_workspace, directory=False)
+    _require_safe(skill_file, skill.directory, directory=False)
     if skill_file.stat().st_size > MAX_SKILL_BYTES:
         raise InvalidSkillError("SKILL.md exceeds 256 KiB.")
 
@@ -216,8 +217,8 @@ def revalidate_resource(
         raise InvalidSkillError("Resource category is not allowed.")
     revalidate_skill(skill, resolved_workspace)
     category_root = skill.directory / resource.category
-    _require_safe(category_root, resolved_workspace, directory=True)
-    _require_safe(resource.path, resolved_workspace, directory=False)
+    _require_safe(category_root, skill.directory, directory=True)
+    _require_safe(resource.path, category_root, directory=False)
     resolved = resource.path.resolve(strict=True)
     try:
         resolved.relative_to(category_root.resolve(strict=True))
@@ -250,18 +251,47 @@ def _require_within(path: Path, directory: Path) -> None:
         ) from error
 
 
-def _require_safe(path: Path, workspace: Path, *, directory: bool) -> None:
-    if path.is_symlink():
-        raise InvalidSkillError("Skill paths must not be symbolic links.")
-    resolved = path.resolve(strict=True)
+def _require_safe(
+    path: Path, trusted_root: Path, *, directory: bool
+) -> None:
     try:
-        resolved.relative_to(workspace)
+        relative = path.relative_to(trusted_root)
     except ValueError as error:
         raise InvalidSkillError("Skill path is outside the workspace.") from error
-    if directory and not resolved.is_dir():
+    if any(part == ".." for part in relative.parts):
+        raise InvalidSkillError("Skill path is outside the workspace.")
+
+    current = trusted_root
+    status = current.lstat()
+    if _is_link_or_reparse(status):
+        raise InvalidSkillError(
+            "Skill paths must not be symbolic links or reparse points."
+        )
+    for part in relative.parts:
+        current = current / part
+        status = current.lstat()
+        if _is_link_or_reparse(status):
+            raise InvalidSkillError(
+                "Skill paths must not be symbolic links or reparse points."
+            )
+
+    resolved_root = trusted_root.resolve(strict=True)
+    resolved = path.resolve(strict=True)
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as error:
+        raise InvalidSkillError("Skill path is outside the workspace.") from error
+    if directory and not stat.S_ISDIR(status.st_mode):
         raise InvalidSkillError("Expected a directory.")
-    if not directory and not resolved.is_file():
+    if not directory and not stat.S_ISREG(status.st_mode):
         raise InvalidSkillError("Expected a regular file.")
+
+
+def _is_link_or_reparse(status: object) -> bool:
+    mode = getattr(status, "st_mode", 0)
+    attributes = getattr(status, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(mode) or bool(attributes & reparse_flag)
 
 
 def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
@@ -292,7 +322,6 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
     description = values["description"]
     if not isinstance(name, str) or not isinstance(description, str):
         raise InvalidSkillError("Metadata fields must be strings.")
-    name = name.strip()
     description = description.strip()
     if NAME_PATTERN.fullmatch(name) is None:
         raise InvalidSkillError("Skill name is invalid.")
@@ -305,7 +334,11 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
         raise InvalidSkillError(
             "Skill compatibility must be 1 to 500 characters."
         )
-    allowed_tools = _optional_string(values, "allowed-tools")
+    allowed_tools = _optional_string(values, "allowed-tools", strip=False)
+    if allowed_tools is not None and not _valid_allowed_tools(allowed_tools):
+        raise InvalidSkillError(
+            "Skill allowed-tools must use single ASCII spaces between tokens."
+        )
     metadata = values.get("metadata", {})
     if not isinstance(metadata, dict) or not all(
         isinstance(key, str) and isinstance(value, str)
@@ -329,13 +362,27 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
     )
 
 
-def _optional_string(values: dict[object, object], field: str) -> str | None:
+def _optional_string(
+    values: dict[object, object], field: str, *, strip: bool = True
+) -> str | None:
     if field not in values:
         return None
     value = values[field]
     if not isinstance(value, str):
         raise InvalidSkillError(f"Skill {field} must be a string.")
-    value = value.strip()
+    if strip:
+        value = value.strip()
     if not value:
         raise InvalidSkillError(f"Skill {field} must not be empty.")
     return value
+
+
+def _valid_allowed_tools(value: str) -> bool:
+    tokens = value.split(" ")
+    return (
+        all(tokens)
+        and all(
+            character == " " or not character.isspace()
+            for character in value
+        )
+    )

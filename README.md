@@ -4,7 +4,7 @@ CDY Agent 是一个本地个人 AI 助理项目，通过渐进式开发学习实
 
 ## 当前阶段
 
-项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具。模型还可以从工作区发现并按需激活 Skills；带 Python 工具的 Skill 在当前进程首次加载前需要用户明确授权。`chat` 会话和用户显式保存的长期记忆现在都按 workspace 持久化。
+项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具。模型还可以从工作区渐进式发现和激活 Skills：激活只返回说明与资源清单，不读取资源内容或运行代码；每一次脚本执行都需要用户单独确认。`chat` 会话和用户显式保存的长期记忆现在都按 workspace 持久化。
 
 ## 配置
 
@@ -183,11 +183,24 @@ Read `references/formats.md` when format details are needed.
 Run `python scripts/extract.py --help` before the first extraction.
 ```
 
+`SKILL.md` 使用以下严格校验：
+
+| 字段 | 必需性 | 校验规则 |
+| --- | --- | --- |
+| `name` | 必需 | 1–64 个字符；只允许小写 ASCII 字母、数字和单个连字符；不得以连字符开头或结尾；必须与目录名完全一致 |
+| `description` | 必需 | 非空字符串，最多 1024 个字符 |
+| `license` | 可选 | 非空字符串 |
+| `compatibility` | 可选 | 非空字符串，最多 500 个字符 |
+| `metadata` | 可选 | 键和值均为字符串的映射 |
+| `allowed-tools` | 可选 | 非空 token 字符串；token 之间只能使用一个 ASCII 空格；仅用于披露，不改变确认规则 |
+
+Markdown 正文也必须非空，未知字段和重复 YAML 键会使 Skill 无效。`SKILL.md` 最大为 256 KiB，每个 Skill 最多包含 512 个已识别资源文件；标准建议将 `SKILL.md` 保持在 500 行以内，但该建议不作为有效性校验。
+
 `list_skills` 和 `search_skills` 只返回目录元数据；首次 `activate_skill` 会重新校验 Skill，然后返回完整说明、元数据和资源清单，但不会读取资源内容或运行代码。重复激活会立即返回稳定的 `already_active` 载荷，不会再次校验。激活后，可用 `read_skill_resource` 按需读取 UTF-8 文本 reference 或 asset；二进制资源只返回其路径和大小等元数据。
 
 `run_skill_script` 只能运行已激活 Skill 的 `scripts/` 清单中恰好一个脚本。每一次运行都需要单独确认，即使 frontmatter 中声明了 `allowed-tools`；该字段只用于披露，绝不会绕过确认。确认信息会展示最终 argv、Skill 目录和当前用户权限。命令以参数数组执行，不经过 shell 解释（`shell=False`），可使用任意已安装的运行时；系统不会安装依赖，也不提供脚本沙箱。脚本超时必须为 1–300 秒（默认 30 秒），stdout 和 stderr 分别最多返回 64 KiB，并标记截断。
 
-资源在发现时记录文件状态身份；读取资源或准备脚本时会重新校验，脚本在用户确认后、执行前还会再次校验，因此可检测资源被重写或替换。此校验缩小了确认与使用之间的风险窗口，但不能消除操作系统层面的最终 check/use 竞争。
+资源在发现时记录文件状态身份；读取资源或准备脚本时会逐级重新校验路径组件并拒绝符号链接和 Windows reparse point。脚本确认时还会暂存仅绑定本次同步调用的内容摘要，执行前在重新校验路径后比较摘要；该摘要不会返回给模型或持久化，并会在拒绝、完成或失败后清除。因此可以检测资源被重写、替换或经祖先链接重定向。此校验缩小了确认与使用之间的风险窗口，但不能消除操作系统层面的最终 check/use 竞争。
 
 根目录中的额外条目不会成为资源；尤其 `tools.py` 和 `create_tools(workspace)` 均不受支持、会被忽略，且绝不会执行。
 

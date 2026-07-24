@@ -70,6 +70,83 @@ def test_parses_all_standard_metadata_fields(tmp_path: Path) -> None:
     assert skill.instructions == "# Instructions"
 
 
+@pytest.mark.parametrize("raw_name", ['" sample-skill"', '"sample-skill "'])
+def test_rejects_quoted_skill_name_whitespace(
+    tmp_path: Path, raw_name: str
+) -> None:
+    write_skill(
+        tmp_path,
+        frontmatter=f"name: {raw_name}\ndescription: valid\n",
+    )
+
+    discovery = discover_skills(tmp_path)
+
+    assert discovery.skills == ()
+    assert discovery.diagnostics[0].code == "invalid_skill"
+
+
+@pytest.mark.parametrize(
+    "raw_allowed_tools",
+    [
+        '" Read"',
+        '"Read "',
+        '"Read  Bash(git:*)"',
+        '"Read\\tBash(git:*)"',
+        '"Read\\nBash(git:*)"',
+    ],
+)
+def test_rejects_non_ascii_or_empty_allowed_tools_separators(
+    tmp_path: Path, raw_allowed_tools: str
+) -> None:
+    write_skill(
+        tmp_path,
+        frontmatter=(
+            "name: sample-skill\n"
+            "description: valid\n"
+            f"allowed-tools: {raw_allowed_tools}\n"
+        ),
+    )
+
+    discovery = discover_skills(tmp_path)
+
+    assert discovery.skills == ()
+    assert discovery.diagnostics[0].code == "invalid_skill"
+
+
+@pytest.mark.parametrize(
+    ("name_length", "description_length", "compatibility_length", "valid"),
+    [
+        (64, 1024, 500, True),
+        (65, 1024, 500, False),
+        (64, 1025, 500, False),
+        (64, 1024, 501, False),
+    ],
+)
+def test_metadata_length_boundaries(
+    tmp_path: Path,
+    name_length: int,
+    description_length: int,
+    compatibility_length: int,
+    valid: bool,
+) -> None:
+    name = "a" * name_length
+    write_skill(
+        tmp_path,
+        name,
+        frontmatter=(
+            f"name: {name}\n"
+            f"description: {'d' * description_length}\n"
+            f"compatibility: {'c' * compatibility_length}\n"
+            "allowed-tools: Read Bash(git:*)\n"
+        ),
+    )
+
+    discovery = discover_skills(tmp_path)
+
+    assert bool(discovery.skills) is valid
+    assert bool(discovery.diagnostics) is not valid
+
+
 @pytest.mark.parametrize(
     ("name", "metadata"),
     [
