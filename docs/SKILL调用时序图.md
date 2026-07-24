@@ -23,8 +23,14 @@ sequenceDiagram
     SM-->>M: 名称、描述、资源数量
     M->>R: activate_skill(name)
     R->>SM: activate(name)
-    SM->>SL: 重新校验 Skill
-    SM-->>M: 完整说明、元数据、资源清单
+    alt 首次激活
+        SM->>SL: 重新校验 Skill
+        SL-->>SM: 校验通过
+        SM-->>R: activated，完整说明、元数据、资源清单
+    else 已激活
+        SM-->>R: already_active，稳定载荷（不重新校验）
+    end
+    R-->>M: 激活结果
     opt 按需读取 reference 或 asset
         M->>RR: name, path
         RR->>SM: resolve_active_resource(...)
@@ -33,21 +39,31 @@ sequenceDiagram
     end
 
     opt 执行 scripts/ 文件
-        M->>RS: name, argv, timeout_seconds
+        M->>R: run_skill_script(name, argv, timeout_seconds)
+        R->>RS: preflight(arguments)
         RS->>SM: active_resources(name, scripts)
         RS->>SL: 执行前校验脚本
-        RS->>U: 显示最终 argv、Skill 目录与当前用户权限
+        RS-->>R: 预检通过
+        R->>RS: confirmation_description(arguments)
+        RS-->>R: 最终 argv、Skill 目录与当前用户权限
+        R->>U: ConfirmationRequest
         alt 用户拒绝
             U-->>R: No
             R-->>M: approval_denied
         else 用户批准
             U-->>R: Yes
+            R->>RS: execute(arguments)
+            RS->>SM: active_resources(name, scripts)
             RS->>SL: 确认后再次校验脚本
             RS->>P: shell=False，cwd=Skill 根目录
             alt 进程成功
-                P-->>M: stdout、stderr、截断标记
+                P-->>RS: stdout、stderr、截断标记
+                RS-->>R: 成功结果
+                R-->>M: stdout、stderr、截断标记
             else 超时或非零退出
-                P-->>M: 稳定错误码与安全结构化结果
+                P-->>RS: 进程结果或超时
+                RS-->>R: 稳定错误码与安全结构化结果
+                R-->>M: 稳定错误码与安全结构化结果
             end
         end
     end

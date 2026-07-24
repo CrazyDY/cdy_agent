@@ -183,7 +183,7 @@ Read `references/formats.md` when format details are needed.
 Run `python scripts/extract.py --help` before the first extraction.
 ```
 
-`list_skills` 和 `search_skills` 只返回目录元数据；`activate_skill` 重新校验 Skill 后返回完整说明、元数据和资源清单，但不会读取资源内容或运行代码。激活后，可用 `read_skill_resource` 按需读取 UTF-8 文本 reference 或 asset；二进制资源只返回其路径和大小等元数据。
+`list_skills` 和 `search_skills` 只返回目录元数据；首次 `activate_skill` 会重新校验 Skill，然后返回完整说明、元数据和资源清单，但不会读取资源内容或运行代码。重复激活会立即返回稳定的 `already_active` 载荷，不会再次校验。激活后，可用 `read_skill_resource` 按需读取 UTF-8 文本 reference 或 asset；二进制资源只返回其路径和大小等元数据。
 
 `run_skill_script` 只能运行已激活 Skill 的 `scripts/` 清单中恰好一个脚本。每一次运行都需要单独确认，即使 frontmatter 中声明了 `allowed-tools`；该字段只用于披露，绝不会绕过确认。确认信息会展示最终 argv、Skill 目录和当前用户权限。命令以参数数组执行，不经过 shell 解释（`shell=False`），可使用任意已安装的运行时；系统不会安装依赖，也不提供脚本沙箱。脚本超时必须为 1–300 秒（默认 30 秒），stdout 和 stderr 分别最多返回 64 KiB，并标记截断。
 
