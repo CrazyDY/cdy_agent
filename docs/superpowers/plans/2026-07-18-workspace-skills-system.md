@@ -470,16 +470,16 @@ def write_skill(tmp_path: Path, name: str, tools: str | None = None) -> Path:
 
 
 def test_instruction_only_skill_activates_without_confirmation(tmp_path: Path) -> None:
-    write_skill(tmp_path, "content_summary")
+    write_skill(tmp_path, "content-summary")
     confirmations = []
     manager = SkillManager(tmp_path, ToolRegistry([]), confirmations.append)
 
-    first = manager.activate("content_summary")
-    second = manager.activate("content_summary")
+    first = manager.activate("content-summary")
+    second = manager.activate("content-summary")
 
     assert first.data == {
-        "name": "content_summary", "status": "activated",
-        "instructions": "# content_summary", "tools": [],
+        "name": "content-summary", "status": "activated",
+        "instructions": "# content-summary", "tools": [],
     }
     assert second.data["status"] == "already_active"
     assert confirmations == []

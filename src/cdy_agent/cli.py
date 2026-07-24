@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import platform
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -121,10 +123,27 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     system_prompt = resolve_system_prompt(load_workspace_config(workspace))
     registry = create_builtin_registry(workspace)
     manager = SkillManager(workspace)
+    skills_prompt = '\n'.join([f"- **{skill['name']}**: {skill['description']}" for skill in manager.list_skills()['skills']])
     registered = registry.register_many(create_skill_tools(manager))
+    extra_system_prompt = f"""
+    
+**Current OS**: {platform.system()} {platform.release()}
+
+**Guidelines**:
+- Be concise, direct, and implementation-oriented.
+- Use tools to inspect files, search code, and verify behavior when needed.
+- Prefer deterministic local tools before guessing.
+- When writing files, use write_file and keep changes scoped.
+- Preserve URLs and user-provided identifiers exactly unless a tool result proves
+
+**Available skills**:
+{skills_prompt}
+
+Activate a skill with *activate_skill* tool when its description matches the task,and then follow the skill's instructions to complete the task.
+    """
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
-    return Agent(gateway, registry, _confirm_tool, system_prompt=system_prompt)
+    return Agent(gateway, registry, _confirm_tool, system_prompt=system_prompt + extra_system_prompt)
 
 
 def _load_configured_workspace(workspace: Path | None) -> tuple[Path, WorkspaceConfig]:
