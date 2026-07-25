@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from cdy_agent.tools.shell_approvals import ShellApprovalStore
 from cdy_agent.tools.shell_policy import (
     ShellExecutionDecision,
@@ -162,3 +164,109 @@ def test_policy_preserves_diff_safety_named_path_operands(
         "--no-ext-diff",
         "--no-textconv",
     )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pwd"],
+        ["pwd", "-P"],
+        ["ls"],
+        ["ls", "-la", "."],
+        ["rg", "needle", "."],
+        ["rg", "-n", "--glob", "*.py", "needle", "src"],
+        ["grep", "-n", "needle", "README.md"],
+        ["head", "-n", "5", "README.md"],
+        ["tail", "-n", "5", "README.md"],
+        ["wc", "-l", "README.md"],
+        ["sort", "-r", "README.md"],
+        ["uniq", "-c", "README.md"],
+        ["git", "status", "--short"],
+        ["git", "diff", "--stat"],
+        ["git", "diff", "--", "README.md"],
+    ],
+)
+def test_safe_workspace_read_commands_auto_approve(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "README.md").write_text("needle\n", encoding="utf-8")
+    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    result = policy.classify({"argv": argv})
+
+    assert result.decision is ShellExecutionDecision.AUTO_APPROVE
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python", "-c", "print(1)"],
+        ["./script"],
+        ["/bin/ls"],
+        ["rg", "--pre", "python", "needle", "."],
+        ["rg", "--pre=python", "needle", "."],
+        ["sort", "-o", "out.txt", "README.md"],
+        ["sort", "--output=out.txt", "README.md"],
+        ["sort", "--compress-program=python", "README.md"],
+        ["uniq", "README.md", "out.txt"],
+        ["wc", "--files0-from=list.txt"],
+        ["git", "log"],
+        ["git", "diff", "--output=out.patch"],
+        ["git", "diff", "--ext-diff"],
+        ["git", "diff", "--textconv"],
+        ["ls", "--unknown-option"],
+        ["sed", "-n", "1p", "README.md"],
+        ["find", ".", "-exec", "id", ";"],
+    ],
+)
+def test_unproven_or_mutating_commands_require_confirmation(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    (tmp_path / "README.md").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "list.txt").write_text("README.md\n", encoding="utf-8")
+    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    result = policy.classify({"argv": argv})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["ls", ".."],
+        ["rg", "needle", ".."],
+        ["grep", "needle", "../outside.txt"],
+        ["head", "../outside.txt"],
+        ["tail", "../outside.txt"],
+        ["wc", "../outside.txt"],
+        ["sort", "../outside.txt"],
+        ["uniq", "../outside.txt"],
+        ["git", "diff", "--", "../outside.txt"],
+    ],
+)
+def test_workspace_external_reads_require_confirmation(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    assert policy.classify(
+        {"argv": argv}
+    ).decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+def test_symlink_to_external_input_requires_confirmation(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = tmp_path / "linked.txt"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable.")
+
+    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    assert policy.classify(
+        {"argv": ["head", "linked.txt"]}
+    ).decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
