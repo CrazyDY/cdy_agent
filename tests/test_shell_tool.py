@@ -305,6 +305,30 @@ def test_shell_arbitrary_command_requires_confirmation_in_registry(
     assert len(requests) == 1
 
 
+def test_shell_rejects_nul_before_confirmation_and_runner(
+    tmp_path: Path,
+) -> None:
+    from cdy_agent.tools.base import ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    calls: list[list[str]] = []
+    requests: list[object] = []
+    tool = ShellTool(
+        tmp_path,
+        runner=lambda argv, **kwargs: calls.append(argv)
+        or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+
+    rejected = ToolRegistry([tool]).execute(
+        ToolCall("1", "shell", '{"argv":["python","bad\\u0000argument"]}'),
+        lambda request: requests.append(request) or True,
+    )
+
+    assert rejected.code == "invalid_arguments"
+    assert calls == []
+    assert requests == []
+
+
 def test_shell_allow_always_persists_final_argv_before_running(
     tmp_path: Path,
 ) -> None:

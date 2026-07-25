@@ -11,6 +11,21 @@ from .shell_approvals import ShellApprovalStore
 
 DEFAULT_TIMEOUT_SECONDS = 10
 MAX_TIMEOUT_SECONDS = 30
+GIT_GLOBAL_OPTIONS_WITH_VALUES = frozenset({
+    "-C",
+    "-c",
+    "--config-env",
+    "--git-dir",
+    "--namespace",
+    "--work-tree",
+})
+GIT_HARDENING = (
+    "--no-pager",
+    "--no-optional-locks",
+    "-c",
+    "core.fsmonitor=false",
+)
+GIT_DIFF_SAFETY = ("--no-ext-diff", "--no-textconv")
 
 
 class ShellExecutionDecision(str, Enum):
@@ -90,10 +105,14 @@ def _validate_arguments(
     if (
         not isinstance(argv, list)
         or not argv
-        or any(not isinstance(element, str) for element in argv)
+        or any(
+            not isinstance(element, str) or "\0" in element
+            for element in argv
+        )
     ):
         return ToolResult.failure(
-            "invalid_arguments", "argv must be a non-empty list of strings."
+            "invalid_arguments",
+            "argv must be a non-empty list of strings without NUL characters.",
         )
     timeout = arguments.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     if (
@@ -112,31 +131,77 @@ def _validate_arguments(
 def _effective_argv(argv: list[str]) -> list[str]:
     if argv[0] == "rg":
         return ["rg", "--no-config", *argv[1:]]
-    if argv[0] != "git" or len(argv) < 2:
+    if argv[0] != "git":
         return list(argv)
+    return _effective_git_argv(argv)
+
+
+def _effective_git_argv(argv: list[str]) -> list[str]:
+    command_index = _git_command_index(argv)
+    hardening_index = _git_hardening_index(argv, command_index)
     prefix = [
-        "git",
-        "--no-pager",
-        "--no-optional-locks",
-        "-c",
-        "core.fsmonitor=false",
-        argv[1],
+        *argv[:hardening_index],
+        *GIT_HARDENING,
+        *argv[hardening_index:command_index],
     ]
-    user_arguments = [
-        argument
-        for argument in argv[2:]
-        if argument not in {"--no-ext-diff", "--no-textconv"}
-    ]
-    if argv[1] != "diff":
-        return [*prefix, *user_arguments]
-    safety = ["--no-ext-diff", "--no-textconv"]
-    try:
-        separator = user_arguments.index("--")
-    except ValueError:
-        return [*prefix, *user_arguments, *safety]
+    if command_index is None:
+        return prefix
+    command = argv[command_index]
+    command_arguments = argv[command_index + 1:]
+    if command != "diff":
+        return [*prefix, command, *command_arguments]
     return [
         *prefix,
-        *user_arguments[:separator],
-        *safety,
-        *user_arguments[separator:],
+        command,
+        *_effective_git_diff_arguments(command_arguments),
+    ]
+
+
+def _git_command_index(argv: list[str]) -> int | None:
+    index = 1
+    while index < len(argv):
+        argument = argv[index]
+        if argument == "--":
+            return index + 1 if index + 1 < len(argv) else None
+        if argument in GIT_GLOBAL_OPTIONS_WITH_VALUES:
+            index += 2
+            continue
+        if argument.startswith("-"):
+            index += 1
+            continue
+        return index
+    return None
+
+
+def _git_hardening_index(
+    argv: list[str],
+    command_index: int | None,
+) -> int:
+    if command_index is not None:
+        if argv[command_index - 1] == "--":
+            return command_index - 1
+        return command_index
+    if len(argv) > 1 and argv[-1] in {*GIT_GLOBAL_OPTIONS_WITH_VALUES, "--"}:
+        return len(argv) - 1
+    return len(argv)
+
+
+def _effective_git_diff_arguments(arguments: list[str]) -> list[str]:
+    try:
+        separator = arguments.index("--")
+    except ValueError:
+        options = arguments
+        operands: list[str] = []
+    else:
+        options = arguments[:separator]
+        operands = arguments[separator:]
+    user_options = [
+        argument
+        for argument in options
+        if argument not in GIT_DIFF_SAFETY
+    ]
+    return [
+        *user_options,
+        *GIT_DIFF_SAFETY,
+        *operands,
     ]
