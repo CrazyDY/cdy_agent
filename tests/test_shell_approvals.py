@@ -50,6 +50,8 @@ def test_invalid_approval_documents_fail_closed(tmp_path: Path) -> None:
     for content in (
         "{",
         '{"version":2,"allowed_commands":[]}',
+        '{"version":true,"allowed_commands":[]}',
+        '{"version":1.0,"allowed_commands":[]}',
         '{"version":1,"allowed_commands":["uv"]}',
         '{"version":1,"allowed_commands":[[]]}',
         '{"version":1,"allowed_commands":[["uv",1]]}',
@@ -60,6 +62,37 @@ def test_invalid_approval_documents_fail_closed(tmp_path: Path) -> None:
             ShellApprovalStore(tmp_path).contains(["uv"]).code
             == "invalid_approval_store"
         )
+
+
+def test_add_normalizes_duplicate_commands_in_existing_store(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / ".cdy-agent"
+    data.mkdir()
+    target = data / "shell-approvals.json"
+    target.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "allowed_commands": [
+                    ["uv", "run", "pytest"],
+                    ["uv", "run", "pytest"],
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = ShellApprovalStore(tmp_path).add(["python", "script.py"])
+
+    assert result.ok
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "version": 1,
+        "allowed_commands": [
+            ["uv", "run", "pytest"],
+            ["python", "script.py"],
+        ],
+    }
 
 
 def test_symlinked_store_outside_workspace_is_rejected(tmp_path: Path) -> None:

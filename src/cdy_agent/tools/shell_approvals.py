@@ -48,7 +48,11 @@ class ShellApprovalStore:
         loaded = self._load()
         if not loaded.ok:
             return loaded
-        commands = [list(item) for item in loaded.data]
+        commands: list[list[str]] = []
+        for item in loaded.data:
+            normalized = list(item)
+            if normalized not in commands:
+                commands.append(normalized)
         if command not in commands:
             commands.append(command)
         return self._save(commands)
@@ -171,6 +175,7 @@ def _valid_document(value: object) -> bool:
     return (
         isinstance(value, dict)
         and set(value) == {"version", "allowed_commands"}
+        and type(value["version"]) is int
         and value["version"] == APPROVAL_VERSION
         and isinstance(value["allowed_commands"], list)
         and all(_valid_command(item) for item in value["allowed_commands"])
