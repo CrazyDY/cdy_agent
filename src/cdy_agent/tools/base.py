@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable, Protocol
 
 
@@ -45,9 +46,16 @@ class ConfirmationRequest:
     tool_name: str
     arguments: dict[str, Any]
     description: str
+    allow_always: bool = False
 
 
-ConfirmationCallback = Callable[[ConfirmationRequest], bool]
+class ConfirmationDecision(str, Enum):
+    DENY = "deny"
+    ALLOW_ONCE = "allow_once"
+    ALLOW_ALWAYS = "allow_always"
+
+
+ConfirmationCallback = Callable[[ConfirmationRequest], bool | ConfirmationDecision]
 
 
 class Tool(Protocol):

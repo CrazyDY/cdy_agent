@@ -5,7 +5,12 @@ from typing import Any
 
 import pytest
 
-from cdy_agent.tools.base import ConfirmationRequest, ToolCall, ToolResult
+from cdy_agent.tools.base import (
+    ConfirmationDecision,
+    ConfirmationRequest,
+    ToolCall,
+    ToolResult,
+)
 from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.registry import ToolRegistry
 
@@ -37,6 +42,25 @@ class EchoTool:
         if set(arguments) != {"text"} or not isinstance(arguments["text"], str):
             return ToolResult.failure("invalid_arguments", "text must be a string.")
         return ToolResult.success({"text": arguments["text"]})
+
+
+@dataclass
+class DynamicEchoTool(EchoTool):
+    confirmation_required: bool = True
+    remembered: list[dict[str, Any]] = None  # type: ignore[assignment]
+    remember_result: ToolResult = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.remembered = []
+        self.remember_result = ToolResult.success({"remembered": True})
+
+    def requires_confirmation_for(self, arguments: dict[str, Any]) -> bool:
+        return self.confirmation_required
+
+    def remember_approval(self, arguments: dict[str, Any]) -> ToolResult:
+        self.remembered.append(dict(arguments))
+        return self.remember_result
 
 
 def test_registry_exposes_function_definition_and_executes() -> None:
@@ -73,6 +97,81 @@ def test_registry_denies_confirmed_tool_without_executing() -> None:
     )
     assert result.code == "approval_denied"
     assert requests[0].tool_name == "echo"
+
+
+def test_registry_skips_callback_when_dynamic_tool_is_auto_approved() -> None:
+    callbacks: list[ConfirmationRequest] = []
+    tool = DynamicEchoTool(confirmation_required=False)
+
+    result = ToolRegistry([tool]).execute(
+        ToolCall("1", "echo", '{"text":"hello"}'),
+        lambda request: callbacks.append(request) or ConfirmationDecision.DENY,
+    )
+
+    assert result.ok
+    assert callbacks == []
+
+
+def test_registry_allows_once_without_persisting() -> None:
+    tool = DynamicEchoTool()
+    requests: list[ConfirmationRequest] = []
+
+    result = ToolRegistry([tool]).execute(
+        ToolCall("1", "echo", '{"text":"hello"}'),
+        lambda request: requests.append(request) or ConfirmationDecision.ALLOW_ONCE,
+    )
+
+    assert result.ok
+    assert requests[0].allow_always is True
+    assert tool.remembered == []
+
+
+def test_registry_persists_before_execution() -> None:
+    events: list[str] = []
+    tool = DynamicEchoTool()
+    tool.remember_approval = lambda arguments: (
+        events.append("remember")
+        or ToolResult.success({"remembered": True})
+    )  # type: ignore[method-assign]
+    tool.execute = lambda arguments: (
+        events.append("execute") or ToolResult.success({"text": arguments["text"]})
+    )  # type: ignore[method-assign]
+
+    result = ToolRegistry([tool]).execute(
+        ToolCall("1", "echo", '{"text":"hello"}'),
+        lambda request: ConfirmationDecision.ALLOW_ALWAYS,
+    )
+
+    assert result.ok
+    assert events == ["remember", "execute"]
+
+
+def test_registry_does_not_execute_when_persistence_fails() -> None:
+    executions: list[dict[str, Any]] = []
+    tool = DynamicEchoTool()
+    tool.remember_result = ToolResult.failure(
+        "approval_store_error", "Could not save Shell approval."
+    )
+    tool.execute = lambda arguments: (
+        executions.append(arguments) or ToolResult.success({})
+    )  # type: ignore[method-assign]
+
+    result = ToolRegistry([tool]).execute(
+        ToolCall("1", "echo", '{"text":"hello"}'),
+        lambda request: ConfirmationDecision.ALLOW_ALWAYS,
+    )
+
+    assert result.code == "approval_store_error"
+    assert executions == []
+
+
+def test_registry_rejects_always_for_tool_without_persistence_hook() -> None:
+    result = ToolRegistry([EchoTool(requires_confirmation=True)]).execute(
+        ToolCall("1", "echo", '{"text":"hello"}'),
+        lambda request: ConfirmationDecision.ALLOW_ALWAYS,
+    )
+
+    assert result.code == "persistent_approval_not_supported"
 
 
 @pytest.mark.parametrize("failure_stage", ["description", "callback"])

@@ -4,7 +4,14 @@ import json
 import re
 from collections.abc import Iterable
 
-from .base import ConfirmationCallback, ConfirmationRequest, Tool, ToolCall, ToolResult
+from .base import (
+    ConfirmationCallback,
+    ConfirmationDecision,
+    ConfirmationRequest,
+    Tool,
+    ToolCall,
+    ToolResult,
+)
 
 TOOL_NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 
@@ -52,24 +59,52 @@ class ToolRegistry:
         invalid = tool.preflight(arguments)
         if invalid is not None:
             return invalid
-        if tool.requires_confirmation:
+        if _confirmation_required(tool, arguments):
+            remember = getattr(tool, "remember_approval", None)
             try:
                 request = ConfirmationRequest(
                     tool.name,
                     arguments,
                     tool.confirmation_description(arguments),
+                    allow_always=callable(remember),
                 )
-                approved = confirm(request)
+                decision = _normalize_decision(confirm(request))
             except BaseException:
                 try:
                     _cancel_tool(tool)
                 except BaseException:
                     pass
                 raise
-            if not approved:
+            if decision is ConfirmationDecision.DENY:
                 _cancel_tool(tool)
                 return ToolResult.failure("approval_denied", "User declined this tool call.")
+            if decision is ConfirmationDecision.ALLOW_ALWAYS:
+                if not callable(remember):
+                    _cancel_tool(tool)
+                    return ToolResult.failure(
+                        "persistent_approval_not_supported",
+                        "This tool does not support persistent approval.",
+                    )
+                remembered = remember(arguments)
+                if not remembered.ok:
+                    _cancel_tool(tool)
+                    return remembered
         return tool.execute(arguments)
+
+
+def _confirmation_required(tool: Tool, arguments: dict[str, object]) -> bool:
+    dynamic = getattr(tool, "requires_confirmation_for", None)
+    if callable(dynamic):
+        return bool(dynamic(arguments))
+    return tool.requires_confirmation
+
+
+def _normalize_decision(
+    decision: bool | ConfirmationDecision,
+) -> ConfirmationDecision:
+    if isinstance(decision, ConfirmationDecision):
+        return decision
+    return ConfirmationDecision.ALLOW_ONCE if decision else ConfirmationDecision.DENY
 
 
 def _valid_tool(tool: object) -> bool:
