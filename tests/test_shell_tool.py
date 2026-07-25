@@ -27,61 +27,13 @@ def test_process_helpers_sanitize_environment_and_limit_utf8_bytes(
 
 
 def test_shell_constructor_cannot_disable_confirmation(tmp_path: Path) -> None:
-    assert tuple(signature(ShellTool).parameters) == ("workspace", "runner")
+    assert tuple(signature(ShellTool).parameters) == (
+        "workspace",
+        "runner",
+        "policy",
+    )
     with pytest.raises(TypeError):
         ShellTool(tmp_path, requires_confirmation=False)  # type: ignore[call-arg]
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["rm", "file"],
-        ["/bin/ls"],
-        ["./ls"],
-        [r"bin\\ls"],
-        ["git", "log"],
-        ["git"],
-        ["git", "-C", "..", "status"],
-        ["git", "--git-dir=../.git", "diff"],
-    ],
-)
-def test_shell_rejects_disallowed_commands(tmp_path: Path, argv: list[str]) -> None:
-    assert ShellTool(tmp_path).execute({"argv": argv}).code == "command_not_allowed"
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["find", ".", "-exec", "sh", "-c", "id", ";"],
-        ["find", ".", "-execdir", "id", ";"],
-        ["find", ".", "-ok", "id", ";"],
-        ["find", ".", "-okdir", "id", ";"],
-        ["rg", "--pre", "sh", "x"],
-        ["rg", "--pre=sh", "x"],
-        ["sed", "-e", "1e id", "file"],
-        ["sed", "--expression=1e id", "file"],
-        ["git", "diff", "--ext-diff"],
-        ["git", "-c", "diff.external=id", "diff"],
-        ["sed", "-e", "s/.*/touch owned/e", "file"],
-        ["sed", "s|x|y|e", "file"],
-        ["sed", "p\ne touch owned", "file"],
-        ["sed", "-f", "commands.sed", "file"],
-        ["sed", "--file=commands.sed", "file"],
-        ["sed", "/x/e touch owned", "file"],
-        ["sed", "1!e touch owned", "file"],
-        ["sed", "{e touch owned}", "file"],
-        ["sed", "s/x/y/w owned", "file"],
-        ["git", "diff", "--ext", "helper"],
-        ["git", "diff", "--textc", "file"],
-    ],
-)
-def test_shell_rejects_execution_delegation_without_runner(
-    tmp_path: Path, argv: list[str]
-) -> None:
-    calls: list[list[str]] = []
-    tool = ShellTool(tmp_path, runner=lambda value, **_: calls.append(value))  # type: ignore[arg-type]
-    assert tool.execute({"argv": argv}).code == "command_not_allowed"
-    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -125,8 +77,13 @@ def test_shell_invokes_runner_without_shell(tmp_path: Path) -> None:
     assert calls == [
         {
             "argv": [
-                "git", "--no-pager", "-c", "core.fsmonitor=false",
-                "status", "--short",
+                "git",
+                "--no-pager",
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "status",
+                "--short",
             ],
             "cwd": tmp_path.resolve(),
             "shell": False,
@@ -223,6 +180,7 @@ def test_shell_confirmation_names_exact_argv_and_workspace(tmp_path: Path) -> No
     )
     assert repr(["rg", "--no-config", "x y", "."]) in description
     assert str(tmp_path.resolve()) in description
+    assert description.endswith("with current user permissions.")
 
 
 @pytest.mark.parametrize(
@@ -231,27 +189,57 @@ def test_shell_confirmation_names_exact_argv_and_workspace(tmp_path: Path) -> No
         (["rg", "x"], ["rg", "--no-config", "x"]),
         (
             ["git", "status", "--short"],
-            ["git", "--no-pager", "-c", "core.fsmonitor=false", "status", "--short"],
+            [
+                "git",
+                "--no-pager",
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "status",
+                "--short",
+            ],
         ),
         (
             ["git", "diff", "--", "file"],
             [
-                "git", "--no-pager", "-c", "core.fsmonitor=false", "diff",
-                "--no-ext-diff", "--no-textconv", "--", "file",
+                "git",
+                "--no-pager",
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                "file",
             ],
         ),
         (
             ["git", "diff", "--stat"],
             [
-                "git", "--no-pager", "-c", "core.fsmonitor=false", "diff",
-                "--stat", "--no-ext-diff", "--no-textconv",
+                "git",
+                "--no-pager",
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "diff",
+                "--stat",
+                "--no-ext-diff",
+                "--no-textconv",
             ],
         ),
         (
             ["git", "diff", "--no-ext-diff", "--stat", "--no-textconv"],
             [
-                "git", "--no-pager", "-c", "core.fsmonitor=false", "diff",
-                "--stat", "--no-ext-diff", "--no-textconv",
+                "git",
+                "--no-pager",
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "diff",
+                "--stat",
+                "--no-ext-diff",
+                "--no-textconv",
             ],
         ),
     ],
@@ -293,14 +281,57 @@ def test_shell_retains_safe_sed_scripts(
     assert calls == [expected]
 
 
-def test_registry_rejects_disallowed_shell_before_confirmation(tmp_path: Path) -> None:
+def test_shell_arbitrary_command_requires_confirmation_in_registry(
+    tmp_path: Path,
+) -> None:
     from cdy_agent.tools.base import ToolCall
     from cdy_agent.tools.registry import ToolRegistry
 
-    callbacks: list[object] = []
-    result = ToolRegistry([ShellTool(tmp_path)]).execute(
-        ToolCall("1", "shell", '{"argv":["find",".","-exec","id",";"]}'),
-        lambda request: callbacks.append(request) or True,
+    calls: list[list[str]] = []
+    requests: list[object] = []
+    tool = ShellTool(
+        tmp_path,
+        runner=lambda argv, **kwargs: calls.append(argv)
+        or subprocess.CompletedProcess(argv, 0, "", ""),
     )
-    assert result.code == "command_not_allowed"
+
+    denied = ToolRegistry([tool]).execute(
+        ToolCall("1", "shell", '{"argv":["python","-c","print(1)"]}'),
+        lambda request: requests.append(request) or False,
+    )
+
+    assert denied.code == "approval_denied"
+    assert calls == []
+    assert len(requests) == 1
+
+
+def test_shell_allow_always_persists_final_argv_before_running(
+    tmp_path: Path,
+) -> None:
+    from cdy_agent.tools.base import ConfirmationDecision, ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    calls: list[list[str]] = []
+    registry = ToolRegistry([
+        ShellTool(
+            tmp_path,
+            runner=lambda argv, **kwargs: calls.append(argv)
+            or subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+    ])
+    call = ToolCall("1", "shell", '{"argv":["python","script.py"]}')
+
+    first = registry.execute(
+        call, lambda request: ConfirmationDecision.ALLOW_ALWAYS
+    )
+    callbacks: list[object] = []
+    second = registry.execute(
+        call, lambda request: callbacks.append(request) or False
+    )
+
+    assert first.ok and second.ok
+    assert calls == [
+        ["python", "script.py"],
+        ["python", "script.py"],
+    ]
     assert callbacks == []
