@@ -123,7 +123,10 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     system_prompt = resolve_system_prompt(load_workspace_config(workspace))
     registry = create_builtin_registry(workspace)
     manager = SkillManager(workspace)
-    skills_prompt = '\n'.join([f"- **{skill['name']}**: {skill['description']}" for skill in manager.list_skills()['skills']])
+    skills_prompt = '\n'.join(
+        f"- **{skill.get('name', 'unknown')}**: {skill.get('description', '')}"
+        for skill in manager.list_skills().get('skills', [])
+    )
     registered = registry.register_many(create_skill_tools(manager))
     extra_system_prompt = f"""
     
@@ -817,8 +820,8 @@ def chat(
                 )
             assistant_message = Message(role="assistant", content=reply.strip())
             store.append_turn(session_id, user_message, assistant_message)
+            conversation.append(assistant_message.role, assistant_message.content)
+            if not stream_output:
+                typer.echo(f"Assistant: {assistant_message.content}")
         except REQUEST_ERRORS as exc:
             _fail_for_exception(exc)
-        conversation.append(assistant_message.role, assistant_message.content)
-        if not stream_output:
-            typer.echo(f"Assistant: {assistant_message.content}")

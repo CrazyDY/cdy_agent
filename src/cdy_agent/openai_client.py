@@ -191,6 +191,11 @@ class ModelGateway:
             content = getattr(message, "content", None)
             if content is not None and not isinstance(content, str):
                 raise RuntimeError("OpenAI returned an unsupported response.")
+            # Everything appended after the original messages becomes the
+            # continuation history for the next chat-completions turn: prior
+            # assistant tool-call messages plus tool results, so the next
+            # request rebuilds the full tool-call chain without re-sending
+            # the original input messages.
             history = tuple(request_messages[len(_message_dicts(messages)):])
             return ToolCallResponse(
                 calls, ChatContinuation(calls, content, history), usage
@@ -476,6 +481,11 @@ class ModelGateway:
             for _, part in sorted(tool_call_parts.items())
         )
         if calls:
+            # Everything appended after the original messages becomes the
+            # continuation history for the next chat-completions turn: prior
+            # assistant tool-call messages plus tool results, so the next
+            # request rebuilds the full tool-call chain without re-sending
+            # the original input messages.
             history = tuple(request_messages[len(_message_dicts(messages)):])
             content = "".join(chunks) or None
             return ToolCallResponse(
