@@ -429,3 +429,59 @@ def test_external_git_directory_symlink_requires_confirmation(
     result = policy.classify({"argv": ["git", "diff", "--stat"]})
 
     assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["git", "status", "--short"],
+        ["git", "diff", "--stat"],
+    ],
+)
+def test_external_linked_worktree_commondir_requires_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    _bind_executables(monkeypatch, tmp_path, "git")
+    linked_gitdir = tmp_path / "linked-gitdir"
+    linked_gitdir.mkdir()
+    outside_commondir = tmp_path.parent / f"{tmp_path.name}-commondir"
+    outside_commondir.mkdir()
+    (linked_gitdir / "commondir").write_text(
+        f"{outside_commondir}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".git").write_text(
+        f"gitdir: {linked_gitdir}\n",
+        encoding="utf-8",
+    )
+    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    result = policy.classify({"argv": argv})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["git", "status", "--short"],
+        ["git", "diff", "--stat"],
+    ],
+)
+def test_parent_repository_discovery_requires_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    _bind_executables(monkeypatch, tmp_path, "git")
+    repository = tmp_path / "repository"
+    workspace = repository / "nested-workspace"
+    workspace.mkdir(parents=True)
+    (repository / ".git").mkdir()
+    policy = ShellExecutionPolicy(workspace, ShellApprovalStore(workspace))
+
+    result = policy.classify({"argv": argv})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
