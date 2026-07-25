@@ -1,4 +1,5 @@
 import importlib
+import os
 import subprocess
 from inspect import signature
 from pathlib import Path
@@ -6,6 +7,23 @@ from pathlib import Path
 import pytest
 
 from cdy_agent.tools.shell import MAX_OUTPUT_BYTES, ShellTool
+
+
+def _bind_executable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    command: str,
+) -> Path:
+    directory = tmp_path.parent / f"{tmp_path.name}-bin"
+    directory.mkdir(exist_ok=True)
+    suffix = ".exe" if os.name == "nt" else ""
+    executable = directory / f"{command}{suffix}"
+    executable.write_bytes(b"")
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(directory))
+    if os.name == "nt":
+        monkeypatch.setenv("PATHEXT", ".EXE")
+    return executable.resolve()
 
 
 def test_process_helpers_sanitize_environment_and_limit_utf8_bytes(
@@ -55,7 +73,10 @@ def test_shell_rejects_invalid_arguments(
     assert ShellTool(tmp_path).execute(arguments).code == "invalid_arguments"
 
 
-def test_shell_invokes_runner_without_shell(tmp_path: Path) -> None:
+def test_shell_invokes_runner_without_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git = _bind_executable(monkeypatch, tmp_path, "git")
     calls: list[dict[str, object]] = []
 
     def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -77,7 +98,7 @@ def test_shell_invokes_runner_without_shell(tmp_path: Path) -> None:
     assert calls == [
         {
             "argv": [
-                "git",
+                str(git),
                 "--no-pager",
                 "--no-optional-locks",
                 "-c",
@@ -95,7 +116,10 @@ def test_shell_invokes_runner_without_shell(tmp_path: Path) -> None:
     ]
 
 
-def test_shell_metacharacters_are_plain_arguments(tmp_path: Path) -> None:
+def test_shell_metacharacters_are_plain_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rg = _bind_executable(monkeypatch, tmp_path, "rg")
     calls: list[list[str]] = []
 
     def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -103,7 +127,7 @@ def test_shell_metacharacters_are_plain_arguments(tmp_path: Path) -> None:
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     ShellTool(tmp_path, runner=runner).execute({"argv": ["rg", "|", "."]})
-    assert calls == [["rg", "--no-config", "|", "."]]
+    assert calls == [[str(rg), "--no-config", "|", "."]]
 
 
 def test_shell_uses_default_timeout(tmp_path: Path) -> None:
@@ -174,11 +198,14 @@ def test_shell_caps_utf8_bytes_and_drops_only_incomplete_codepoint(tmp_path: Pat
     assert result.data["stdout_truncated"] is True
 
 
-def test_shell_confirmation_names_exact_argv_and_workspace(tmp_path: Path) -> None:
+def test_shell_confirmation_names_exact_argv_and_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rg = _bind_executable(monkeypatch, tmp_path, "rg")
     description = ShellTool(tmp_path).confirmation_description(
         {"argv": ["rg", "x y", "."]}
     )
-    assert repr(["rg", "--no-config", "x y", "."]) in description
+    assert repr([str(rg), "--no-config", "x y", "."]) in description
     assert str(tmp_path.resolve()) in description
     assert description.endswith("with current user permissions.")
 
@@ -245,8 +272,13 @@ def test_shell_confirmation_names_exact_argv_and_workspace(tmp_path: Path) -> No
     ],
 )
 def test_shell_confirmation_and_execution_use_effective_argv(
-    tmp_path: Path, user_argv: list[str], effective_argv: list[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    user_argv: list[str],
+    effective_argv: list[str],
 ) -> None:
+    executable = _bind_executable(monkeypatch, tmp_path, user_argv[0])
+    effective_argv[0] = str(executable)
     calls: list[list[str]] = []
     tool = ShellTool(
         tmp_path,
@@ -358,4 +390,41 @@ def test_shell_allow_always_persists_final_argv_before_running(
         ["python", "script.py"],
         ["python", "script.py"],
     ]
+    assert callbacks == []
+
+
+def test_shell_persists_and_executes_resolved_builtin_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cdy_agent.tools.base import ConfirmationDecision, ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    rg = _bind_executable(monkeypatch, tmp_path, "rg")
+    calls: list[list[str]] = []
+    registry = ToolRegistry([
+        ShellTool(
+            tmp_path,
+            runner=lambda argv, **kwargs: calls.append(argv)
+            or subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+    ])
+    call = ToolCall(
+        "1",
+        "shell",
+        '{"argv":["rg","--pre","python","needle","."]}',
+    )
+
+    first = registry.execute(
+        call, lambda request: ConfirmationDecision.ALLOW_ALWAYS
+    )
+    callbacks: list[object] = []
+    second = registry.execute(
+        call, lambda request: callbacks.append(request) or False
+    )
+
+    expected = [
+        str(rg), "--no-config", "--pre", "python", "needle", ".",
+    ]
+    assert first.ok and second.ok
+    assert calls == [expected, expected]
     assert callbacks == []
