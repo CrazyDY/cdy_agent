@@ -142,7 +142,19 @@ uv run cdy-agent traces show <trace-id> --workspace .
 
 工作区默认为命令启动时解析后的当前目录，也可通过 `--workspace` 指定。文件工具会解析真实路径（包括符号链接）并拒绝访问工作区之外的路径。
 
-每次 `write_file` 和 `shell` 调用都会显示操作说明并请求确认，默认答案为 No；`read_file` 不需要确认。记忆工具中 `remember_memory`、`update_memory` 和 `forget_memory` 需要默认 No 的确认，`search_memories` 不需要确认；所有四个工具都只允许响应用户的明确记忆请求。Shell 超时可设为 1–30 秒（默认 10 秒），标准输出和标准错误分别最多返回 64 KiB。Shell 只允许 `pwd`、`ls`、`find`、`rg`、`grep`、`sed`、`head`、`tail`、`wc`、`sort`、`uniq`，以及 `git status` 和 `git diff`。
+每次 `write_file` 调用都会显示操作说明并请求确认，默认答案为 No；`read_file` 不需要确认。记忆工具中 `remember_memory`、`update_memory` 和 `forget_memory` 需要默认 No 的确认，`search_memories` 不需要确认；所有四个工具都只允许响应用户的明确记忆请求。
+
+### Shell 命令审批
+
+Shell 工具使用参数数组和 `shell=False`，并固定在当前 workspace 中运行。Shell 超时可设为 1–30 秒（默认 10 秒），标准输出和标准错误分别最多返回 64 KiB。
+
+带有安全参数且只访问 workspace 内文件的 `pwd`、`ls`、`rg`、`grep`、`head`、`tail`、`wc`、`sort`、`uniq`、`git status` 和 `git diff` 可以自动执行。未知参数、写入参数、外部程序委托或 workspace 外路径的调用会请求确认。`git status` 和 `git diff` 只有在 Git 元数据位于 workspace 内时才能自动执行；Git 元数据位于 workspace 外、无法验证或使用链接工作区元数据时，会降级为请求确认。
+
+自动批准会保守地绑定到已解析的可执行文件：只有可执行文件解析到 workspace 外部的内置安全命令才会自动执行。若同名可执行文件解析到 workspace 内（例如被 workspace 中的文件遮蔽），即使参数原本安全，也会请求确认。
+
+确认时输入 `y` 仅允许本次执行；输入 `a` 会把最终实际执行的完整 argv 保存到 `<workspace>/.cdy-agent/shell-approvals.json`，以后在同一 workspace 中精确匹配时不再询问。匹配区分大小写、参数顺序和参数内容，不支持前缀或通配符。编辑或删除该 JSON 文件即可撤销授权。
+
+解释器、脚本和路径程序以当前用户权限运行。选择永久允许意味着信任相同 argv 的后续执行，即使对应脚本或程序内容后来发生变化。审批文件已由 Git 忽略，工具参数不会写入结构化日志或 trace。
 
 ### 笔记与 Todo 数据
 
