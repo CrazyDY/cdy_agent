@@ -51,7 +51,7 @@ from .observability import (
 from .observability.logging import configure_structured_logging, resolve_log_level
 from .skills import SkillManager, create_skill_tools
 from .tools import create_builtin_registry
-from .tools.base import ConfirmationRequest
+from .tools.base import ConfirmationDecision, ConfirmationRequest
 from .tools.filesystem import resolve_workspace
 
 
@@ -107,14 +107,23 @@ def _fail_for_exception(exc: Exception) -> NoReturn:
     _fail(str(exc))
 
 
-def _confirm_tool(request: ConfirmationRequest) -> bool:
-    """Ask before a destructive tool call, treating interruptions as denial."""
+def _confirm_tool(request: ConfirmationRequest) -> ConfirmationDecision:
+    """Confirm a tool call, treating interruptions as denial."""
+    prompt = (
+        "[y] once / [a] always / [N] deny: "
+        if request.allow_always
+        else "[y/N]: "
+    )
     try:
-        typer.echo(f"{request.description} [y/N]: ", nl=False)
-        answer = input()
+        typer.echo(f"{request.description} {prompt}", nl=False)
+        answer = input().strip().lower()
     except (EOFError, KeyboardInterrupt, typer.Abort):
-        return False
-    return answer.strip().lower() in {"y", "yes"}
+        return ConfirmationDecision.DENY
+    if answer in {"y", "yes"}:
+        return ConfirmationDecision.ALLOW_ONCE
+    if request.allow_always and answer in {"a", "always"}:
+        return ConfirmationDecision.ALLOW_ALWAYS
+    return ConfirmationDecision.DENY
 
 
 def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:

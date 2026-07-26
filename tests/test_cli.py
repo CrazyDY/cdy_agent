@@ -37,7 +37,12 @@ from cdy_agent.openai_client import (
     ToolCallResponse,
 )
 from cdy_agent.observability import TraceRecord, TraceStore, TraceStoreError
-from cdy_agent.tools.base import ConfirmationRequest, ToolCall, ToolResult
+from cdy_agent.tools.base import (
+    ConfirmationDecision,
+    ConfirmationRequest,
+    ToolCall,
+    ToolResult,
+)
 
 
 runner = CliRunner()
@@ -49,7 +54,12 @@ confirmation_request = ConfirmationRequest(
 
 @confirm_test_app.callback(invoke_without_command=True)
 def confirm_test() -> None:
-    typer.echo("APPROVED" if cli._confirm_tool(confirmation_request) else "DENIED")
+    decision = cli._confirm_tool(confirmation_request)
+    typer.echo(
+        "APPROVED"
+        if decision is ConfirmationDecision.ALLOW_ONCE
+        else "DENIED"
+    )
 
 
 class FakeAgent:
@@ -1050,6 +1060,62 @@ def test_confirmation_answers(answer: str, expected: str) -> None:
     assert result.stdout.endswith(expected)
 
 
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("y\n", ConfirmationDecision.ALLOW_ONCE),
+        ("yes\n", ConfirmationDecision.ALLOW_ONCE),
+        ("a\n", ConfirmationDecision.ALLOW_ALWAYS),
+        ("always\n", ConfirmationDecision.ALLOW_ALWAYS),
+        ("\n", ConfirmationDecision.DENY),
+        ("other\n", ConfirmationDecision.DENY),
+    ],
+)
+def test_shell_confirmation_supports_once_always_and_deny(
+    answer: str,
+    expected: ConfirmationDecision,
+) -> None:
+    request = ConfirmationRequest(
+        "shell",
+        {"argv": ["python", "script.py"]},
+        (
+            "Run command ['python', 'script.py'] in workspace /workspace "
+            "with current user permissions."
+        ),
+        allow_always=True,
+    )
+    monkey_app = typer.Typer()
+
+    @monkey_app.callback(invoke_without_command=True)
+    def invoke() -> None:
+        typer.echo(cli._confirm_tool(request).value)
+
+    result = runner.invoke(monkey_app, [], input=answer)
+
+    assert result.exit_code == 0
+    assert "[y] once / [a] always / [N] deny:" in result.stdout
+    assert result.stdout.endswith(f"{expected.value}\n")
+
+
+def test_non_persistent_confirmation_keeps_yes_no_prompt() -> None:
+    request = ConfirmationRequest(
+        "write_file",
+        {"path": "note.txt"},
+        "Write note.txt.",
+    )
+    monkey_app = typer.Typer()
+
+    @monkey_app.callback(invoke_without_command=True)
+    def invoke() -> None:
+        typer.echo(cli._confirm_tool(request).value)
+
+    result = runner.invoke(monkey_app, [], input="a\n")
+
+    assert "[y/N]:" in result.stdout
+    assert "always" not in result.stdout
+    assert result.stdout.endswith("deny\n")
+
+
 def test_confirmation_eof_denies() -> None:
     result = runner.invoke(confirm_test_app, [], input="")
     assert result.exit_code == 0
@@ -1066,7 +1132,12 @@ def test_personal_tool_confirmation_description_is_shown_once() -> None:
 
     @monkey_app.callback(invoke_without_command=True)
     def invoke() -> None:
-        typer.echo("APPROVED" if cli._confirm_tool(request) else "DENIED")
+        decision = cli._confirm_tool(request)
+        typer.echo(
+            "APPROVED"
+            if decision is ConfirmationDecision.ALLOW_ONCE
+            else "DENIED"
+        )
 
     result = runner.invoke(monkey_app, [], input="y\n")
     assert result.exit_code == 0
@@ -1375,7 +1446,12 @@ def test_skill_script_confirmation_warns_about_current_user_permissions() -> Non
 
     @monkey_app.callback(invoke_without_command=True)
     def invoke() -> None:
-        typer.echo("APPROVED" if cli._confirm_tool(request) else "DENIED")
+        decision = cli._confirm_tool(request)
+        typer.echo(
+            "APPROVED"
+            if decision is ConfirmationDecision.ALLOW_ONCE
+            else "DENIED"
+        )
 
     result = runner.invoke(monkey_app, [], input="\n")
     assert "['python', '/workspace/research-skill/scripts/run.py']" in (
