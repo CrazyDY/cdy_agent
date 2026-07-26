@@ -53,3 +53,14 @@ Tests must not depend on a real API key, network access, or the contributor's fi
 Use short, imperative commit summaries such as `Add API mode configuration` and `Document dual API mode setup`. Keep each commit scoped and explain non-obvious tradeoffs in the body.
 
 Pull requests should describe the change, motivation, and verification performed; link relevant issues and include CLI output or screenshots when user-visible behavior changes. Never commit API keys, `.env` contents, IDE settings, caches, or captured model responses.
+
+<!-- CODEGRAPH_START -->
+## CodeGraph
+
+In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:
+
+- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow. Name a file or symbol in the query to read its current line-numbered source. If it's listed but deferred, load it by name via tool search.
+- **Shell** (always works): `codegraph explore "<symbol names or question>"` prints the same output.
+
+If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
+<!-- CODEGRAPH_END -->
