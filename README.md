@@ -4,7 +4,7 @@ CDY Agent 是一个本地个人 AI 助理项目，通过渐进式开发学习实
 
 ## 当前阶段
 
-项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具。模型还可以从工作区渐进式发现和激活 Skills：激活只返回说明与资源清单，不读取资源内容或运行代码；每一次脚本执行都需要用户单独确认。`chat` 会话和用户显式保存的长期记忆现在都按 workspace 持久化。
+项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具和流式工具调用。模型还可以从工作区渐进式发现和激活 Skills：激活只返回说明与资源清单，不读取资源内容或运行代码；每一次脚本执行都需要用户单独确认。`chat` 会话和用户显式保存的长期记忆按 workspace 持久化，并提供调用轨迹、Token/费用统计和基于 YAML/JSON 的评估运行器。
 
 ## 配置
 
@@ -34,13 +34,14 @@ $env:CDY_AGENT_API_MODE = "chat_completions"
 ```yaml
 model: deepseek-v4-flash
 api_mode: chat_completions
+stream: false
 log_level: INFO
 observability:
   input_cost_per_million: "1.25"
   output_cost_per_million: "2.50"
 ```
 
-`OPENAI_API_KEY` 和 `OPENAI_BASE_URL` 不属于工作区配置，仍通过环境变量提供。
+`OPENAI_API_KEY` 和 `OPENAI_BASE_URL` 不属于工作区配置，仍通过环境变量提供。流式输出的优先级为命令行 `--stream/--no-stream`、`CDY_AGENT_STREAM`、工作区 `stream`、默认关闭；环境变量接受 `1/true/yes/on` 和 `0/false/no/off`。
 可以查看当前 workspace 的有效非敏感配置：
 
 ```powershell
@@ -56,6 +57,7 @@ uv run cdy-agent ask "用一句话介绍你自己"
 uv run cdy-agent ask "解释 Agent Loop" --model gpt-5.6-luna
 uv run cdy-agent ask "读取 README.md 并总结"
 uv run cdy-agent ask "检查仓库状态" --workspace .
+uv run cdy-agent ask "流式介绍这个项目" --stream
 ```
 
 启动多轮会话：
@@ -64,9 +66,10 @@ uv run cdy-agent ask "检查仓库状态" --workspace .
 uv run cdy-agent chat
 uv run cdy-agent chat --model gpt-5.6-luna
 uv run cdy-agent chat --workspace .
+uv run cdy-agent chat --stream
 ```
 
-在会话中输入 `/exit`、`/quit`，或发送 EOF 即可退出。
+`--stream` 会立即输出模型文本，同时仍保留 Trace、工具调用循环和成功后的会话持久化；`--no-stream` 可以覆盖环境或工作区中启用的流式默认值。在会话中输入 `/exit`、`/quit`，或发送 EOF 即可退出。
 
 ```powershell
 # 开始并持久化一个新会话
@@ -231,6 +234,35 @@ Markdown 正文也必须非空，未知字段和重复 YAML 键会使 Skill 无�
 资源在发现时记录文件状态身份；读取资源或准备脚本时会逐级重新校验路径组件并拒绝符号链接和 Windows reparse point。脚本确认时还会暂存仅绑定本次同步调用的内容摘要，执行前在重新校验路径后比较摘要；该摘要不会返回给模型或持久化，并会在拒绝、完成或失败后清除。因此可以检测资源被重写、替换或经祖先链接重定向。此校验缩小了确认与使用之间的风险窗口，但不能消除操作系统层面的最终 check/use 竞争。
 
 根目录中的额外条目不会成为资源；尤其 `tools.py` 和 `create_tools(workspace)` 均不受支持、会被忽略，且绝不会执行。
+
+### 评估用例
+
+`evals run` 从 YAML 或 JSON 文件逐条运行单轮提示，并使用本地、确定性的 `exact` 和 `contains` 断言检查最终回复。仓库提供一个基础用例集：
+
+```powershell
+uv run cdy-agent evals run evals/smoke.yaml --workspace .
+uv run cdy-agent evals run evals/smoke.yaml --workspace . --model gpt-5.6-luna
+```
+
+用例文件格式如下：
+
+```yaml
+cases:
+  - name: exact reply
+    prompt: "Reply with exactly: CDY_EVAL_OK"
+    expect:
+      exact: CDY_EVAL_OK
+  - name: required concepts
+    prompt: "Include the literal terms Agent Loop and tool calling in one sentence."
+    expect:
+      contains:
+        - Agent Loop
+        - tool calling
+```
+
+每个用例必须提供非空的 `name`、`prompt` 和 `expect`；`expect` 至少包含 `exact` 或 `contains`，两者同时提供时必须全部满足。命令逐项输出 `PASS`/`FAIL` 和汇总，只要有一项失败就以退出码 1 结束。
+
+断言和用例加载完全在本地完成，但提示仍由所选 Agent 执行，因此通常需要有效的 provider 配置并可能产生网络请求和费用。自动化测试通过注入假 Agent 保持离线，不使用真实 API Key。
 
 ## 开发
 

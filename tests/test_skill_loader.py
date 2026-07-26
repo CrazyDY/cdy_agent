@@ -1,5 +1,5 @@
-import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -218,21 +218,29 @@ def test_skills_root_probe_oserror_is_diagnosed(
     assert discovery.diagnostics[0].message == "Skills root is invalid."
 
 
-def test_symlinked_skill_directory_is_rejected(tmp_path: Path) -> None:
+def test_symlinked_skill_directory_is_rejected(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     target = write_skill(tmp_path, "target-skill")
-    os.symlink(target, target.parent / "linked-skill", target_is_directory=True)
+    make_symlink(
+        target,
+        target.parent / "linked-skill",
+        target_is_directory=True,
+    )
 
     discovery = discover_skills(tmp_path)
 
     assert "linked-skill" in [item.entry for item in discovery.diagnostics]
 
 
-def test_rejects_symlinked_skills_root(tmp_path: Path) -> None:
+def test_rejects_symlinked_skills_root(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     target = tmp_path / "real-skills"
     target.mkdir()
     data = tmp_path / ".cdy-agent"
     data.mkdir()
-    os.symlink(target, data / "skills", target_is_directory=True)
+    make_symlink(target, data / "skills", target_is_directory=True)
 
     discovery = discover_skills(tmp_path)
 
@@ -240,13 +248,15 @@ def test_rejects_symlinked_skills_root(tmp_path: Path) -> None:
     assert discovery.diagnostics[0].code == "invalid_skills_root"
 
 
-def test_rejects_symlinked_skill_file(tmp_path: Path) -> None:
+def test_rejects_symlinked_skill_file(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     directory = write_skill(tmp_path, "linked-skill")
     skill_file = directory / "SKILL.md"
     target = tmp_path / "outside-skill.md"
     target.write_bytes(skill_file.read_bytes())
     skill_file.unlink()
-    os.symlink(target, skill_file)
+    make_symlink(target, skill_file)
 
     discovery = discover_skills(tmp_path)
 
@@ -332,16 +342,15 @@ def test_rejects_too_many_resources(tmp_path: Path) -> None:
     assert "more than 512 resources" in discovery.diagnostics[0].message
 
 
-@pytest.mark.skipif(
-    not hasattr(os, "symlink"), reason="symbolic links are unavailable"
-)
-def test_rejects_symlinks_inside_standard_resource_trees(tmp_path: Path) -> None:
+def test_rejects_symlinks_inside_standard_resource_trees(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     directory = write_skill(tmp_path)
     references = directory / "references"
     references.mkdir()
     outside = tmp_path / "outside.md"
     outside.write_text("secret", encoding="utf-8")
-    os.symlink(outside, references / "linked.md")
+    make_symlink(outside, references / "linked.md")
 
     discovery = discover_skills(tmp_path)
 
@@ -381,7 +390,9 @@ def test_revalidate_rejects_changed_regular_file(
         revalidate_resource(skill, resource, tmp_path)
 
 
-def test_revalidate_rejects_workspace_replacement(tmp_path: Path) -> None:
+def test_revalidate_rejects_workspace_replacement(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     directory = write_skill(tmp_path, "changed-skill")
     script = directory / "scripts" / "run.py"
     script.parent.mkdir()
@@ -394,7 +405,7 @@ def test_revalidate_rejects_workspace_replacement(tmp_path: Path) -> None:
     outside_script.parent.mkdir()
     outside_script.write_text("print('outside')", encoding="utf-8")
     shutil.rmtree(directory)
-    os.symlink(outside, directory, target_is_directory=True)
+    make_symlink(outside, directory, target_is_directory=True)
 
     try:
         with pytest.raises(InvalidSkillError, match="symbolic links"):

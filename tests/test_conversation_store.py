@@ -1,5 +1,5 @@
-import os
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -281,21 +281,25 @@ def test_corrupt_message_order_is_rejected_and_append_is_atomic(
     assert count == 2
 
 
-def test_symlinked_data_directory_is_rejected(tmp_path: Path) -> None:
+def test_symlinked_data_directory_is_rejected(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.mkdir()
-    os.symlink(outside, tmp_path / ".cdy-agent", target_is_directory=True)
+    make_symlink(outside, tmp_path / ".cdy-agent", target_is_directory=True)
 
     with pytest.raises(InvalidConversationStoreError, match="symbolic link"):
         make_store(tmp_path).list_summaries()
 
 
-def test_symlinked_or_nonregular_database_is_rejected(tmp_path: Path) -> None:
+def test_symlinked_or_nonregular_database_is_rejected(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     data = tmp_path / ".cdy-agent"
     data.mkdir()
     outside_database = tmp_path / "outside.sqlite3"
     outside_database.touch()
-    os.symlink(outside_database, data / "cdy-agent.sqlite3")
+    make_symlink(outside_database, data / "cdy-agent.sqlite3")
     with pytest.raises(InvalidConversationStoreError, match="symbolic link"):
         make_store(tmp_path).list_summaries()
 

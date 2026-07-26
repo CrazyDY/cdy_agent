@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-import platform
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -129,33 +127,48 @@ def _confirm_tool(request: ConfirmationRequest) -> ConfirmationDecision:
 def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     """Construct the CLI's shared model-and-local-tools boundary."""
     gateway = ModelGateway(model=model, api_mode=api_mode)
-    system_prompt = resolve_system_prompt(load_workspace_config(workspace))
     registry = create_builtin_registry(workspace)
     manager = SkillManager(workspace)
-    skills_prompt = '\n'.join(
-        f"- **{skill.get('name', 'unknown')}**: {skill.get('description', '')}"
-        for skill in manager.list_skills().get('skills', [])
+    system_prompt = _system_prompt_with_skills(
+        resolve_system_prompt(load_workspace_config(workspace)),
+        manager.list_skills(),
     )
     registered = registry.register_many(create_skill_tools(manager))
-    extra_system_prompt = f"""
-    
-**Current OS**: {platform.system()} {platform.release()}
-
-**Guidelines**:
-- Be concise, direct, and implementation-oriented.
-- Use tools to inspect files, search code, and verify behavior when needed.
-- Prefer deterministic local tools before guessing.
-- When writing files, use write_file and keep changes scoped.
-- Preserve URLs and user-provided identifiers exactly unless a tool result proves
-
-**Available skills**:
-{skills_prompt}
-
-Activate a skill with *activate_skill* tool when its description matches the task,and then follow the skill's instructions to complete the task.
-    """
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
-    return Agent(gateway, registry, _confirm_tool, system_prompt=system_prompt + extra_system_prompt)
+    return Agent(gateway, registry, _confirm_tool, system_prompt=system_prompt)
+
+
+def _system_prompt_with_skills(
+    base_prompt: str, catalog: dict[str, object]
+) -> str:
+    """Append a concise workspace Skill catalog when Skills are available."""
+    raw_skills = catalog.get("skills")
+    if not isinstance(raw_skills, list):
+        return base_prompt
+
+    entries = []
+    for raw_skill in raw_skills:
+        if not isinstance(raw_skill, dict):
+            continue
+        name = raw_skill.get("name")
+        description = raw_skill.get("description")
+        if not isinstance(name, str) or not isinstance(description, str):
+            continue
+        if not name.strip() or not description.strip():
+            continue
+        entries.append(f"- {name.strip()}: {description.strip()}")
+    if not entries:
+        return base_prompt
+
+    skill_catalog = "\n".join(entries)
+    return (
+        f"{base_prompt.rstrip()}\n\n"
+        "Available workspace Skills:\n"
+        f"{skill_catalog}\n\n"
+        "When a Skill matches the task, activate it with activate_skill and "
+        "follow its instructions."
+    )
 
 
 def _load_configured_workspace(workspace: Path | None) -> tuple[Path, WorkspaceConfig]:

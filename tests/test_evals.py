@@ -68,6 +68,22 @@ def test_eval_file_accepts_json_cases(tmp_path: Path) -> None:
     assert report.failed == 0
 
 
+def test_repository_smoke_eval_file_is_valid() -> None:
+    eval_file = Path(__file__).parents[1] / "evals" / "smoke.yaml"
+    agent = FakeAgent(
+        (
+            "CDY_EVAL_OK",
+            "An Agent Loop coordinates tool calling until the task is complete.",
+        )
+    )
+
+    report = run_eval_file(eval_file, agent)
+
+    assert report.total == 2
+    assert report.passed == 2
+    assert report.failed == 0
+
+
 @pytest.mark.parametrize(
     ("body", "message"),
     [

@@ -1,4 +1,4 @@
-import os
+from collections.abc import Callable
 from pathlib import Path
 import sqlite3
 import threading
@@ -228,22 +228,26 @@ def test_failed_write_rolls_back_schema_migration(tmp_path: Path) -> None:
         ).fetchone() is None
 
 
-def test_read_rejects_symlinked_data_directory(tmp_path: Path) -> None:
+def test_read_rejects_symlinked_data_directory(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.mkdir()
-    os.symlink(outside, tmp_path / ".cdy-agent", target_is_directory=True)
+    make_symlink(outside, tmp_path / ".cdy-agent", target_is_directory=True)
 
     with pytest.raises(InvalidConversationStoreError, match="symbolic link"):
         with WorkspaceDatabase(tmp_path).read():
             pass
 
 
-def test_read_rejects_symlinked_database(tmp_path: Path) -> None:
+def test_read_rejects_symlinked_database(
+    tmp_path: Path, make_symlink: Callable[..., None]
+) -> None:
     data = tmp_path / ".cdy-agent"
     data.mkdir()
     outside = tmp_path / "outside.sqlite3"
     outside.touch()
-    os.symlink(outside, data / "cdy-agent.sqlite3")
+    make_symlink(outside, data / "cdy-agent.sqlite3")
 
     with pytest.raises(InvalidConversationStoreError, match="symbolic link"):
         with WorkspaceDatabase(tmp_path).read():

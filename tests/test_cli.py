@@ -1003,10 +1003,15 @@ def test_create_agent_wires_standard_skill_tools_and_confirmation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     gateway = object()
-    manager = object()
     skill_tools = object()
     manager_calls: list[tuple[object, ...]] = []
     registered: list[object] = []
+
+    class FakeManager:
+        def list_skills(self) -> dict[str, object]:
+            return {"skills": []}
+
+    manager = FakeManager()
 
     class FakeRegistry:
         def register_many(self, tools: object) -> ToolResult:
@@ -1044,6 +1049,37 @@ def test_create_agent_wires_standard_skill_tools_and_confirmation(
             {"system_prompt": cli.resolve_system_prompt(cli.WorkspaceConfig())},
         )
     ]
+
+
+def test_system_prompt_appends_only_valid_available_skills() -> None:
+    prompt = cli._system_prompt_with_skills(
+        "Workspace instructions.",
+        {
+            "skills": [
+                {"name": "pdf-tools", "description": "Inspect PDF files."},
+                {"name": "", "description": "ignored"},
+                "invalid",
+            ]
+        },
+    )
+
+    assert prompt == (
+        "Workspace instructions.\n\n"
+        "Available workspace Skills:\n"
+        "- pdf-tools: Inspect PDF files.\n\n"
+        "When a Skill matches the task, activate it with activate_skill and "
+        "follow its instructions."
+    )
+
+
+def test_system_prompt_is_unchanged_without_available_skills() -> None:
+    assert (
+        cli._system_prompt_with_skills(
+            "Workspace instructions.",
+            {"skills": []},
+        )
+        == "Workspace instructions."
+    )
 
 
 @pytest.mark.parametrize(

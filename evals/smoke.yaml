@@ -1,0 +1,14 @@
+cases:
+  - name: exact instruction following
+    prompt: "Reply with exactly: CDY_EVAL_OK"
+    expect:
+      exact: CDY_EVAL_OK
+
+  - name: agent loop vocabulary
+    prompt: >-
+      Write one sentence that includes the literal terms Agent Loop and
+      tool calling.
+    expect:
+      contains:
+        - Agent Loop
+        - tool calling

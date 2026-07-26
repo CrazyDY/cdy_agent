@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1067,11 +1068,8 @@ def test_run_skill_script_rejects_same_size_timestamp_restored_rewrite(
     assert tool._approval_digest is None
 
 
-@pytest.mark.skipif(
-    not hasattr(os, "symlink"), reason="symbolic links are unavailable"
-)
 def test_run_skill_script_rejects_nested_directory_symlink_swap(
-    tmp_path: Path,
+    tmp_path: Path, make_symlink: Callable[..., None]
 ) -> None:
     _, directory = write_runtime_skill(tmp_path)
     nested = directory / "scripts" / "nested"
@@ -1092,7 +1090,7 @@ def test_run_skill_script_rejects_nested_directory_symlink_swap(
     def swap_nested_directory(request: object) -> bool:
         renamed = nested.with_name("renamed")
         nested.rename(renamed)
-        os.symlink(renamed, nested, target_is_directory=True)
+        make_symlink(renamed, nested, target_is_directory=True)
         return True
 
     result = ToolRegistry(
