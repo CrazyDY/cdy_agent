@@ -1,12 +1,16 @@
 import importlib
+import json
 import os
 import subprocess
+import sys
 from inspect import signature
 from pathlib import Path
 
 import pytest
 
 from cdy_agent.tools.shell import MAX_OUTPUT_BYTES, ShellTool
+from cdy_agent.tools.shell_approvals import ShellApprovalStore
+from cdy_agent.tools.shell_policy import ShellExecutionPolicy
 
 
 def _bind_executable(
@@ -18,7 +22,12 @@ def _bind_executable(
     directory.mkdir(exist_ok=True)
     suffix = ".exe" if os.name == "nt" else ""
     executable = directory / f"{command}{suffix}"
-    executable.write_bytes(b"")
+    if os.name == "nt":
+        executable.write_bytes(b"MZ\x00\x00")
+    elif sys.platform == "darwin":
+        executable.write_bytes(b"\xcf\xfa\xed\xfe")
+    else:
+        executable.write_bytes(b"\x7fELF")
     executable.chmod(0o755)
     monkeypatch.setenv("PATH", str(directory))
     if os.name == "nt":
@@ -31,14 +40,18 @@ def test_process_helpers_sanitize_environment_and_limit_utf8_bytes(
 ) -> None:
     process = importlib.import_module("cdy_agent.tools.process")
     monkeypatch.setenv("GIT_EXTERNAL_DIFF", "unsafe")
+    monkeypatch.setenv("GIT_DIR", "outside")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "include.path")
     monkeypatch.setenv("RIPGREP_CONFIG_PATH", "unsafe")
 
-    environment = process.sanitized_environment()
+    environment = process.sanitized_environment(scrub_git=True)
     output, truncated = process.limited_output("a" * 4 + "浣", limit=5)
 
     assert environment["GIT_PAGER"] == "cat"
     assert environment["PAGER"] == "cat"
     assert "GIT_EXTERNAL_DIFF" not in environment
+    assert "GIT_DIR" not in environment
+    assert "GIT_CONFIG_KEY_0" not in environment
     assert "RIPGREP_CONFIG_PATH" not in environment
     assert output == "a" * 4
     assert truncated is True
@@ -51,7 +64,29 @@ def test_shell_constructor_cannot_disable_confirmation(tmp_path: Path) -> None:
         "policy",
     )
     with pytest.raises(TypeError):
-        ShellTool(tmp_path, requires_confirmation=False)  # type: ignore[call-arg]
+        ShellTool(  # type: ignore[call-arg]
+            tmp_path,
+            requires_confirmation=False,
+        )
+
+
+def test_shell_rejects_policy_for_another_workspace(tmp_path: Path) -> None:
+    other = tmp_path / "other"
+    other.mkdir()
+    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    with pytest.raises(ValueError, match="workspace"):
+        ShellTool(other, policy=policy)
+
+
+def test_policy_rejects_approval_store_for_another_workspace(
+    tmp_path: Path,
+) -> None:
+    other = tmp_path / "other"
+    other.mkdir()
+
+    with pytest.raises(ValueError, match="workspace"):
+        ShellExecutionPolicy(other, ShellApprovalStore(tmp_path))
 
 
 @pytest.mark.parametrize(
@@ -77,9 +112,29 @@ def test_shell_invokes_runner_without_shell(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     git = _bind_executable(monkeypatch, tmp_path, "git")
+    git_environment_names = {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_NAMESPACE",
+        "GIT_CEILING_DIRECTORIES",
+    }
+    for name in git_environment_names:
+        monkeypatch.setenv(name, "outside")
     calls: list[dict[str, object]] = []
 
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
         calls.append({"argv": argv, **kwargs})
         return subprocess.CompletedProcess(argv, 0, "ok", "")
 
@@ -94,6 +149,7 @@ def test_shell_invokes_runner_without_shell(
     assert environment["PAGER"] == "cat"
     assert "GIT_EXTERNAL_DIFF" not in environment
     assert "RIPGREP_CONFIG_PATH" not in environment
+    assert git_environment_names.isdisjoint(environment)
     assert "PATH" in environment
     assert calls == [
         {
@@ -110,6 +166,7 @@ def test_shell_invokes_runner_without_shell(
             "shell": False,
             "capture_output": True,
             "text": True,
+            "stdin": subprocess.DEVNULL,
             "timeout": 4,
             "check": False,
         }
@@ -122,7 +179,10 @@ def test_shell_metacharacters_are_plain_arguments(
     rg = _bind_executable(monkeypatch, tmp_path, "rg")
     calls: list[list[str]] = []
 
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -130,10 +190,17 @@ def test_shell_metacharacters_are_plain_arguments(
     assert calls == [[str(rg), "--no-config", "|", "."]]
 
 
-def test_shell_uses_default_timeout(tmp_path: Path) -> None:
+def test_shell_uses_default_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_executable(monkeypatch, tmp_path, "pwd")
     calls: list[object] = []
 
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
         calls.append(kwargs["timeout"])
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -141,8 +208,16 @@ def test_shell_uses_default_timeout(tmp_path: Path) -> None:
     assert calls == [10]
 
 
-def test_shell_maps_timeout_to_failure(tmp_path: Path) -> None:
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+def test_shell_maps_timeout_to_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_executable(monkeypatch, tmp_path, "ls")
+
+    def runner(
+        argv: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
 
     result = ShellTool(tmp_path, runner=runner).execute({"argv": ["ls"]})
@@ -150,8 +225,16 @@ def test_shell_maps_timeout_to_failure(tmp_path: Path) -> None:
     assert result.code == "command_timeout"
 
 
-def test_shell_maps_oserror_to_execution_error(tmp_path: Path) -> None:
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+def test_shell_maps_oserror_to_execution_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_executable(monkeypatch, tmp_path, "ls")
+
+    def runner(
+        argv: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
         raise OSError("unavailable")
 
     result = ShellTool(tmp_path, runner=runner).execute({"argv": ["ls"]})
@@ -161,20 +244,32 @@ def test_shell_maps_oserror_to_execution_error(tmp_path: Path) -> None:
 
 
 def test_shell_maps_nonzero_exit_to_command_failed(tmp_path: Path) -> None:
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 2, "out", "err")
 
-    result = ShellTool(tmp_path, runner=runner).execute({"argv": ["git", "diff"]})
+    result = ShellTool(tmp_path, runner=runner).execute(
+        {"argv": ["git", "diff"]}
+    )
     assert result.ok is False
     assert result.code == "command_failed"
     assert "2" in (result.message or "")
 
 
-def test_shell_truncates_stdout_and_stderr_independently(tmp_path: Path) -> None:
+def test_shell_truncates_stdout_and_stderr_independently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_executable(monkeypatch, tmp_path, "ls")
     stdout = "a" * MAX_OUTPUT_BYTES
     stderr = "b" * (MAX_OUTPUT_BYTES + 1)
 
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 0, stdout, stderr)
 
     result = ShellTool(tmp_path, runner=runner).execute({"argv": ["ls"]})
@@ -187,10 +282,17 @@ def test_shell_truncates_stdout_and_stderr_independently(tmp_path: Path) -> None
     }
 
 
-def test_shell_caps_utf8_bytes_and_drops_only_incomplete_codepoint(tmp_path: Path) -> None:
+def test_shell_caps_utf8_bytes_and_drops_only_incomplete_codepoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_executable(monkeypatch, tmp_path, "pwd")
     output = "a" * (MAX_OUTPUT_BYTES - 1) + "你" + "z"
 
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 0, output, "你" * 30000)
     result = ShellTool(tmp_path, runner=runner).execute({"argv": ["pwd"]})
     assert result.data["stdout"] == "a" * (MAX_OUTPUT_BYTES - 1)
@@ -285,7 +387,9 @@ def test_shell_confirmation_and_execution_use_effective_argv(
         runner=lambda argv, **kwargs: calls.append(argv)
         or subprocess.CompletedProcess(argv, 0, "", ""),
     )
-    assert repr(effective_argv) in tool.confirmation_description({"argv": user_argv})
+    assert repr(effective_argv) in tool.confirmation_description(
+        {"argv": user_argv}
+    )
     assert tool.execute({"argv": user_argv}).ok
     assert calls == [effective_argv]
 
@@ -301,8 +405,13 @@ def test_shell_confirmation_and_execution_use_effective_argv(
     ],
 )
 def test_shell_retains_safe_sed_scripts(
-    tmp_path: Path, argv: list[str], expected: list[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    expected: list[str],
 ) -> None:
+    sed = _bind_executable(monkeypatch, tmp_path, "sed")
+    expected[0] = str(sed)
     calls: list[list[str]] = []
     tool = ShellTool(
         tmp_path,
@@ -362,11 +471,12 @@ def test_shell_rejects_nul_before_confirmation_and_runner(
 
 
 def test_shell_allow_always_persists_final_argv_before_running(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from cdy_agent.tools.base import ConfirmationDecision, ToolCall
     from cdy_agent.tools.registry import ToolRegistry
 
+    python = _bind_executable(monkeypatch, tmp_path, "python")
     calls: list[list[str]] = []
     registry = ToolRegistry([
         ShellTool(
@@ -387,8 +497,8 @@ def test_shell_allow_always_persists_final_argv_before_running(
 
     assert first.ok and second.ok
     assert calls == [
-        ["python", "script.py"],
-        ["python", "script.py"],
+        [str(python), "script.py"],
+        [str(python), "script.py"],
     ]
     assert callbacks == []
 
@@ -428,3 +538,186 @@ def test_shell_persists_and_executes_resolved_builtin_argv(
     assert first.ok and second.ok
     assert calls == [expected, expected]
     assert callbacks == []
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments", "effective_tail"),
+    [
+        ("rg", ["rg", "--pre", "python", "needle", "."], [
+            "--no-config",
+            "--pre",
+            "python",
+            "needle",
+            ".",
+        ]),
+        ("python", ["python", "-c", "print(1)"], ["-c", "print(1)"]),
+    ],
+)
+def test_registry_binds_prompt_persistence_and_spawn_to_one_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    arguments: list[str],
+    effective_tail: list[str],
+) -> None:
+    from cdy_agent.tools.base import ConfirmationDecision, ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    first_directory = tmp_path.parent / f"{tmp_path.name}-first-bin"
+    second_directory = tmp_path.parent / f"{tmp_path.name}-second-bin"
+    first_directory.mkdir()
+    second_directory.mkdir()
+    suffix = ".exe" if os.name == "nt" else ""
+    first = first_directory / f"{command}{suffix}"
+    second = second_directory / f"{command}{suffix}"
+    payload = b"MZ\x00\x00" if os.name == "nt" else b"\x7fELF"
+    first.write_bytes(payload)
+    second.write_bytes(payload)
+    first.chmod(0o755)
+    second.chmod(0o755)
+    monkeypatch.setenv("PATH", str(first_directory))
+    if os.name == "nt":
+        monkeypatch.setenv("PATHEXT", ".EXE")
+    calls: list[list[str]] = []
+    requests: list[object] = []
+    registry = ToolRegistry([
+        ShellTool(
+            tmp_path,
+            runner=lambda argv, **kwargs: calls.append(argv)
+            or subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+    ])
+    call = ToolCall(
+        "1",
+        "shell",
+        json.dumps({"argv": arguments}),
+    )
+
+    def confirm(request: object) -> ConfirmationDecision:
+        requests.append(request)
+        expected = [str(first.resolve()), *effective_tail]
+        assert repr(expected) in request.description
+        monkeypatch.setenv("PATH", str(second_directory))
+        return ConfirmationDecision.ALLOW_ALWAYS
+
+    first_result = registry.execute(call, confirm)
+    second_result = registry.execute(call, lambda request: False)
+    expected = [str(first.resolve()), *effective_tail]
+    stored = json.loads(
+        (
+            tmp_path / ".cdy-agent" / "shell-approvals.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert first_result.ok
+    assert second_result.code == "approval_denied"
+    assert len(requests) == 1
+    assert calls == [expected]
+    assert stored["allowed_commands"] == [expected]
+
+
+def test_confirmation_argument_mutation_cannot_change_prepared_shell_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cdy_agent.tools.base import ConfirmationDecision, ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    python = _bind_executable(monkeypatch, tmp_path, "python")
+    calls: list[list[str]] = []
+    registry = ToolRegistry([
+        ShellTool(
+            tmp_path,
+            runner=lambda argv, **kwargs: calls.append(argv)
+            or subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+    ])
+
+    def mutate(request: object) -> ConfirmationDecision:
+        request.arguments["argv"][:] = ["other", "--mutated"]
+        return ConfirmationDecision.ALLOW_ALWAYS
+
+    result = registry.execute(
+        ToolCall("1", "shell", '{"argv":["python","script.py"]}'),
+        mutate,
+    )
+
+    assert result.ok
+    assert calls == [[str(python), "script.py"]]
+    assert ShellApprovalStore(tmp_path).contains(
+        [str(python), "script.py"]
+    ).data is True
+
+
+def test_prepared_context_binds_workspace_policy_and_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cdy_agent.tools.base import ConfirmationDecision, ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    python = _bind_executable(monkeypatch, tmp_path, "python")
+    original_store = ShellApprovalStore(tmp_path)
+    original_policy = ShellExecutionPolicy(tmp_path, original_store)
+    original_calls: list[tuple[list[str], Path]] = []
+    replacement_calls: list[tuple[list[str], Path]] = []
+
+    def original_runner(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        original_calls.append((argv, kwargs["cwd"]))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def replacement_runner(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        replacement_calls.append((argv, kwargs["cwd"]))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    tool = ShellTool(
+        tmp_path,
+        runner=original_runner,
+        policy=original_policy,
+    )
+    outside = tmp_path.parent / f"{tmp_path.name}-replacement"
+    outside.mkdir()
+    replacement_store = ShellApprovalStore(outside)
+
+    def mutate_tool(request: object) -> ConfirmationDecision:
+        tool.workspace = outside
+        tool.policy = ShellExecutionPolicy(outside, replacement_store)
+        tool.runner = replacement_runner
+        return ConfirmationDecision.ALLOW_ALWAYS
+
+    result = ToolRegistry([tool]).execute(
+        ToolCall("1", "shell", '{"argv":["python","script.py"]}'),
+        mutate_tool,
+    )
+    expected = [str(python), "script.py"]
+
+    assert result.ok
+    assert original_calls == [(expected, tmp_path.resolve())]
+    assert replacement_calls == []
+    assert original_store.contains(expected).data is True
+    assert replacement_store.contains(expected).data is False
+
+
+def test_unresolved_executable_fails_after_confirmation_without_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cdy_agent.tools.base import ToolCall
+    from cdy_agent.tools.registry import ToolRegistry
+
+    monkeypatch.setenv("PATH", "")
+    calls: list[list[str]] = []
+    tool = ShellTool(
+        tmp_path,
+        runner=lambda argv, **kwargs: calls.append(argv)
+        or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+
+    result = ToolRegistry([tool]).execute(
+        ToolCall("1", "shell", '{"argv":["not-installed-command"]}'),
+        lambda request: True,
+    )
+
+    assert result.code == "execution_error"
+    assert calls == []

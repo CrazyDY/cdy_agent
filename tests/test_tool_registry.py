@@ -8,6 +8,7 @@ import pytest
 from cdy_agent.tools.base import (
     ConfirmationDecision,
     ConfirmationRequest,
+    PreparedToolExecution,
     ToolCall,
     ToolResult,
 )
@@ -34,13 +35,25 @@ class EchoTool:
         return "Echo text."
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
-        if set(arguments) != {"text"} or not isinstance(arguments["text"], str):
-            return ToolResult.failure("invalid_arguments", "text must be a string.")
+        if (
+            set(arguments) != {"text"}
+            or not isinstance(arguments["text"], str)
+        ):
+            return ToolResult.failure(
+                "invalid_arguments",
+                "text must be a string.",
+            )
         return None
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
-        if set(arguments) != {"text"} or not isinstance(arguments["text"], str):
-            return ToolResult.failure("invalid_arguments", "text must be a string.")
+        if (
+            set(arguments) != {"text"}
+            or not isinstance(arguments["text"], str)
+        ):
+            return ToolResult.failure(
+                "invalid_arguments",
+                "text must be a string.",
+            )
         return ToolResult.success({"text": arguments["text"]})
 
 
@@ -63,6 +76,48 @@ class DynamicEchoTool(EchoTool):
         return self.remember_result
 
 
+@dataclass
+class PreparingEchoTool(EchoTool):
+    events: list[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.events = []
+
+    def prepare_execution(
+        self,
+        arguments: dict[str, Any],
+    ) -> PreparedToolExecution | ToolResult:
+        self.events.append("prepare")
+        if set(arguments) != {"text"}:
+            return ToolResult.failure(
+                "invalid_arguments",
+                "text is required.",
+            )
+        text = arguments["text"]
+        return PreparedToolExecution(
+            requires_confirmation=True,
+            confirmation_description=f"Echo {text}.",
+            remember_approval=lambda: (
+                self.events.append("remember")
+                or ToolResult.success({"remembered": True})
+            ),
+            execute=lambda: (
+                self.events.append("execute")
+                or ToolResult.success({"text": text})
+            ),
+        )
+
+    def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+        raise AssertionError("legacy preflight must not run")
+
+    def confirmation_description(self, arguments: dict[str, Any]) -> str:
+        raise AssertionError("legacy description must not run")
+
+    def execute(self, arguments: dict[str, Any]) -> ToolResult:
+        raise AssertionError("legacy execute must not run")
+
+
 def test_registry_exposes_function_definition_and_executes() -> None:
     registry = ToolRegistry([EchoTool()])
     result = registry.execute(
@@ -83,9 +138,22 @@ def test_registry_exposes_function_definition_and_executes() -> None:
 
 def test_registry_returns_structured_errors() -> None:
     registry = ToolRegistry([EchoTool()])
-    assert registry.execute(ToolCall("1", "missing", "{}"), lambda _: True).code == "unknown_tool"
-    assert registry.execute(ToolCall("2", "echo", "{"), lambda _: True).code == "invalid_arguments"
-    assert registry.execute(ToolCall("3", "echo", "[]"), lambda _: True).code == "invalid_arguments"
+    missing = registry.execute(
+        ToolCall("1", "missing", "{}"),
+        lambda _: True,
+    )
+    malformed = registry.execute(
+        ToolCall("2", "echo", "{"),
+        lambda _: True,
+    )
+    not_an_object = registry.execute(
+        ToolCall("3", "echo", "[]"),
+        lambda _: True,
+    )
+
+    assert missing.code == "unknown_tool"
+    assert malformed.code == "invalid_arguments"
+    assert not_an_object.code == "invalid_arguments"
 
 
 def test_registry_denies_confirmed_tool_without_executing() -> None:
@@ -118,7 +186,8 @@ def test_registry_allows_once_without_persisting() -> None:
 
     result = ToolRegistry([tool]).execute(
         ToolCall("1", "echo", '{"text":"hello"}'),
-        lambda request: requests.append(request) or ConfirmationDecision.ALLOW_ONCE,
+        lambda request: requests.append(request)
+        or ConfirmationDecision.ALLOW_ONCE,
     )
 
     assert result.ok
@@ -134,7 +203,8 @@ def test_registry_persists_before_execution() -> None:
         or ToolResult.success({"remembered": True})
     )  # type: ignore[method-assign]
     tool.execute = lambda arguments: (
-        events.append("execute") or ToolResult.success({"text": arguments["text"]})
+        events.append("execute")
+        or ToolResult.success({"text": arguments["text"]})
     )  # type: ignore[method-assign]
 
     result = ToolRegistry([tool]).execute(
@@ -174,6 +244,22 @@ def test_registry_rejects_always_for_tool_without_persistence_hook() -> None:
     assert result.code == "persistent_approval_not_supported"
 
 
+def test_registry_uses_one_immutable_prepared_execution_context() -> None:
+    tool = PreparingEchoTool()
+    requests: list[ConfirmationRequest] = []
+
+    result = ToolRegistry([tool]).execute(
+        ToolCall("1", "echo", '{"text":"hello"}'),
+        lambda request: requests.append(request)
+        or ConfirmationDecision.ALLOW_ALWAYS,
+    )
+
+    assert result == ToolResult.success({"text": "hello"})
+    assert requests[0].description == "Echo hello."
+    assert requests[0].allow_always is True
+    assert tool.events == ["prepare", "remember", "execute"]
+
+
 @pytest.mark.parametrize("failure_stage", ["description", "callback"])
 def test_registry_cancels_and_preserves_confirmation_phase_exception(
     failure_stage: str,
@@ -198,7 +284,9 @@ def test_registry_cancels_and_preserves_confirmation_phase_exception(
         return True
 
     tool.cancel = cancel  # type: ignore[attr-defined]
-    tool.confirmation_description = confirmation_description  # type: ignore[method-assign]
+    tool.confirmation_description = (  # type: ignore[method-assign]
+        confirmation_description
+    )
 
     with pytest.raises(RuntimeError) as captured:
         ToolRegistry([tool]).execute(
@@ -213,7 +301,8 @@ def test_registry_cancels_and_preserves_confirmation_phase_exception(
 def test_registry_preflights_before_confirmation() -> None:
     requests: list[ConfirmationRequest] = []
     result = ToolRegistry([EchoTool(requires_confirmation=True)]).execute(
-        ToolCall("1", "echo", '{"text":1}'), lambda request: requests.append(request) or True
+        ToolCall("1", "echo", '{"text":1}'),
+        lambda request: requests.append(request) or True,
     )
     assert result.code == "invalid_arguments"
     assert requests == []
@@ -222,10 +311,15 @@ def test_registry_preflights_before_confirmation() -> None:
 def test_register_many_adds_valid_tools_in_order() -> None:
     registry = ToolRegistry([EchoTool(name="first")])
 
-    result = registry.register_many([EchoTool(name="second"), EchoTool(name="third")])
+    result = registry.register_many([
+        EchoTool(name="second"),
+        EchoTool(name="third"),
+    ])
 
     assert result == ToolResult.success({"names": ["second", "third"]})
-    assert [item["name"] for item in registry.definitions] == ["first", "second", "third"]
+    assert [
+        item["name"] for item in registry.definitions
+    ] == ["first", "second", "third"]
 
 
 def test_register_many_is_atomic_on_name_conflict() -> None:
@@ -234,8 +328,10 @@ def test_register_many_is_atomic_on_name_conflict() -> None:
     original_definition = registry.definitions[0]
     replacement = EchoTool(name="existing")
     replacement.description = "Replacement behavior."
-    replacement.execute = lambda arguments: ToolResult.success(  # type: ignore[method-assign]
-        {"text": "replacement"}
+    replacement.execute = (  # type: ignore[method-assign]
+        lambda arguments: ToolResult.success(
+            {"text": "replacement"}
+        )
     )
 
     result = registry.register_many([EchoTool(name="new"), replacement])
@@ -262,13 +358,19 @@ def test_register_many_rejects_invalid_tool_without_mutation() -> None:
 def test_register_many_rejects_duplicate_candidates_atomically() -> None:
     registry = ToolRegistry([EchoTool(name="existing")])
 
-    result = registry.register_many([EchoTool(name="new"), EchoTool(name="new")])
+    result = registry.register_many([
+        EchoTool(name="new"),
+        EchoTool(name="new"),
+    ])
 
     assert result.code == "tool_name_conflict"
     assert [item["name"] for item in registry.definitions] == ["existing"]
 
 
-@pytest.mark.parametrize("name", ["", "Upper", "has-dash", "1starts_with_digit", "a" * 65])
+@pytest.mark.parametrize(
+    "name",
+    ["", "Upper", "has-dash", "1starts_with_digit", "a" * 65],
+)
 def test_register_many_rejects_invalid_tool_names(name: str) -> None:
     registry = ToolRegistry([EchoTool(name="existing")])
 
@@ -319,8 +421,13 @@ def test_register_many_handles_failure_while_materializing_iterable(
     assert [item["name"] for item in registry.definitions] == ["existing"]
 
 
-def test_builtin_registry_exposes_tools_in_deterministic_order(tmp_path: Path) -> None:
-    assert [item["name"] for item in create_builtin_registry(tmp_path).definitions] == [
+def test_builtin_registry_exposes_tools_in_deterministic_order(
+    tmp_path: Path,
+) -> None:
+    assert [
+        item["name"]
+        for item in create_builtin_registry(tmp_path).definitions
+    ] == [
         "read_file",
         "write_file",
         "shell",
@@ -339,7 +446,9 @@ def test_builtin_registry_exposes_tools_in_deterministic_order(tmp_path: Path) -
     ]
 
 
-def test_creating_builtin_registry_does_not_create_database(tmp_path: Path) -> None:
+def test_creating_builtin_registry_does_not_create_database(
+    tmp_path: Path,
+) -> None:
     create_builtin_registry(tmp_path)
     assert not (tmp_path / ".cdy-agent").exists()
 

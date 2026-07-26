@@ -29,8 +29,16 @@ class _DrainState:
     error: BaseException | None = None
 
 
-def sanitized_environment() -> dict[str, str]:
-    environment = dict(os.environ)
+def sanitized_environment(
+    source: Mapping[str, str] | None = None,
+    *,
+    scrub_git: bool = False,
+) -> dict[str, str]:
+    environment = dict(os.environ if source is None else source)
+    if scrub_git:
+        for name in tuple(environment):
+            if name.upper().startswith("GIT_"):
+                environment.pop(name, None)
     environment.pop("GIT_EXTERNAL_DIFF", None)
     environment.pop("RIPGREP_CONFIG_PATH", None)
     environment.update({"GIT_PAGER": "cat", "PAGER": "cat"})

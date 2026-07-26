@@ -148,11 +148,25 @@ uv run cdy-agent traces show <trace-id> --workspace .
 
 Shell 工具使用参数数组和 `shell=False`，并固定在当前 workspace 中运行。Shell 超时可设为 1–30 秒（默认 10 秒），标准输出和标准错误分别最多返回 64 KiB。
 
-带有安全参数且只访问 workspace 内文件的 `pwd`、`ls`、`rg`、`grep`、`head`、`tail`、`wc`、`sort`、`uniq`、`git status` 和 `git diff` 可以自动执行。未知参数、写入参数、外部程序委托或 workspace 外路径的调用会请求确认。`git status` 和 `git diff` 只有在 Git 元数据位于 workspace 内时才能自动执行；Git 元数据位于 workspace 外、无法验证或使用链接工作区元数据时，会降级为请求确认。
+带有安全参数且只访问 workspace 内文件的 `pwd`、`ls`、`rg`、`grep`、`head`、`tail`、`wc`、`sort`、`uniq`、`git status` 和 `git diff` 可以自动执行。未知参数、写入参数、外部程序委托、可能读取标准输入、访问 `.cdy-agent` 机器状态或 workspace 外路径的调用会请求确认。Shell 工具没有 stdin 参数，启动进程时会把标准输入连接到空设备，避免继承终端输入或管道并发生等待。
 
-自动批准会保守地绑定到已解析的可执行文件：只有可执行文件解析到 workspace 外部的内置安全命令才会自动执行。若同名可执行文件解析到 workspace 内（例如被 workspace 中的文件遮蔽），即使参数原本安全，也会请求确认。
+自动批准会保守地绑定到已解析的可执行文件：只有名称精确匹配、解析到操作系统受信任命令目录、具有本机可执行文件格式的内置安全命令才会自动执行。workspace 内 wrapper、workspace 外任意 PATH wrapper、相对 PATH wrapper 和脚本 wrapper 都会请求确认。一次工具调用只解析一次可执行文件，并把提示、持久授权和实际启动绑定到同一个绝对 argv；无法解析的程序在确认后也会失败关闭，不会在启动时重新查询 PATH。
 
-确认时输入 `y` 仅允许本次执行；输入 `a` 会把最终实际执行的完整 argv 保存到 `<workspace>/.cdy-agent/shell-approvals.json`，以后在同一 workspace 中精确匹配时不再询问。匹配区分大小写、参数顺序和参数内容，不支持前缀或通配符。编辑或删除该 JSON 文件即可撤销授权。
+`git status` 和 `git diff` 还会清除继承的 `GIT_*` 仓库、对象、配置和命名空间覆盖，并验证 Git 实际报告的 git-dir、common-dir 和 worktree 都在 workspace 内。Git 元数据位于 workspace 外、无法验证、使用外部链接工作区元数据，或 workspace 已包含 `.cdy-agent` 机器状态目录时，会降级为请求确认。
+
+确认时输入 `y` 仅允许本次执行；输入 `a` 会把最终实际执行的完整 argv 保存到 `<workspace>/.cdy-agent/shell-approvals.json`，以后在同一 workspace 中精确匹配时不再询问。匹配区分大小写、参数顺序和参数内容，不支持前缀或通配符。编辑或删除该 JSON 文件即可撤销授权。版本 1 的文件结构为：
+
+```json
+{
+  "version": 1,
+  "allowed_commands": [
+    ["/usr/bin/python3", "script.py"],
+    ["/usr/bin/uv", "run", "pytest"]
+  ]
+}
+```
+
+`allowed_commands` 中的每一项都是非空字符串 argv 数组。未知字段、未知版本、重复 JSON key 或其他 schema 错误都会失败关闭；损坏的文件不会产生任何自动授权。
 
 解释器、脚本和路径程序以当前用户权限运行。选择永久允许意味着信任相同 argv 的后续执行，即使对应脚本或程序内容后来发生变化。审批文件已由 Git 忽略，工具参数不会写入结构化日志或 trace。
 

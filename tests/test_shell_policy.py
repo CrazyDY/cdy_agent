@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,12 @@ def _bind_executables(
     for command in commands:
         suffix = ".exe" if os.name == "nt" else ""
         executable = directory / f"{command}{suffix}"
-        executable.write_bytes(b"")
+        if os.name == "nt":
+            executable.write_bytes(b"MZ\x00\x00")
+        elif sys.platform == "darwin":
+            executable.write_bytes(b"\xcf\xfa\xed\xfe")
+        else:
+            executable.write_bytes(b"\x7fELF")
         executable.chmod(0o755)
         resolved[command] = executable.resolve()
     monkeypatch.setenv("PATH", str(directory))
@@ -211,7 +217,7 @@ def test_policy_preserves_diff_safety_named_path_operands(
         ["pwd"],
         ["pwd", "-P"],
         ["ls"],
-        ["ls", "-la", "."],
+        ["ls", "-la", "src"],
         ["rg", "needle", "."],
         ["rg", "-n", "--glob", "*.py", "needle", "src"],
         ["grep", "-n", "needle", "README.md"],
@@ -232,12 +238,21 @@ def test_safe_workspace_read_commands_auto_approve(
     monkeypatch: pytest.MonkeyPatch,
     argv: list[str],
 ) -> None:
-    _bind_executables(monkeypatch, tmp_path, argv[0])
+    executable = _bind_executables(monkeypatch, tmp_path, argv[0])[argv[0]]
     (tmp_path / "src").mkdir()
     (tmp_path / "README.md").write_text("needle\n", encoding="utf-8")
     if argv[0] == "git":
         (tmp_path / ".git").mkdir()
-    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(executable.parent,),
+        git_repository_probe=lambda executable, workspace, environment: (
+            workspace / ".git",
+            workspace / ".git",
+            workspace,
+        ),
+    )
 
     result = policy.classify({"argv": argv})
 
@@ -308,8 +323,17 @@ def test_workspace_external_reads_require_confirmation(
     monkeypatch: pytest.MonkeyPatch,
     argv: list[str],
 ) -> None:
-    _bind_executables(monkeypatch, tmp_path, argv[0])
-    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+    executable = _bind_executables(monkeypatch, tmp_path, argv[0])[argv[0]]
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(executable.parent,),
+        git_repository_probe=lambda executable, workspace, environment: (
+            workspace / ".git",
+            workspace / ".git",
+            workspace,
+        ),
+    )
 
     assert policy.classify(
         {"argv": argv}
@@ -319,7 +343,7 @@ def test_workspace_external_reads_require_confirmation(
 def test_symlink_to_external_input_requires_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _bind_executables(monkeypatch, tmp_path, "head")
+    head = _bind_executables(monkeypatch, tmp_path, "head")["head"]
     outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
     outside.write_text("secret", encoding="utf-8")
     link = tmp_path / "linked.txt"
@@ -328,7 +352,11 @@ def test_symlink_to_external_input_requires_confirmation(
     except OSError:
         pytest.skip("Symlink creation is unavailable.")
 
-    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(head.parent,),
+    )
 
     assert policy.classify(
         {"argv": ["head", "linked.txt"]}
@@ -382,11 +410,54 @@ def test_workspace_local_builtin_shadow_requires_confirmation(
     )
 
 
-def test_safe_builtin_uses_resolved_executable_in_final_argv(
+def test_external_path_wrapper_requires_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rg = _bind_executables(monkeypatch, tmp_path, "rg")["rg"]
     policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    result = policy.classify({"argv": ["rg", "needle", "."]})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    assert result.command is not None
+    assert result.command.argv == (
+        str(rg), "--no-config", "needle", "."
+    )
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="SystemRoot is a Windows trust-boundary input.",
+)
+def test_system_root_environment_cannot_extend_trusted_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_windows = tmp_path / "fake-windows"
+    fake_system = fake_windows / "System32"
+    fake_system.mkdir(parents=True)
+    rg = fake_system / "rg.EXE"
+    rg.write_bytes(b"MZ\x00\x00")
+    monkeypatch.setenv("SystemRoot", str(fake_windows))
+    monkeypatch.setenv("PATH", str(fake_system))
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    result = policy.classify({"argv": ["rg", "needle", "."]})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    assert result.command is not None
+    assert result.command.argv[0] == str(rg.resolve())
+
+
+def test_trusted_system_executable_auto_approves_safe_builtin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rg = _bind_executables(monkeypatch, tmp_path, "rg")["rg"]
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(rg.parent,),
+    )
 
     result = policy.classify({"argv": ["rg", "needle", "."]})
 
@@ -395,6 +466,264 @@ def test_safe_builtin_uses_resolved_executable_in_final_argv(
     assert result.command.argv == (
         str(rg), "--no-config", "needle", "."
     )
+
+
+def test_script_wrapper_in_trusted_root_requires_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trusted = tmp_path.parent / f"{tmp_path.name}-trusted-script"
+    trusted.mkdir()
+    suffix = ".EXE" if os.name == "nt" else ""
+    rg = trusted / f"rg{suffix}"
+    rg.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    rg.chmod(0o755)
+    monkeypatch.setenv("PATH", str(trusted))
+    if os.name == "nt":
+        monkeypatch.setenv("PATHEXT", ".EXE")
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(trusted,),
+    )
+
+    result = policy.classify({"argv": ["rg", "needle", "."]})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    assert result.command is not None
+    assert result.command.argv[0] == str(rg.resolve())
+
+
+def test_relative_path_wrapper_requires_confirmation_and_binds_workspace_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rg = _bind_executables(
+        monkeypatch,
+        tmp_path,
+        "rg",
+        inside_workspace=True,
+    )["rg"]
+    monkeypatch.setenv("PATH", "bin")
+    policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
+
+    result = policy.classify({"argv": ["rg", "needle", "."]})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    assert result.command is not None
+    assert result.command.argv[0] == str(rg)
+
+
+def test_trusted_root_symlink_escape_requires_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trusted = tmp_path.parent / f"{tmp_path.name}-trusted"
+    trusted.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-rg"
+    if os.name == "nt":
+        outside = outside.with_suffix(".exe")
+        outside.write_bytes(b"MZ\x00\x00")
+        link = trusted / "rg.exe"
+    else:
+        outside.write_bytes(b"\x7fELF")
+        link = trusted / "rg"
+    outside.chmod(0o755)
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable.")
+    monkeypatch.setenv("PATH", str(trusted))
+    if os.name == "nt":
+        monkeypatch.setenv("PATHEXT", ".EXE")
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(trusted,),
+    )
+
+    result = policy.classify({"argv": ["rg", "needle", "."]})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+def test_ls_recursive_dereference_requires_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ls = _bind_executables(monkeypatch, tmp_path, "ls")["ls"]
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-directory"
+    outside.mkdir()
+    link = tmp_path / "linked-directory"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlink creation is unavailable.")
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(ls.parent,),
+    )
+
+    result = policy.classify({"argv": ["ls", "-RL", "linked-directory"]})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["grep", "needle"],
+        ["grep", "needle", "-"],
+        ["head"],
+        ["head", "-"],
+        ["tail"],
+        ["tail", "-"],
+        ["wc"],
+        ["wc", "-"],
+        ["sort"],
+        ["sort", "-"],
+        ["uniq"],
+        ["uniq", "-"],
+        ["rg", "needle", "-"],
+    ],
+)
+def test_commands_that_can_read_stdin_require_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    executable = _bind_executables(monkeypatch, tmp_path, argv[0])[argv[0]]
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(executable.parent,),
+    )
+
+    result = policy.classify({"argv": argv})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["ls", ".cdy-agent"],
+        ["ls", "-a", "."],
+        ["ls", "-R", "."],
+        ["rg", "secret", ".cdy-agent"],
+        ["rg", "--hidden", "secret", "."],
+        ["grep", "secret", ".cdy-agent/shell-approvals.json"],
+        ["head", ".cdy-agent/shell-approvals.json"],
+        ["tail", ".cdy-agent/shell-approvals.json"],
+        ["wc", ".cdy-agent/shell-approvals.json"],
+        ["sort", ".cdy-agent/shell-approvals.json"],
+        ["uniq", ".cdy-agent/shell-approvals.json"],
+        ["git", "status", "--short"],
+        ["git", "diff", "--stat"],
+        ["git", "diff", "--", ".cdy-agent/shell-approvals.json"],
+    ],
+)
+def test_machine_state_reads_require_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    executable = _bind_executables(monkeypatch, tmp_path, argv[0])[argv[0]]
+    data_directory = tmp_path / ".cdy-agent"
+    data_directory.mkdir()
+    (data_directory / "shell-approvals.json").write_text(
+        '{"version":1,"allowed_commands":[]}',
+        encoding="utf-8",
+    )
+    if argv[0] == "git":
+        (tmp_path / ".git").mkdir()
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(executable.parent,),
+        git_repository_probe=lambda executable, workspace, environment: (
+            workspace / ".git",
+            workspace / ".git",
+            workspace,
+        ),
+    )
+
+    result = policy.classify({"argv": argv})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+def test_git_probe_uses_scrubbed_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git = _bind_executables(monkeypatch, tmp_path, "git")["git"]
+    (tmp_path / ".git").mkdir()
+    names = {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_NAMESPACE",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    }
+    for name in names:
+        monkeypatch.setenv(name, str(tmp_path.parent / "outside"))
+    captured: list[dict[str, str]] = []
+
+    def probe(
+        executable: Path,
+        workspace: Path,
+        environment: dict[str, str],
+    ) -> tuple[Path, Path, Path]:
+        captured.append(dict(environment))
+        return workspace / ".git", workspace / ".git", workspace
+
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(git.parent,),
+        git_repository_probe=probe,
+    )
+
+    result = policy.classify({"argv": ["git", "status", "--short"]})
+
+    assert result.decision is ShellExecutionDecision.AUTO_APPROVE
+    assert captured
+    assert names.isdisjoint(captured[0])
+
+
+@pytest.mark.parametrize("external_component", [0, 1, 2])
+def test_git_probe_rejects_effective_repository_paths_outside_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    external_component: int,
+) -> None:
+    git = _bind_executables(monkeypatch, tmp_path, "git")["git"]
+    (tmp_path / ".git").mkdir()
+    paths = [tmp_path / ".git", tmp_path / ".git", tmp_path]
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-metadata"
+    outside.mkdir()
+    paths[external_component] = outside
+    policy = ShellExecutionPolicy(
+        tmp_path,
+        ShellApprovalStore(tmp_path),
+        trusted_executable_roots=(git.parent,),
+        git_repository_probe=lambda executable, workspace, environment: (
+            paths[0],
+            paths[1],
+            paths[2],
+        ),
+    )
+
+    result = policy.classify({"argv": ["git", "diff", "--stat"]})
+
+    assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
 
 
 def test_external_gitdir_file_requires_confirmation(

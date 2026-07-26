@@ -55,7 +55,20 @@ class ConfirmationDecision(str, Enum):
     ALLOW_ALWAYS = "allow_always"
 
 
-ConfirmationCallback = Callable[[ConfirmationRequest], bool | ConfirmationDecision]
+@dataclass(frozen=True)
+class PreparedToolExecution:
+    """Bind confirmation, persistence, and execution to one preparation."""
+
+    requires_confirmation: bool
+    confirmation_description: str
+    execute: Callable[[], ToolResult]
+    remember_approval: Callable[[], ToolResult] | None = None
+
+
+ConfirmationCallback = Callable[
+    [ConfirmationRequest],
+    bool | ConfirmationDecision,
+]
 
 
 class Tool(Protocol):
