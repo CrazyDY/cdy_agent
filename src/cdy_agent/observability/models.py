@@ -46,7 +46,7 @@ class TokenUsage:
         }
 
     @classmethod
-    def from_dict(cls, value: object) -> "TokenUsage":
+    def from_dict(cls, value: object) -> TokenUsage:
         if not isinstance(value, dict) or set(value) != {
             "input_tokens",
             "output_tokens",
@@ -90,7 +90,7 @@ class EstimatedCost:
         }
 
     @classmethod
-    def from_dict(cls, value: object) -> "EstimatedCost":
+    def from_dict(cls, value: object) -> EstimatedCost:
         if not isinstance(value, dict) or set(value) != {
             "input_cost",
             "output_cost",
@@ -185,7 +185,7 @@ class TraceRecord:
         }
 
     @classmethod
-    def from_dict(cls, value: object) -> "TraceRecord":
+    def from_dict(cls, value: object) -> TraceRecord:
         payload = _exact_dict(
             value,
             {
@@ -319,9 +319,7 @@ def _model_span(value: object) -> ModelCallSpan:
         "model span",
     )
     status = _choice(payload["status"], {"succeeded", "failed"}, "status")
-    usage = (
-        None if payload["usage"] is None else TokenUsage.from_dict(payload["usage"])
-    )
+    usage = None if payload["usage"] is None else TokenUsage.from_dict(payload["usage"])
     return ModelCallSpan(
         _uuid(payload["span_id"], "span_id"),
         _positive_int(payload["sequence"], "sequence"),

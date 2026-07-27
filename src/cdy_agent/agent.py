@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, Callable
+from collections.abc import Callable, Sequence
+from typing import Any
 
 from .conversation import Message
 from .observability import TraceRecorder
@@ -91,9 +91,7 @@ class Agent:
             except Exception as exc:
                 if active_recorder is not None and model_span is not None:
                     try:
-                        active_recorder.finish_model_call(
-                            model_span, None, exc
-                        )
+                        active_recorder.finish_model_call(model_span, None, exc)
                     except Exception:
                         _invalidate_recorder(active_recorder)
                         active_recorder = None

@@ -7,7 +7,7 @@ from types import MappingProxyType
 
 import yaml
 
-
+from ..tools.filesystem import resolve_workspace
 from .models import (
     DiscoveredSkill,
     ResourceCategory,
@@ -17,14 +17,11 @@ from .models import (
     SkillResource,
     _ResourceIdentity,
 )
-from ..tools.filesystem import resolve_workspace
 
 MAX_SKILL_BYTES = 256 * 1024
 MAX_RESOURCES = 512
 RESOURCE_CATEGORIES = ("scripts", "references", "assets")
-NAME_PATTERN = re.compile(
-    r"(?=.{1,64}\Z)[a-z0-9]+(?:-[a-z0-9]+)*\Z"
-)
+NAME_PATTERN = re.compile(r"(?=.{1,64}\Z)[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 FRONTMATTER_FIELDS = {
     "name",
     "description",
@@ -122,14 +119,10 @@ def _load_entry(directory: Path, workspace: Path) -> DiscoveredSkill:
         raise InvalidSkillError("Skill name must match its directory.")
     resolved_directory = directory.resolve()
     resources = _discover_resources(resolved_directory, workspace)
-    return DiscoveredSkill(
-        metadata, resolved_directory, instructions, resources
-    )
+    return DiscoveredSkill(metadata, resolved_directory, instructions, resources)
 
 
-def _discover_resources(
-    directory: Path, workspace: Path
-) -> tuple[SkillResource, ...]:
+def _discover_resources(directory: Path, workspace: Path) -> tuple[SkillResource, ...]:
     resources: list[SkillResource] = []
     for category in RESOURCE_CATEGORIES:
         category_root = directory / category
@@ -155,15 +148,11 @@ def _discover_resources(
                     pending.append(path)
                     continue
                 if not path.is_file():
-                    raise InvalidSkillError(
-                        "Skill resources must be regular files."
-                    )
+                    raise InvalidSkillError("Skill resources must be regular files.")
                 _require_safe(path, category_root, directory=False)
                 _require_within(path, directory)
                 if len(resources) >= MAX_RESOURCES:
-                    raise InvalidSkillError(
-                        "Skill contains more than 512 resources."
-                    )
+                    raise InvalidSkillError("Skill contains more than 512 resources.")
                 identity = _resource_identity(path)
                 resources.append(
                     SkillResource(
@@ -210,10 +199,7 @@ def revalidate_resource(
         raise InvalidSkillError("Workspace is invalid.") from error
     if resource.category not in RESOURCE_CATEGORIES:
         raise InvalidSkillError("Resource category is invalid.")
-    if (
-        expected_category is not None
-        and resource.category != expected_category
-    ):
+    if expected_category is not None and resource.category != expected_category:
         raise InvalidSkillError("Resource category is not allowed.")
     revalidate_skill(skill, resolved_workspace)
     category_root = skill.directory / resource.category
@@ -223,9 +209,7 @@ def revalidate_resource(
     try:
         resolved.relative_to(category_root.resolve(strict=True))
     except ValueError as error:
-        raise InvalidSkillError(
-            "Skill resource is outside its category."
-        ) from error
+        raise InvalidSkillError("Skill resource is outside its category.") from error
     if _resource_identity(resolved) != resource._identity:
         raise InvalidSkillError("Skill resource changed.")
     return resolved
@@ -251,9 +235,7 @@ def _require_within(path: Path, directory: Path) -> None:
         ) from error
 
 
-def _require_safe(
-    path: Path, trusted_root: Path, *, directory: bool
-) -> None:
+def _require_safe(path: Path, trusted_root: Path, *, directory: bool) -> None:
     try:
         relative = path.relative_to(trusted_root)
     except ValueError as error:
@@ -309,9 +291,7 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
         )
     except yaml.YAMLError as error:
         raise InvalidSkillError("SKILL.md metadata is invalid YAML.") from error
-    if not isinstance(values, dict) or not all(
-        isinstance(key, str) for key in values
-    ):
+    if not isinstance(values, dict) or not all(isinstance(key, str) for key in values):
         raise InvalidSkillError("name and description are required.")
     fields = set(values)
     if not {"name", "description"}.issubset(fields):
@@ -331,9 +311,7 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
     license_value = _optional_string(values, "license")
     compatibility = _optional_string(values, "compatibility")
     if compatibility is not None and len(compatibility) > 500:
-        raise InvalidSkillError(
-            "Skill compatibility must be 1 to 500 characters."
-        )
+        raise InvalidSkillError("Skill compatibility must be 1 to 500 characters.")
     allowed_tools = _optional_string(values, "allowed-tools", strip=False)
     if allowed_tools is not None and not _valid_allowed_tools(allowed_tools):
         raise InvalidSkillError(
@@ -379,10 +357,6 @@ def _optional_string(
 
 def _valid_allowed_tools(value: str) -> bool:
     tokens = value.split(" ")
-    return (
-        all(tokens)
-        and all(
-            character == " " or not character.isspace()
-            for character in value
-        )
+    return all(tokens) and all(
+        character == " " or not character.isspace() for character in value
     )

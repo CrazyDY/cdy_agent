@@ -8,7 +8,6 @@ from pathlib import Path
 
 from cdy_agent.tools.filesystem import resolve_workspace
 
-
 DATA_DIRECTORY = ".cdy-agent"
 DATABASE_FILENAME = "cdy-agent.sqlite3"
 SCHEMA_VERSION = 2
@@ -186,9 +185,7 @@ class WorkspaceDatabase:
             resolved_directory = data_directory.resolve(strict=True)
             resolved_directory.relative_to(self.workspace)
             if not resolved_directory.is_dir():
-                raise InvalidConversationStoreError(
-                    "Data path is not a directory."
-                )
+                raise InvalidConversationStoreError("Data path is not a directory.")
             target = resolved_directory / DATABASE_FILENAME
             if not target.exists() and not target.is_symlink():
                 return target if create else None
@@ -199,9 +196,7 @@ class WorkspaceDatabase:
             resolved_target = target.resolve(strict=True)
             resolved_target.relative_to(self.workspace)
             if not resolved_target.is_file():
-                raise InvalidConversationStoreError(
-                    "Database is not a regular file."
-                )
+                raise InvalidConversationStoreError("Database is not a regular file.")
             return resolved_target
         except InvalidConversationStoreError:
             raise
@@ -213,9 +208,7 @@ class WorkspaceDatabase:
         connection.execute("PRAGMA foreign_keys = ON")
 
     @classmethod
-    def _require_readable_version(
-        cls, connection: sqlite3.Connection
-    ) -> int | None:
+    def _require_readable_version(cls, connection: sqlite3.Connection) -> int | None:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if version == 0 and not cls._application_objects(connection):
             return None
@@ -243,25 +236,17 @@ class WorkspaceDatabase:
         return {
             (row[0], row[1])
             for row in connection.execute(
-                "SELECT type, name FROM sqlite_master "
-                "WHERE name NOT GLOB 'sqlite_*'"
+                "SELECT type, name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
             )
         }
 
     @classmethod
-    def _validate_schema(
-        cls, connection: sqlite3.Connection, version: int
-    ) -> None:
+    def _validate_schema(cls, connection: sqlite3.Connection, version: int) -> None:
         expected_tables = _V1_TABLES if version == 1 else _V2_TABLES
-        expected_indexes = (
-            _V1_AUTO_INDEXES if version == 1 else _V2_AUTO_INDEXES
-        )
+        expected_indexes = _V1_AUTO_INDEXES if version == 1 else _V2_AUTO_INDEXES
         expected_objects = {
             ("table", table, table, False) for table in expected_tables
-        } | {
-            ("index", name, table, True)
-            for name, table in expected_indexes
-        }
+        } | {("index", name, table, True) for name, table in expected_indexes}
         actual_objects = {
             (row[0], row[1], row[2], row[3] is None)
             for row in connection.execute(
@@ -281,9 +266,7 @@ class WorkspaceDatabase:
             foreign_keys = tuple(
                 sorted(
                     (row[3], row[2], row[4], row[6].upper())
-                    for row in connection.execute(
-                        f"PRAGMA foreign_key_list({table})"
-                    )
+                    for row in connection.execute(f"PRAGMA foreign_key_list({table})")
                 )
             )
             if foreign_keys != _FOREIGN_KEYS[table]:
@@ -315,8 +298,7 @@ class WorkspaceDatabase:
             )
             normalized_sql = re.sub(r"\s+", "", without_comments.casefold())
             if any(
-                fragment not in normalized_sql
-                for fragment in _CHECK_FRAGMENTS[table]
+                fragment not in normalized_sql for fragment in _CHECK_FRAGMENTS[table]
             ):
                 cls._invalid_schema()
 
@@ -326,6 +308,4 @@ class WorkspaceDatabase:
 
     @staticmethod
     def _invalid_schema() -> None:
-        raise InvalidConversationStoreError(
-            "Conversation database schema is invalid."
-        )
+        raise InvalidConversationStoreError("Conversation database schema is invalid.")

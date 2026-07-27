@@ -1,6 +1,6 @@
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import sqlite3
 from uuid import UUID
 
 import pytest
@@ -10,13 +10,12 @@ from cdy_agent.memory import (
     InvalidMemoryError,
     MemoryConflictError,
     MemoryNotFoundError,
+    MemoryStore,
+    MemoryStoreError,
     PreparedCreate,
     PreparedDelete,
     PreparedUpdate,
-    MemoryStore,
-    MemoryStoreError,
 )
-
 
 FIRST_ID = "11111111-1111-1111-1111-111111111111"
 SECOND_ID = "22222222-2222-2222-2222-222222222222"
@@ -75,7 +74,9 @@ def store_with_21_sequential_memories(tmp_path: Path) -> MemoryStore:
 
 def test_create_normalizes_content_tags_and_timestamps(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: FIRST_ID)
-    record = store.create("  Use uv for Python\nprojects.  ", [" Python ", "TOOLS", "python"])
+    record = store.create(
+        "  Use uv for Python\nprojects.  ", [" Python ", "TOOLS", "python"]
+    )
     assert record.id == FIRST_ID
     assert record.content == "Use uv for Python\nprojects."
     assert record.tags == ("python", "tools")
@@ -100,16 +101,22 @@ def test_create_rejects_invalid_memory(content, tags, message, tmp_path: Path) -
 
 def test_exact_duplicate_reports_existing_id(tmp_path: Path) -> None:
     ids = iter((FIRST_ID, SECOND_ID))
-    store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids))
+    store = MemoryStore(
+        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids)
+    )
     store.create("Remember this", ["B", "a"])
     with pytest.raises(DuplicateMemoryError) as caught:
         store.create("Remember this", ["A", "b"])
     assert caught.value.existing_id == FIRST_ID
 
 
-def test_update_replaces_content_and_tags_but_preserves_identity(tmp_path: Path) -> None:
+def test_update_replaces_content_and_tags_but_preserves_identity(
+    tmp_path: Path,
+) -> None:
     times = iter((FIRST_TIME, SECOND_TIME))
-    store = MemoryStore(tmp_path, clock=lambda: next(times), id_factory=lambda: FIRST_ID)
+    store = MemoryStore(
+        tmp_path, clock=lambda: next(times), id_factory=lambda: FIRST_ID
+    )
     original = store.create("old", ["before"])
     updated = store.update(FIRST_ID, "new", ["AFTER"])
     assert updated.id == original.id
@@ -144,9 +151,7 @@ def test_create_rejects_naive_clock(tmp_path: Path) -> None:
 
 
 def test_create_rejects_failed_timezone_conversion(tmp_path: Path) -> None:
-    broken = _BrokenTimezoneConversion(
-        2026, 7, 19, 1, 0, tzinfo=timezone.utc
-    )
+    broken = _BrokenTimezoneConversion(2026, 7, 19, 1, 0, tzinfo=timezone.utc)
     store = MemoryStore(tmp_path, clock=lambda: broken)
     with pytest.raises(MemoryStoreError, match=r"^Memory clock is invalid\.$"):
         store.create("valid", [])
@@ -161,7 +166,9 @@ def test_create_rejects_tag_that_is_not_utf8(tmp_path: Path) -> None:
 
 def test_update_duplicate_rolls_back_original(tmp_path: Path) -> None:
     ids = iter((FIRST_ID, SECOND_ID))
-    store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids))
+    store = MemoryStore(
+        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids)
+    )
     first = store.create("first", ["same"])
     second = store.create("second", ["other"])
     with pytest.raises(DuplicateMemoryError) as caught:
@@ -173,7 +180,9 @@ def test_update_duplicate_rolls_back_original(tmp_path: Path) -> None:
 
 def test_content_limit_counts_utf8_bytes(tmp_path: Path) -> None:
     ids = iter((FIRST_ID, SECOND_ID))
-    store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids))
+    store = MemoryStore(
+        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids)
+    )
     assert store.create("é" * 4096, []).content == "é" * 4096
     with pytest.raises(InvalidMemoryError, match="8 KiB"):
         store.create("é" * 4097, [])
@@ -202,15 +211,15 @@ def test_get_rejects_corrupt_stored_data(
     store.create("valid", ["tag"])
     with sqlite3.connect(_database(tmp_path)) as connection:
         connection.execute(statement, parameters)
-    with pytest.raises(
-        InvalidMemoryError, match=r"^Stored memory data is invalid\.$"
-    ):
+    with pytest.raises(InvalidMemoryError, match=r"^Stored memory data is invalid\.$"):
         store.get(FIRST_ID)
 
 
 def test_failed_tag_update_rolls_back_content_and_tags(tmp_path: Path) -> None:
     times = iter((FIRST_TIME, SECOND_TIME))
-    store = MemoryStore(tmp_path, clock=lambda: next(times), id_factory=lambda: FIRST_ID)
+    store = MemoryStore(
+        tmp_path, clock=lambda: next(times), id_factory=lambda: FIRST_ID
+    )
     original = store.create("old", ["before"])
     with sqlite3.connect(_database(tmp_path)) as connection:
         connection.execute(
@@ -268,9 +277,7 @@ def test_identity_hash_distinguishes_ambiguous_text_and_tag_boundaries(
 def test_prepare_create_allocates_uuid_and_commit_uses_exact_snapshot(
     tmp_path: Path,
 ) -> None:
-    store = MemoryStore(
-        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: FIRST_ID
-    )
+    store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: FIRST_ID)
 
     prepared = store.prepare_create("  Remember this  ", [" B ", "a"])
 
@@ -299,9 +306,7 @@ def test_prepared_update_conflicts_with_newer_two_store_record(
     prepared = store_a.prepare_update(FIRST_ID, "approved", ["new"])
     newer = store_b.update(FIRST_ID, "newer", ["other"])
 
-    assert prepared == PreparedUpdate(
-        original, store_a.prepare("approved", ["new"])
-    )
+    assert prepared == PreparedUpdate(original, store_a.prepare("approved", ["new"]))
     with pytest.raises(MemoryConflictError, match="changed after confirmation"):
         store_a.commit_update(prepared)
     assert store_a.get(FIRST_ID) == newer
@@ -331,9 +336,12 @@ def test_find_duplicate_treats_v1_database_as_empty(tmp_path: Path) -> None:
     assert store.find_duplicate(draft) is None
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (1,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE name = 'memories'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'memories'"
+            ).fetchone()
+            is None
+        )
 
 
 def test_get_treats_v1_database_as_empty(tmp_path: Path) -> None:
@@ -342,9 +350,12 @@ def test_get_treats_v1_database_as_empty(tmp_path: Path) -> None:
         MemoryStore(tmp_path).get(FIRST_ID)
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (1,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE name = 'memories'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'memories'"
+            ).fetchone()
+            is None
+        )
 
 
 def test_search_casefolds_unicode_and_matches_content_or_tags(
@@ -425,6 +436,9 @@ def test_retrieval_treats_empty_and_v1_stores_as_empty_without_writes(
     assert store.search(tags=["tag"]) == ()
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (1,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE name = 'memories'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'memories'"
+            ).fetchone()
+            is None
+        )

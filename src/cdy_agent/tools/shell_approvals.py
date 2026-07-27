@@ -11,7 +11,6 @@ from pathlib import Path
 from .base import ToolResult
 from .filesystem import resolve_workspace
 
-
 APPROVAL_VERSION = 1
 DATA_DIRECTORY = ".cdy-agent"
 APPROVAL_FILENAME = "shell-approvals.json"
@@ -33,7 +32,7 @@ class _PathRecord:
     changed_ns: int
 
     @classmethod
-    def from_stat(cls, value: os.stat_result) -> "_PathRecord":
+    def from_stat(cls, value: os.stat_result) -> _PathRecord:
         return cls(
             value.st_dev,
             value.st_ino,
@@ -42,11 +41,8 @@ class _PathRecord:
             value.st_ctime_ns,
         )
 
-    def same_identity(self, other: "_PathRecord") -> bool:
-        return (
-            self.device == other.device
-            and self.inode == other.inode
-        )
+    def same_identity(self, other: _PathRecord) -> bool:
+        return self.device == other.device and self.inode == other.inode
 
 
 @dataclass(frozen=True)
@@ -65,9 +61,7 @@ class ShellApprovalStore:
         self.workspace = resolve_workspace(workspace)
         workspace_stat = self.workspace.lstat()
         if not _is_safe_directory_stat(workspace_stat):
-            raise ValueError(
-                "Shell approval workspace is not a safe directory."
-            )
+            raise ValueError("Shell approval workspace is not a safe directory.")
         self._workspace_identity = _PathRecord.from_stat(workspace_stat)
         self._replace = replace
 
@@ -107,9 +101,7 @@ class ShellApprovalStore:
         try:
             descriptor = os.open(
                 target,
-                os.O_RDONLY
-                | getattr(os, "O_BINARY", 0)
-                | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0),
             )
             with os.fdopen(descriptor, "r", encoding="utf-8") as file:
                 opened = _PathRecord.from_stat(os.fstat(file.fileno()))
@@ -124,9 +116,8 @@ class ShellApprovalStore:
         except UnicodeDecodeError:
             return _invalid_store_failure()
         after = self._capture_state(create_directory=False)
-        if (
-            not isinstance(after, _StorePathState)
-            or not _same_store_state(state, after)
+        if not isinstance(after, _StorePathState) or not _same_store_state(
+            state, after
         ):
             return _store_changed_failure()
         try:
@@ -183,9 +174,7 @@ class ShellApprovalStore:
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
-                temporary_record = _PathRecord.from_stat(
-                    os.fstat(file.fileno())
-                )
+                temporary_record = _PathRecord.from_stat(os.fstat(file.fileno()))
             if not self._ready_to_replace(
                 state,
                 temporary,
@@ -218,10 +207,12 @@ class ShellApprovalStore:
                     temporary_record,
                     state,
                 )
-        return ToolResult.success({
-            "path": str(self._target),
-            "count": len(commands),
-        })
+        return ToolResult.success(
+            {
+                "path": str(self._target),
+                "count": len(commands),
+            }
+        )
 
     @property
     def _data_directory(self) -> Path:
@@ -280,11 +271,7 @@ class ShellApprovalStore:
             directory_record,
             target_record,
         )
-        return (
-            state
-            if self._state_is_current(state)
-            else _store_changed_failure()
-        )
+        return state if self._state_is_current(state) else _store_changed_failure()
 
     def _safe_workspace_record(self) -> _PathRecord | ToolResult:
         try:
@@ -301,9 +288,7 @@ class ShellApprovalStore:
     def _state_is_current(self, state: _StorePathState) -> bool:
         try:
             workspace = _PathRecord.from_stat(self.workspace.lstat())
-            data_directory = _PathRecord.from_stat(
-                self._data_directory.lstat()
-            )
+            data_directory = _PathRecord.from_stat(self._data_directory.lstat())
             target = _optional_regular_file_record(self._target)
         except OSError:
             return False
@@ -322,21 +307,17 @@ class ShellApprovalStore:
         if temporary_record is None:
             return False
         current = self._capture_state(create_directory=False)
-        if (
-            not isinstance(current, _StorePathState)
-            or not _same_store_state(state, current)
+        if not isinstance(current, _StorePathState) or not _same_store_state(
+            state, current
         ):
             return False
         try:
             temp_stat = temporary.lstat()
         except OSError:
             return False
-        return (
-            _is_safe_regular_file_stat(temp_stat)
-            and _PathRecord.from_stat(temp_stat).same_identity(
-                temporary_record
-            )
-        )
+        return _is_safe_regular_file_stat(temp_stat) and _PathRecord.from_stat(
+            temp_stat
+        ).same_identity(temporary_record)
 
     def _safe_unlink_temporary(
         self,
@@ -345,9 +326,8 @@ class ShellApprovalStore:
         original_state: _StorePathState,
     ) -> None:
         current = self._capture_state(create_directory=False)
-        if (
-            not isinstance(current, _StorePathState)
-            or not _same_parent_identity(original_state, current)
+        if not isinstance(current, _StorePathState) or not _same_parent_identity(
+            original_state, current
         ):
             return
         try:
@@ -356,12 +336,9 @@ class ShellApprovalStore:
             return
         except OSError:
             return
-        if (
-            _is_safe_regular_file_stat(temp_stat)
-            and _PathRecord.from_stat(temp_stat).same_identity(
-                temporary_record
-            )
-        ):
+        if _is_safe_regular_file_stat(temp_stat) and _PathRecord.from_stat(
+            temp_stat
+        ).same_identity(temporary_record):
             try:
                 temporary.unlink()
             except OSError:
@@ -388,9 +365,7 @@ def _is_link_or_reparse(value: os.stat_result) -> bool:
         0,
     )
     attributes = getattr(value, "st_file_attributes", 0)
-    return stat.S_ISLNK(value.st_mode) or bool(
-        attributes & reparse_flag
-    )
+    return stat.S_ISLNK(value.st_mode) or bool(attributes & reparse_flag)
 
 
 def _is_safe_directory_stat(value: os.stat_result) -> bool:
@@ -429,19 +404,17 @@ def _same_parent_identity(
     first: _StorePathState,
     second: _StorePathState,
 ) -> bool:
-    return (
-        first.workspace.same_identity(second.workspace)
-        and first.data_directory.same_identity(second.data_directory)
-    )
+    return first.workspace.same_identity(
+        second.workspace
+    ) and first.data_directory.same_identity(second.data_directory)
 
 
 def _same_store_state(
     first: _StorePathState,
     second: _StorePathState,
 ) -> bool:
-    return (
-        _same_parent_identity(first, second)
-        and _same_optional_record_version(first.target, second.target)
+    return _same_parent_identity(first, second) and _same_optional_record_version(
+        first.target, second.target
     )
 
 

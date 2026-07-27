@@ -199,9 +199,7 @@ class TraceRecorder:
         self._finished = True
         model_calls = tuple(sorted(self._model_calls, key=lambda span: span.sequence))
         tool_calls = tuple(sorted(self._tool_calls, key=lambda span: span.sequence))
-        known = [
-            span.usage for span in model_calls if span.usage is not None
-        ]
+        known = [span.usage for span in model_calls if span.usage is not None]
         usage = (
             None
             if not known
@@ -250,8 +248,5 @@ class TraceRecorder:
         open_tokens: dict[int, _OpenSpan],
         span_kind: str,
     ) -> None:
-        if (
-            token.owner is not self._owner
-            or open_tokens.get(id(token)) is not token
-        ):
+        if token.owner is not self._owner or open_tokens.get(id(token)) is not token:
             raise ValueError(f"Invalid {span_kind} span token.")

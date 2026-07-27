@@ -16,14 +16,16 @@ from .shell_approvals import ShellApprovalStore
 
 DEFAULT_TIMEOUT_SECONDS = 10
 MAX_TIMEOUT_SECONDS = 30
-GIT_GLOBAL_OPTIONS_WITH_VALUES = frozenset({
-    "-C",
-    "-c",
-    "--config-env",
-    "--git-dir",
-    "--namespace",
-    "--work-tree",
-})
+GIT_GLOBAL_OPTIONS_WITH_VALUES = frozenset(
+    {
+        "-C",
+        "-c",
+        "--config-env",
+        "--git-dir",
+        "--namespace",
+        "--work-tree",
+    }
+)
 GIT_HARDENING = (
     "--no-pager",
     "--no-optional-locks",
@@ -31,78 +33,216 @@ GIT_HARDENING = (
     "core.fsmonitor=false",
 )
 GIT_DIFF_SAFETY = ("--no-ext-diff", "--no-textconv")
-BUILTIN_COMMANDS = frozenset({
-    "pwd", "ls", "rg", "grep", "head", "tail", "wc", "sort", "uniq",
-    "git",
-})
+BUILTIN_COMMANDS = frozenset(
+    {
+        "pwd",
+        "ls",
+        "rg",
+        "grep",
+        "head",
+        "tail",
+        "wc",
+        "sort",
+        "uniq",
+        "git",
+    }
+)
 PWD_OPTIONS = frozenset({"-L", "-P", "--logical", "--physical"})
 LS_SHORT_OPTIONS = frozenset("aAlhRdF1rtS")
-LS_LONG_OPTIONS = frozenset({
-    "--all", "--almost-all", "--human-readable", "--recursive",
-    "--directory", "--classify", "--group-directories-first",
-})
-RG_FLAGS = frozenset({
-    "-n", "--line-number", "-i", "--ignore-case", "-S", "--smart-case",
-    "-F", "--fixed-strings", "-l", "--files-with-matches", "--files",
-    "--hidden", "--no-ignore",
-})
-RG_VALUE_OPTIONS = frozenset({
-    "-g", "--glob", "-t", "--type", "-T", "--type-not",
-    "-A", "--after-context", "-B", "--before-context",
-    "-C", "--context", "-e", "--regexp",
-})
-GREP_FLAGS = frozenset({
-    "-n", "--line-number", "-i", "--ignore-case", "-F", "--fixed-strings",
-    "-E", "--extended-regexp", "-l", "--files-with-matches",
-    "-v", "--invert-match", "-s", "--no-messages",
-})
-GREP_VALUE_OPTIONS = frozenset({
-    "-e", "--regexp", "-A", "--after-context", "-B", "--before-context",
-    "-C", "--context",
-})
+LS_LONG_OPTIONS = frozenset(
+    {
+        "--all",
+        "--almost-all",
+        "--human-readable",
+        "--recursive",
+        "--directory",
+        "--classify",
+        "--group-directories-first",
+    }
+)
+RG_FLAGS = frozenset(
+    {
+        "-n",
+        "--line-number",
+        "-i",
+        "--ignore-case",
+        "-S",
+        "--smart-case",
+        "-F",
+        "--fixed-strings",
+        "-l",
+        "--files-with-matches",
+        "--files",
+        "--hidden",
+        "--no-ignore",
+    }
+)
+RG_VALUE_OPTIONS = frozenset(
+    {
+        "-g",
+        "--glob",
+        "-t",
+        "--type",
+        "-T",
+        "--type-not",
+        "-A",
+        "--after-context",
+        "-B",
+        "--before-context",
+        "-C",
+        "--context",
+        "-e",
+        "--regexp",
+    }
+)
+GREP_FLAGS = frozenset(
+    {
+        "-n",
+        "--line-number",
+        "-i",
+        "--ignore-case",
+        "-F",
+        "--fixed-strings",
+        "-E",
+        "--extended-regexp",
+        "-l",
+        "--files-with-matches",
+        "-v",
+        "--invert-match",
+        "-s",
+        "--no-messages",
+    }
+)
+GREP_VALUE_OPTIONS = frozenset(
+    {
+        "-e",
+        "--regexp",
+        "-A",
+        "--after-context",
+        "-B",
+        "--before-context",
+        "-C",
+        "--context",
+    }
+)
 HEAD_TAIL_FLAGS = frozenset({"-q", "--quiet", "--silent", "-v", "--verbose"})
-HEAD_TAIL_VALUE_OPTIONS = frozenset({
-    "-n", "--lines", "-c", "--bytes",
-})
-WC_FLAGS = frozenset({
-    "-c", "--bytes", "-m", "--chars", "-l", "--lines",
-    "-w", "--words", "-L", "--max-line-length",
-})
-SORT_FLAGS = frozenset({
-    "-b", "--ignore-leading-blanks", "-f", "--ignore-case",
-    "-n", "--numeric-sort", "-r", "--reverse", "-s", "--stable",
-    "-u", "--unique",
-})
-SORT_VALUE_OPTIONS = frozenset({
-    "-k", "--key", "-t", "--field-separator",
-})
-UNIQ_FLAGS = frozenset({
-    "-c", "--count", "-d", "--repeated", "-D", "--all-repeated",
-    "-i", "--ignore-case", "-u", "--unique",
-})
-UNIQ_VALUE_OPTIONS = frozenset({
-    "-f", "--skip-fields", "-s", "--skip-chars", "-w", "--check-chars",
-})
-GIT_STATUS_FLAGS = frozenset({
-    "-s", "--short", "-b", "--branch", "--porcelain",
-    "--long", "-z", "--null", "-u", "--untracked-files",
-    "--ignored", "--no-renames",
-})
-GIT_DIFF_FLAGS = frozenset({
-    "--stat", "--numstat", "--shortstat", "--name-only", "--name-status",
-    "--check", "--summary", "--patch", "-p",
-    "-w", "--ignore-all-space", "--no-renames", "--cached", "--staged",
-    "-U", "--unified",
-})
+HEAD_TAIL_VALUE_OPTIONS = frozenset(
+    {
+        "-n",
+        "--lines",
+        "-c",
+        "--bytes",
+    }
+)
+WC_FLAGS = frozenset(
+    {
+        "-c",
+        "--bytes",
+        "-m",
+        "--chars",
+        "-l",
+        "--lines",
+        "-w",
+        "--words",
+        "-L",
+        "--max-line-length",
+    }
+)
+SORT_FLAGS = frozenset(
+    {
+        "-b",
+        "--ignore-leading-blanks",
+        "-f",
+        "--ignore-case",
+        "-n",
+        "--numeric-sort",
+        "-r",
+        "--reverse",
+        "-s",
+        "--stable",
+        "-u",
+        "--unique",
+    }
+)
+SORT_VALUE_OPTIONS = frozenset(
+    {
+        "-k",
+        "--key",
+        "-t",
+        "--field-separator",
+    }
+)
+UNIQ_FLAGS = frozenset(
+    {
+        "-c",
+        "--count",
+        "-d",
+        "--repeated",
+        "-D",
+        "--all-repeated",
+        "-i",
+        "--ignore-case",
+        "-u",
+        "--unique",
+    }
+)
+UNIQ_VALUE_OPTIONS = frozenset(
+    {
+        "-f",
+        "--skip-fields",
+        "-s",
+        "--skip-chars",
+        "-w",
+        "--check-chars",
+    }
+)
+GIT_STATUS_FLAGS = frozenset(
+    {
+        "-s",
+        "--short",
+        "-b",
+        "--branch",
+        "--porcelain",
+        "--long",
+        "-z",
+        "--null",
+        "-u",
+        "--untracked-files",
+        "--ignored",
+        "--no-renames",
+    }
+)
+GIT_DIFF_FLAGS = frozenset(
+    {
+        "--stat",
+        "--numstat",
+        "--shortstat",
+        "--name-only",
+        "--name-status",
+        "--check",
+        "--summary",
+        "--patch",
+        "-p",
+        "-w",
+        "--ignore-all-space",
+        "--no-renames",
+        "--cached",
+        "--staged",
+        "-U",
+        "--unified",
+    }
+)
 GIT_DIFF_ATTACHED_NUMERIC_OPTIONS = frozenset({"-U", "--unified"})
-MACH_O_MAGICS = frozenset({
-    b"\xfe\xed\xfa\xce",
-    b"\xce\xfa\xed\xfe",
-    b"\xfe\xed\xfa\xcf",
-    b"\xcf\xfa\xed\xfe",
-    b"\xca\xfe\xba\xbe",
-    b"\xbe\xba\xfe\xca",
-})
+MACH_O_MAGICS = frozenset(
+    {
+        b"\xfe\xed\xfa\xce",
+        b"\xce\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+        b"\xcf\xfa\xed\xfe",
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+    }
+)
 
 ExecutableResolver = Callable[
     [str, Path, Mapping[str, str]],
@@ -159,27 +299,19 @@ class ShellExecutionPolicy:
         self.workspace = resolve_workspace(workspace)
         if approvals.workspace != self.workspace:
             raise ValueError(
-                "Shell approval store workspace does not match "
-                "policy workspace."
+                "Shell approval store workspace does not match policy workspace."
             )
         self.approvals = approvals
         if trusted_executable_roots is None:
-            self._trusted_executable_roots = (
-                _system_executable_roots()
-            )
+            self._trusted_executable_roots = _system_executable_roots()
             self._require_system_ownership = True
         else:
             self._trusted_executable_roots = tuple(
-                _resolve_trusted_root(path)
-                for path in trusted_executable_roots
+                _resolve_trusted_root(path) for path in trusted_executable_roots
             )
             self._require_system_ownership = False
-        self._executable_resolver = (
-            executable_resolver or _resolve_executable
-        )
-        self._git_repository_probe = (
-            git_repository_probe or _probe_git_repository
-        )
+        self._executable_resolver = executable_resolver or _resolve_executable
+        self._git_repository_probe = git_repository_probe or _probe_git_repository
 
     def prepare(
         self,
@@ -221,23 +353,17 @@ class ShellExecutionPolicy:
         self,
         prepared: PreparedShellCommand,
     ) -> ShellPolicyResult:
-        if (
-            prepared.user_argv[0] in BUILTIN_COMMANDS
-            and prepared.executable is None
-        ):
+        if prepared.user_argv[0] in BUILTIN_COMMANDS and prepared.executable is None:
             return ShellPolicyResult(
                 ShellExecutionDecision.REQUIRE_CONFIRMATION,
                 command=prepared,
             )
-        if (
-            prepared.trusted_system_executable
-            and _is_safe_read_only(
-                list(prepared.user_argv),
-                self.workspace,
-                prepared.executable,
-                dict(prepared.environment),
-                self._git_repository_probe,
-            )
+        if prepared.trusted_system_executable and _is_safe_read_only(
+            list(prepared.user_argv),
+            self.workspace,
+            prepared.executable,
+            dict(prepared.environment),
+            self._git_repository_probe,
         ):
             return ShellPolicyResult(
                 ShellExecutionDecision.AUTO_APPROVE,
@@ -320,8 +446,7 @@ def _parse_options(
             (
                 option
                 for option in value_options
-                if option.startswith("--")
-                and argument.startswith(f"{option}=")
+                if option.startswith("--") and argument.startswith(f"{option}=")
             ),
             None,
         )
@@ -341,10 +466,7 @@ def _parse_options(
             argument.startswith("-")
             and not argument.startswith("--")
             and len(argument) > 2
-            and all(
-                character in combined_short_flags
-                for character in argument[1:]
-            )
+            and all(character in combined_short_flags for character in argument[1:])
         ):
             seen.update(f"-{character}" for character in argument[1:])
             index += 1
@@ -361,20 +483,17 @@ def _match_attached_numeric_option(
         prefix = f"{option}=" if option.startswith("--") else option
         if not argument.startswith(prefix):
             continue
-        value = argument[len(prefix):]
+        value = argument[len(prefix) :]
         if value and value.isascii() and value.isdecimal():
             return option
     return None
 
 
-def _has_option(
-    arguments: list[str], names: frozenset[str]
-) -> bool:
+def _has_option(arguments: list[str], names: frozenset[str]) -> bool:
     return any(
         argument in names
         or any(
-            name.startswith("--") and argument.startswith(f"{name}=")
-            for name in names
+            name.startswith("--") and argument.startswith(f"{name}=") for name in names
         )
         for argument in arguments
     )
@@ -423,8 +542,7 @@ def _safe_ls(arguments: list[str], workspace: Path) -> bool:
     if not _paths_within_workspace(paths, workspace):
         return False
     reveals_hidden = bool(
-        parsed.seen
-        & frozenset({"-a", "-A", "--all", "--almost-all"})
+        parsed.seen & frozenset({"-a", "-A", "--all", "--almost-all"})
     )
     recursive = bool(parsed.seen & frozenset({"-R", "--recursive"}))
     return not (
@@ -444,9 +562,7 @@ def _safe_rg(arguments: list[str], workspace: Path) -> bool:
     )
     if parsed is None:
         return False
-    pattern_is_option = bool(
-        parsed.seen & frozenset({"-e", "--regexp"})
-    )
+    pattern_is_option = bool(parsed.seen & frozenset({"-e", "--regexp"}))
     paths = list(parsed.positionals)
     if "--files" not in parsed.seen and not pattern_is_option:
         if not paths:
@@ -464,9 +580,7 @@ def _safe_grep(arguments: list[str], workspace: Path) -> bool:
     )
     if parsed is None:
         return False
-    pattern_is_option = bool(
-        parsed.seen & frozenset({"-e", "--regexp"})
-    )
+    pattern_is_option = bool(parsed.seen & frozenset({"-e", "--regexp"}))
     paths = list(parsed.positionals)
     if not pattern_is_option:
         if not paths:
@@ -505,10 +619,15 @@ def _safe_wc(arguments: list[str], workspace: Path) -> bool:
 
 
 def _safe_sort(arguments: list[str], workspace: Path) -> bool:
-    dangerous = frozenset({
-        "-o", "--output", "--compress-program",
-        "-T", "--temporary-directory",
-    })
+    dangerous = frozenset(
+        {
+            "-o",
+            "--output",
+            "--compress-program",
+            "-T",
+            "--temporary-directory",
+        }
+    )
     if _has_option(arguments, dangerous):
         return False
     parsed = _parse_options(
@@ -557,9 +676,13 @@ def _safe_git(
     if argv[1] == "status":
         parsed = _parse_options(arguments, GIT_STATUS_FLAGS)
     else:
-        dangerous = frozenset({
-            "--output", "--ext-diff", "--textconv",
-        })
+        dangerous = frozenset(
+            {
+                "--output",
+                "--ext-diff",
+                "--textconv",
+            }
+        )
         if _has_option(arguments, dangerous):
             return False
         parsed = _parse_options(
@@ -671,10 +794,9 @@ def _git_marker_within_workspace(marker: Path, workspace: Path) -> bool:
         resolved_gitdir = gitdir.resolve()
     except OSError:
         return False
-    return (
-        _path_within_workspace(resolved_gitdir, workspace)
-        and _git_commondir_within_workspace(resolved_gitdir, workspace)
-    )
+    return _path_within_workspace(
+        resolved_gitdir, workspace
+    ) and _git_commondir_within_workspace(resolved_gitdir, workspace)
 
 
 def _git_commondir_within_workspace(
@@ -712,7 +834,7 @@ def _read_git_metadata_pointer(
         return None
     if len(lines) != 1 or not lines[0].startswith(prefix):
         return None
-    value = lines[0][len(prefix):].strip()
+    value = lines[0][len(prefix) :].strip()
     return value or None
 
 
@@ -782,15 +904,11 @@ def _validate_arguments(
     if (
         not isinstance(argv, list)
         or not argv
-        or any(
-            not isinstance(element, str) or "\0" in element
-            for element in argv
-        )
+        or any(not isinstance(element, str) or "\0" in element for element in argv)
     ):
         return ToolResult.failure(
             "invalid_arguments",
-            "argv must be a non-empty list of strings without "
-            "NUL characters.",
+            "argv must be a non-empty list of strings without NUL characters.",
         )
     timeout = arguments.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     if (
@@ -800,8 +918,7 @@ def _validate_arguments(
     ):
         return ToolResult.failure(
             "invalid_arguments",
-            f"timeout_seconds must be an integer from 1 to "
-            f"{MAX_TIMEOUT_SECONDS}.",
+            f"timeout_seconds must be an integer from 1 to {MAX_TIMEOUT_SECONDS}.",
         )
     return argv, timeout
 
@@ -919,9 +1036,7 @@ def _resolve_trusted_root(path: Path) -> Path:
     try:
         resolved = path.resolve(strict=True)
     except OSError as error:
-        raise ValueError(
-            f"Invalid trusted executable root: {path}."
-        ) from error
+        raise ValueError(f"Invalid trusted executable root: {path}.") from error
     if not resolved.is_dir():
         raise ValueError(f"Invalid trusted executable root: {path}.")
     return resolved
@@ -936,11 +1051,7 @@ def _system_executable_roots() -> tuple[Path, ...]:
             configured = os.confstr("CS_PATH")
         except (AttributeError, OSError, ValueError):
             configured = None
-        raw_paths = (
-            configured.split(os.pathsep)
-            if configured
-            else ["/bin", "/usr/bin"]
-        )
+        raw_paths = configured.split(os.pathsep) if configured else ["/bin", "/usr/bin"]
         candidates.extend(Path(path) for path in raw_paths if path)
     roots: list[Path] = []
     for candidate in candidates:
@@ -1020,11 +1131,7 @@ def _has_native_executable_header(executable: Path) -> bool:
             header = file.read(4)
     except OSError:
         return False
-    return (
-        header.startswith(b"MZ")
-        or header == b"\x7fELF"
-        or header in MACH_O_MAGICS
-    )
+    return header.startswith(b"MZ") or header == b"\x7fELF" or header in MACH_O_MAGICS
 
 
 def _unresolved_executable_failure(
@@ -1055,7 +1162,7 @@ def _effective_git_argv(argv: list[str]) -> list[str]:
     if command_index is None:
         return prefix
     command = argv[command_index]
-    command_arguments = argv[command_index + 1:]
+    command_arguments = argv[command_index + 1 :]
     if command != "diff":
         return [*prefix, command, *command_arguments]
     return [
@@ -1103,11 +1210,7 @@ def _effective_git_diff_arguments(arguments: list[str]) -> list[str]:
     else:
         options = arguments[:separator]
         operands = arguments[separator:]
-    user_options = [
-        argument
-        for argument in options
-        if argument not in GIT_DIFF_SAFETY
-    ]
+    user_options = [argument for argument in options if argument not in GIT_DIFF_SAFETY]
     return [
         *user_options,
         *GIT_DIFF_SAFETY,

@@ -13,7 +13,6 @@ from cdy_agent.tools.notes import (
 from cdy_agent.tools.personal_store import PersonalStore
 from cdy_agent.tools.registry import ToolRegistry
 
-
 NOTE_ID = "00000000-0000-4000-8000-000000000010"
 OTHER_NOTE_ID = "00000000-0000-4000-8000-000000000011"
 NOW = "2026-07-18T03:00:00Z"
@@ -113,9 +112,7 @@ def test_note_validation_and_missing_delete_happen_before_confirmation(
             "invalid_arguments",
         ),
         (
-            ToolCall(
-                "3", "create_note", '{"title":"x","content":"x","extra":1}'
-            ),
+            ToolCall("3", "create_note", '{"title":"x","content":"x","extra":1}'),
             "invalid_arguments",
         ),
         (ToolCall("4", "delete_note", '{"note_id":"bad"}'), "invalid_arguments"),
@@ -268,8 +265,7 @@ def test_note_mutations_propagate_save_errors_and_preserve_store(
     failing_delete = DeleteNoteTool(failing_store)
 
     assert (
-        failing_create.execute({"title": "Other", "content": "x"}).code
-        == "store_error"
+        failing_create.execute({"title": "Other", "content": "x"}).code == "store_error"
     )
     assert failing_delete.execute({"note_id": NOTE_ID}).code == "store_error"
     assert store.load_notes().data == original

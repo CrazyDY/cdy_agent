@@ -26,3 +26,8 @@ cdy-agent = "cdy_agent.cli:app"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.0",
+]

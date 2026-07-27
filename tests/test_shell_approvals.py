@@ -33,9 +33,7 @@ def test_approval_store_writes_versioned_json_and_deduplicates(
     assert store.add(["uv", "run", "pytest"]).ok
 
     document = json.loads(
-        (tmp_path / ".cdy-agent" / "shell-approvals.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / ".cdy-agent" / "shell-approvals.json").read_text(encoding="utf-8")
     )
     assert document == {
         "version": 1,
@@ -69,10 +67,7 @@ def test_invalid_approval_documents_fail_closed(tmp_path: Path) -> None:
     "content",
     [
         '{"version":2,"version":1,"allowed_commands":[]}',
-        (
-            '{"version":1,"allowed_commands":[],'
-            '"allowed_commands":[["uv"]]}'
-        ),
+        ('{"version":1,"allowed_commands":[],"allowed_commands":[["uv"]]}'),
     ],
 )
 def test_duplicate_json_keys_fail_closed(

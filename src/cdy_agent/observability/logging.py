@@ -18,12 +18,8 @@ LEVELS = {
 EVENT_FIELDS = {
     "trace_started": frozenset({"trace_id", "status"}),
     "trace_finished": frozenset({"trace_id", "status", "duration_ms"}),
-    "model_call_finished": frozenset(
-        {"trace_id", "span_id", "status", "duration_ms"}
-    ),
-    "tool_call_finished": frozenset(
-        {"trace_id", "span_id", "status", "duration_ms"}
-    ),
+    "model_call_finished": frozenset({"trace_id", "span_id", "status", "duration_ms"}),
+    "tool_call_finished": frozenset({"trace_id", "span_id", "status", "duration_ms"}),
 }
 EVENT_STATUSES = {
     "trace_started": frozenset({"started"}),
@@ -48,7 +44,11 @@ class JsonFormatter(logging.Formatter):
 
 def resolve_log_level(workspace_config: WorkspaceConfig | None = None) -> int:
     configured = os.getenv("CDY_AGENT_LOG_LEVEL")
-    if configured is None and workspace_config and workspace_config.log_level is not None:
+    if (
+        configured is None
+        and workspace_config
+        and workspace_config.log_level is not None
+    ):
         configured = workspace_config.log_level
     if configured is None:
         configured = "WARNING"

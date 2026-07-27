@@ -31,19 +31,18 @@ from cdy_agent.memory import (
     StoredConversation,
     StoredMemory,
 )
+from cdy_agent.observability import TraceRecord, TraceStore, TraceStoreError
 from cdy_agent.openai_client import (
     FinalResponse,
     ResponsesContinuation,
     ToolCallResponse,
 )
-from cdy_agent.observability import TraceRecord, TraceStore, TraceStoreError
 from cdy_agent.tools.base import (
     ConfirmationDecision,
     ConfirmationRequest,
     ToolCall,
     ToolResult,
 )
-
 
 runner = CliRunner()
 confirm_test_app = typer.Typer()
@@ -55,11 +54,7 @@ confirmation_request = ConfirmationRequest(
 @confirm_test_app.callback(invoke_without_command=True)
 def confirm_test() -> None:
     decision = cli._confirm_tool(confirmation_request)
-    typer.echo(
-        "APPROVED"
-        if decision is ConfirmationDecision.ALLOW_ONCE
-        else "DENIED"
-    )
+    typer.echo("APPROVED" if decision is ConfirmationDecision.ALLOW_ONCE else "DENIED")
 
 
 class FakeAgent:
@@ -77,9 +72,7 @@ class FakeAgent:
         self.recorders: list[object | None] = []
         self.stream_recorders: list[object | None] = []
 
-    def run(
-        self, messages: Sequence[Message], recorder: object | None = None
-    ) -> str:
+    def run(self, messages: Sequence[Message], recorder: object | None = None) -> str:
         self.calls.append(tuple(messages))
         self.recorders.append(recorder)
         if self.error is not None:
@@ -128,9 +121,7 @@ class FakeConversationStore:
         assert self.stored is not None
         return self.stored
 
-    def append_turn(
-        self, session_id: str, user: Message, assistant: Message
-    ) -> None:
+    def append_turn(self, session_id: str, user: Message, assistant: Message) -> None:
         self.appended.append((session_id, user, assistant))
 
 
@@ -175,7 +166,10 @@ class FakeMemoryStore:
 
     def prepare(self, content: str, tags: Sequence[str]) -> MemoryDraft:
         self._raise_error()
-        normalized = (content.strip(), tuple(sorted({tag.strip().casefold() for tag in tags})))
+        normalized = (
+            content.strip(),
+            tuple(sorted({tag.strip().casefold() for tag in tags})),
+        )
         self.prepared.append(normalized)
         return MemoryDraft(normalized[0], normalized[1], "identity")
 
@@ -186,9 +180,7 @@ class FakeMemoryStore:
         self.duplicates.append((draft, exclude_id))
         return None
 
-    def prepare_create(
-        self, content: str, tags: Sequence[str]
-    ) -> PreparedCreate:
+    def prepare_create(self, content: str, tags: Sequence[str]) -> PreparedCreate:
         return PreparedCreate(FIRST_ID, self.prepare(content, tags))
 
     def commit_create(self, prepared: PreparedCreate) -> StoredMemory:
@@ -226,9 +218,7 @@ class FakeMemoryStore:
         self.searched.append((query, tuple(tags)))
         return self.records
 
-    def update(
-        self, memory_id: str, content: str, tags: Sequence[str]
-    ) -> StoredMemory:
+    def update(self, memory_id: str, content: str, tags: Sequence[str]) -> StoredMemory:
         self._raise_error()
         self.updated.append((memory_id, content, tuple(tags)))
         return StoredMemory(
@@ -321,9 +311,9 @@ def test_ask_model_and_api_mode_are_resolved(
     monkeypatch.setattr(
         cli,
         "_create_agent",
-        lambda model, api_mode, workspace: seen.append(
-            (model, api_mode, workspace)
-        ) or FakeAgent(),
+        lambda model, api_mode, workspace: (
+            seen.append((model, api_mode, workspace)) or FakeAgent()
+        ),
     )
 
     result = runner.invoke(
@@ -348,9 +338,9 @@ def test_ask_uses_workspace_config_when_environment_is_absent(
     monkeypatch.setattr(
         cli,
         "_create_agent",
-        lambda model, api_mode, workspace: seen.append(
-            (model, api_mode, workspace)
-        ) or FakeAgent(),
+        lambda model, api_mode, workspace: (
+            seen.append((model, api_mode, workspace)) or FakeAgent()
+        ),
     )
 
     result = runner.invoke(app, ["ask", "Hello", "--workspace", str(tmp_path)])
@@ -437,9 +427,7 @@ def test_ask_rejects_blank_prompt_before_creating_agent(
     calls: list[bool] = []
     monkeypatch.setattr(cli, "_create_agent", lambda *args: calls.append(True))
 
-    result = runner.invoke(
-        app, ["ask", "   ", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "   ", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 1
     assert "Prompt must not be empty" in result.stderr
@@ -451,9 +439,7 @@ def test_ask_saves_one_successful_trace(
 ) -> None:
     monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent("reply"))
 
-    result = runner.invoke(
-        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "private prompt", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     records = TraceStore(tmp_path).list_traces()
@@ -472,9 +458,7 @@ def test_failed_agent_still_saves_failed_trace(
         lambda *args: FakeAgent(error=RuntimeError("private provider body")),
     )
 
-    result = runner.invoke(
-        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "private prompt", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 1
     records = TraceStore(tmp_path).list_traces()
@@ -495,13 +479,9 @@ def test_trace_write_failure_warns_without_hiding_reply(
             raise TraceStoreError("private path")
 
     monkeypatch.setattr(cli, "TraceStore", FailingTraceStore)
-    monkeypatch.setattr(
-        cli, "_create_agent", lambda *args: FakeAgent("visible reply")
-    )
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent("visible reply"))
 
-    result = runner.invoke(
-        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "private prompt", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     assert result.stdout == "visible reply\n"
@@ -520,9 +500,7 @@ def test_trace_recorder_construction_failure_warns_and_runs_ask(
     monkeypatch.setattr(cli, "TraceRecorder", FailingTraceRecorder)
     monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
 
-    result = runner.invoke(
-        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "private prompt", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     assert result.stdout == "visible reply\n"
@@ -538,13 +516,15 @@ def test_invalidated_real_trace_is_discarded_without_hiding_reply(
 ) -> None:
     class ToolGateway:
         def __init__(self) -> None:
-            self.outcomes = iter([
-                ToolCallResponse(
-                    (ToolCall("call-1", "private_tool", "{}"),),
-                    ResponsesContinuation("next"),
-                ),
-                FinalResponse("visible reply"),
-            ])
+            self.outcomes = iter(
+                [
+                    ToolCallResponse(
+                        (ToolCall("call-1", "private_tool", "{}"),),
+                        ResponsesContinuation("next"),
+                    ),
+                    FinalResponse("visible reply"),
+                ]
+            )
 
         def create(self, **kwargs: object) -> object:
             return next(self.outcomes)
@@ -558,9 +538,7 @@ def test_invalidated_real_trace_is_discarded_without_hiding_reply(
     agent = Agent(ToolGateway(), InvalidCodeRegistry(), lambda _: True)
     monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
 
-    result = runner.invoke(
-        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "private prompt", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     assert result.stdout == "visible reply\n"
@@ -578,6 +556,7 @@ def test_agent_error_survives_trace_cleanup_failure(
     private_error = f"private {failure_point} failure"
 
     if failure_point == "finish":
+
         class FailingTraceRecorder:
             def __init__(self, *args: object, **kwargs: object) -> None:
                 pass
@@ -592,6 +571,7 @@ def test_agent_error_survives_trace_cleanup_failure(
 
         monkeypatch.setattr(cli, "TraceRecorder", FailingTraceRecorder)
     else:
+
         class FailingTraceStore:
             def __init__(self, workspace: Path) -> None:
                 pass
@@ -604,9 +584,7 @@ def test_agent_error_survives_trace_cleanup_failure(
     agent = FakeAgent(error=AgentLoopLimitError("primary agent failure"))
     monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
 
-    result = runner.invoke(
-        app, ["ask", "private prompt", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "private prompt", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 1
     assert "primary agent failure" in result.stderr
@@ -643,9 +621,7 @@ def test_chat_passes_accumulated_history_and_appends_final_replies(
 def test_chat_saves_each_turn_with_same_session_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        cli, "_create_agent", lambda *args: FakeAgent(["one", "two"])
-    )
+    monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent(["one", "two"]))
 
     result = runner.invoke(
         app,
@@ -791,9 +767,7 @@ def test_chat_store_failure_does_not_display_reply(
     monkeypatch.setattr(cli, "ConversationStore", lambda workspace: FailingStore())
     monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent("Unsaved reply"))
 
-    result = runner.invoke(
-        app, ["chat", "--workspace", str(tmp_path)], input="Hello\n"
-    )
+    result = runner.invoke(app, ["chat", "--workspace", str(tmp_path)], input="Hello\n")
 
     assert result.exit_code == 1
     assert "Could not write conversation data" in result.stderr
@@ -912,9 +886,7 @@ def test_chat_does_not_append_assistant_message_after_failed_run(
     agent = FakeAgent(error=AgentLoopLimitError("model loop exhausted"))
     monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
 
-    result = runner.invoke(
-        app, ["chat", "--workspace", str(tmp_path)], input="Hello\n"
-    )
+    result = runner.invoke(app, ["chat", "--workspace", str(tmp_path)], input="Hello\n")
 
     assert result.exit_code == 1
     assert "model loop exhausted" in result.stderr
@@ -1031,9 +1003,9 @@ def test_create_agent_wires_standard_skill_tools_and_confirmation(
     monkeypatch.setattr(
         cli,
         "Agent",
-        lambda built_gateway, built_registry, confirm, **kwargs: seen.append(
-            (built_gateway, built_registry, confirm, kwargs)
-        ) or "agent",
+        lambda built_gateway, built_registry, confirm, **kwargs: (
+            seen.append((built_gateway, built_registry, confirm, kwargs)) or "agent"
+        ),
     )
 
     result = cli._create_agent("model", "responses", tmp_path)
@@ -1065,8 +1037,8 @@ def test_system_prompt_appends_only_valid_available_skills() -> None:
 
     assert prompt == (
         "Workspace instructions.\n\n"
-        "Available workspace Skills:\n"
-        "- pdf-tools: Inspect PDF files.\n\n"
+        "**Available workspace Skills**:\n"
+        "- *pdf-tools*: Inspect PDF files.\n\n"
         "When a Skill matches the task, activate it with activate_skill and "
         "follow its instructions."
     )
@@ -1084,8 +1056,13 @@ def test_system_prompt_is_unchanged_without_available_skills() -> None:
 
 @pytest.mark.parametrize(
     ("answer", "expected"),
-    [("y\n", "APPROVED\n"), ("YES\n", "APPROVED\n"), ("\n", "DENIED\n"),
-     ("n\n", "DENIED\n"), ("invalid\n", "DENIED\n")],
+    [
+        ("y\n", "APPROVED\n"),
+        ("YES\n", "APPROVED\n"),
+        ("\n", "DENIED\n"),
+        ("n\n", "DENIED\n"),
+        ("invalid\n", "DENIED\n"),
+    ],
 )
 def test_confirmation_answers(answer: str, expected: str) -> None:
     result = runner.invoke(confirm_test_app, [], input=answer)
@@ -1170,9 +1147,7 @@ def test_personal_tool_confirmation_description_is_shown_once() -> None:
     def invoke() -> None:
         decision = cli._confirm_tool(request)
         typer.echo(
-            "APPROVED"
-            if decision is ConfirmationDecision.ALLOW_ONCE
-            else "DENIED"
+            "APPROVED" if decision is ConfirmationDecision.ALLOW_ONCE else "DENIED"
         )
 
     result = runner.invoke(monkey_app, [], input="y\n")
@@ -1210,9 +1185,7 @@ def test_invalid_observability_configuration_fails_before_agent(
     created: list[bool] = []
     monkeypatch.setattr(cli, "_create_agent", lambda *args: created.append(True))
 
-    result = runner.invoke(
-        app, ["ask", "hello", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "hello", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 1
     assert "configured together" in result.stderr
@@ -1226,9 +1199,7 @@ def test_invalid_log_configuration_fails_before_agent(
     created: list[bool] = []
     monkeypatch.setattr(cli, "_create_agent", lambda *args: created.append(True))
 
-    result = runner.invoke(
-        app, ["ask", "hello", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["ask", "hello", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 1
     assert "CDY_AGENT_LOG_LEVEL" in result.stderr
@@ -1241,13 +1212,9 @@ def test_traces_list_and_show_render_safe_metadata(
     from test_observability_models import sample_trace
 
     record = sample_trace()
-    monkeypatch.setattr(
-        cli, "TraceStore", lambda workspace: FakeTraceStore([record])
-    )
+    monkeypatch.setattr(cli, "TraceStore", lambda workspace: FakeTraceStore([record]))
 
-    listed = runner.invoke(
-        app, ["traces", "list", "--workspace", str(tmp_path)]
-    )
+    listed = runner.invoke(app, ["traces", "list", "--workspace", str(tmp_path)])
     shown = runner.invoke(
         app,
         ["traces", "show", record.trace_id, "--workspace", str(tmp_path)],
@@ -1484,15 +1451,11 @@ def test_skill_script_confirmation_warns_about_current_user_permissions() -> Non
     def invoke() -> None:
         decision = cli._confirm_tool(request)
         typer.echo(
-            "APPROVED"
-            if decision is ConfirmationDecision.ALLOW_ONCE
-            else "DENIED"
+            "APPROVED" if decision is ConfirmationDecision.ALLOW_ONCE else "DENIED"
         )
 
     result = runner.invoke(monkey_app, [], input="\n")
-    assert "['python', '/workspace/research-skill/scripts/run.py']" in (
-        result.stdout
-    )
+    assert "['python', '/workspace/research-skill/scripts/run.py']" in (result.stdout)
     assert "/workspace/research-skill" in result.stdout
     assert "current user permissions" in result.stdout
     assert result.stdout.endswith("DENIED\n")
@@ -1505,9 +1468,7 @@ def test_sessions_list_shows_empty_store_without_writing(
     store.list_summaries = lambda: ()  # type: ignore[attr-defined]
     monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
 
-    result = runner.invoke(
-        app, ["sessions", "list", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["sessions", "list", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     assert result.stdout == "No saved conversations.\n"
@@ -1527,9 +1488,7 @@ def test_sessions_list_renders_ordered_summary_fields(
     )
     monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
 
-    result = runner.invoke(
-        app, ["sessions", "list", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["sessions", "list", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     assert "52c809c6-6e55-4ff1-9220-e4f90a4f6774" in result.stdout
@@ -1713,8 +1672,14 @@ def test_memories_list_forwards_tags_and_renders_every_record(
     result = runner.invoke(
         app,
         [
-            "memories", "list", "--tag", "Python", "--tag", "testing",
-            "--workspace", str(tmp_path),
+            "memories",
+            "list",
+            "--tag",
+            "Python",
+            "--tag",
+            "testing",
+            "--workspace",
+            str(tmp_path),
         ],
     )
 
@@ -1731,15 +1696,11 @@ def test_memories_list_forwards_tags_and_renders_every_record(
     assert workspaces == [tmp_path.resolve()]
 
 
-def test_memories_list_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_memories_list_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = FakeMemoryStore()
     _use_fake_memory_store(monkeypatch, tmp_path, store)
 
-    result = runner.invoke(
-        app, ["memories", "list", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["memories", "list", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     assert result.output == "No saved memories.\n"
@@ -1754,8 +1715,13 @@ def test_memories_search_renders_full_records(
     result = runner.invoke(
         app,
         [
-            "memories", "search", "uv", "--tag", "python",
-            "--workspace", str(tmp_path),
+            "memories",
+            "search",
+            "uv",
+            "--tag",
+            "python",
+            "--workspace",
+            str(tmp_path),
         ],
     )
 
@@ -1767,9 +1733,7 @@ def test_memories_search_renders_full_records(
     assert workspaces == [tmp_path.resolve()]
 
 
-def test_memories_search_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_memories_search_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = FakeMemoryStore()
     _use_fake_memory_store(monkeypatch, tmp_path, store)
 
@@ -1790,8 +1754,17 @@ def test_memories_update_confirmed_replaces_complete_record(
     result = runner.invoke(
         app,
         [
-            "memories", "update", FIRST_ID, "--content", "  Prefer uv sync  ",
-            "--tag", "Python", "--tag", "TOOLING", "--workspace", str(tmp_path),
+            "memories",
+            "update",
+            FIRST_ID,
+            "--content",
+            "  Prefer uv sync  ",
+            "--tag",
+            "Python",
+            "--tag",
+            "TOOLING",
+            "--workspace",
+            str(tmp_path),
         ],
         input="y\n",
     )
@@ -1802,9 +1775,7 @@ def test_memories_update_confirmed_replaces_complete_record(
     assert "Replacement:" in result.output
     assert "Prefer uv sync" in result.output
     assert "Tags: python, tooling" in result.output
-    assert store.updated == [
-        (FIRST_ID, "Prefer uv sync", ("python", "tooling"))
-    ]
+    assert store.updated == [(FIRST_ID, "Prefer uv sync", ("python", "tooling"))]
     assert result.output.endswith(f"Updated memory {FIRST_ID}.\n")
     assert workspaces == [tmp_path.resolve()]
 
@@ -1931,9 +1902,7 @@ def test_memories_report_safe_store_errors_without_traceback(
     store = FakeMemoryStore(error=MemoryStoreError("safe message"))
     _use_fake_memory_store(monkeypatch, tmp_path, store)
 
-    result = runner.invoke(
-        app, ["memories", "list", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["memories", "list", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 1
     assert "safe message" in result.stderr
@@ -1993,7 +1962,10 @@ def test_ask_and_chat_offer_memory_tools_without_automatic_injection(
 
     assert result.exit_code == 0
     assert {tool["name"] for tool in gateway.calls[0]["tools"]} >= {
-        "remember_memory", "search_memories", "update_memory", "forget_memory"
+        "remember_memory",
+        "search_memories",
+        "update_memory",
+        "forget_memory",
     }
     assert all(
         memory.content not in message.content

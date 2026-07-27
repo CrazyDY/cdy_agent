@@ -328,8 +328,7 @@ def generate_reply_for_messages(
         active_client = client
 
     request_messages = [
-        {"role": message.role, "content": message.content}
-        for message in messages
+        {"role": message.role, "content": message.content} for message in messages
     ]
     if api_mode == "responses":
         response = active_client.responses.create(

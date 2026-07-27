@@ -24,12 +24,15 @@ class ToolRegistry:
 
     @property
     def definitions(self) -> tuple[dict[str, object], ...]:
-        return tuple({
-            "type": "function",
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters,
-        } for tool in self._tools.values())
+        return tuple(
+            {
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            }
+            for tool in self._tools.values()
+        )
 
     def register_many(self, tools: Iterable[Tool]) -> ToolResult:
         try:
@@ -47,10 +50,7 @@ class ToolRegistry:
                     "Skill returned an invalid tool.",
                 )
             names.append(tool.name)
-        if (
-            len(names) != len(set(names))
-            or any(name in self._tools for name in names)
-        ):
+        if len(names) != len(set(names)) or any(name in self._tools for name in names):
             return ToolResult.failure(
                 "tool_name_conflict",
                 "Tool name conflicts with an existing tool.",
@@ -189,11 +189,7 @@ def _normalize_decision(
 ) -> ConfirmationDecision:
     if isinstance(decision, ConfirmationDecision):
         return decision
-    return (
-        ConfirmationDecision.ALLOW_ONCE
-        if decision
-        else ConfirmationDecision.DENY
-    )
+    return ConfirmationDecision.ALLOW_ONCE if decision else ConfirmationDecision.DENY
 
 
 def _valid_tool(tool: object) -> bool:

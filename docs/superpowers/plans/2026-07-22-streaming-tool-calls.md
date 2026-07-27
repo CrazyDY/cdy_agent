@@ -39,22 +39,44 @@ Add a test that splits one call across chunks and verifies no tool JSON is sent 
 def test_chat_gateway_aggregates_streamed_tool_call_deltas() -> None:
     client = FakeClient()
     client.chat.completions.create = FakeStream(
-        SimpleNamespace(choices=[SimpleNamespace(
-            delta=SimpleNamespace(content=None, tool_calls=[SimpleNamespace(
-                index=0,
-                id="call-1",
-                function=SimpleNamespace(name="read_", arguments='{"pa'),
-            )]),
-            finish_reason=None,
-        )]),
-        SimpleNamespace(choices=[SimpleNamespace(
-            delta=SimpleNamespace(content=None, tool_calls=[SimpleNamespace(
-                index=0,
-                id=None,
-                function=SimpleNamespace(name="file", arguments='th":"a"}'),
-            )]),
-            finish_reason="tool_calls",
-        )]),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                index=0,
+                                id="call-1",
+                                function=SimpleNamespace(
+                                    name="read_", arguments='{"pa'
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason=None,
+                )
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                index=0,
+                                id=None,
+                                function=SimpleNamespace(
+                                    name="file", arguments='th":"a"}'
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ]
+        ),
     )
     chunks: list[str] = []
 
@@ -114,9 +136,7 @@ for tool_delta in tool_calls:
 Implement the merge helper exactly as follows:
 
 ```python
-def _merge_chat_tool_delta(
-    part: _StreamedToolCall, tool_delta: object
-) -> None:
+def _merge_chat_tool_delta(part: _StreamedToolCall, tool_delta: object) -> None:
     call_id = getattr(tool_delta, "id", None)
     if call_id is not None:
         if not isinstance(call_id, str) or not call_id.strip():
@@ -152,7 +172,7 @@ calls = tuple(
     for _, part in sorted(tool_call_parts.items())
 )
 if calls:
-    history = tuple(request_messages[len(_message_dicts(messages)):])
+    history = tuple(request_messages[len(_message_dicts(messages)) :])
     content = "".join(chunks) or None
     return ToolCallResponse(calls, ChatContinuation(calls, content, history))
 return _final_response("".join(chunks))
@@ -406,17 +426,20 @@ Expected: FAIL because current `run_stream()` rejects a `ToolCallResponse` or us
 ```python
 def test_streaming_agent_records_model_and_tool_spans() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
-    gateway = FakeStreamingGateway([
-        ToolCallResponse(
-            calls, ResponsesContinuation("next"), TokenUsage(8, 2)
-        ),
-        FinalResponse("done", TokenUsage(4, 3)),
-    ])
+    gateway = FakeStreamingGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next"), TokenUsage(8, 2)),
+            FinalResponse("done", TokenUsage(4, 3)),
+        ]
+    )
     recorder = SpyRecorder()
 
-    assert Agent(gateway, FakeRegistry(), lambda _: True).run_stream(
-        [Message("user", "secret")], lambda _: None, recorder
-    ) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: True).run_stream(
+            [Message("user", "secret")], lambda _: None, recorder
+        )
+        == "done"
+    )
     assert recorder.events == [
         ("model", "start", 1),
         ("model", "finish", 1, TokenUsage(8, 2), None),
@@ -446,13 +469,15 @@ def test_streaming_agent_records_provider_exception_and_reraises() -> None:
 def test_streaming_agent_serializes_structured_tool_failure() -> None:
     registry = FakeRegistry()
     registry.result = ToolResult.failure("approval_denied", "secret detail")
-    gateway = FakeStreamingGateway([
-        ToolCallResponse(
-            (ToolCall("1", "echo", "{}"),),
-            ResponsesContinuation("next"),
-        ),
-        FinalResponse("done"),
-    ])
+    gateway = FakeStreamingGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),),
+                ResponsesContinuation("next"),
+            ),
+            FinalResponse("done"),
+        ]
+    )
     recorder = SpyRecorder()
 
     Agent(gateway, registry, lambda _: False).run_stream(
@@ -473,9 +498,9 @@ def test_streaming_agent_stops_at_model_call_limit() -> None:
     gateway = FakeStreamingGateway([outcome, outcome])
 
     with pytest.raises(AgentLoopLimitError, match="maximum of 2"):
-        Agent(
-            gateway, FakeRegistry(), lambda _: True, max_model_calls=2
-        ).run_stream([Message("user", "loop")], lambda _: None)
+        Agent(gateway, FakeRegistry(), lambda _: True, max_model_calls=2).run_stream(
+            [Message("user", "loop")], lambda _: None
+        )
 
     assert len(gateway.stream_calls) == 2
     assert gateway.calls == []

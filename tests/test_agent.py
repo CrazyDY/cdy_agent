@@ -1,5 +1,5 @@
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -7,17 +7,16 @@ import pytest
 
 from cdy_agent.agent import Agent, AgentLoopLimitError
 from cdy_agent.conversation import Message
+from cdy_agent.observability import TokenUsage
 from cdy_agent.openai_client import (
     FinalResponse,
+    ModelGateway,
     ResponsesContinuation,
     ToolCallResponse,
 )
-from cdy_agent.openai_client import ModelGateway
-from cdy_agent.observability import TokenUsage
 from cdy_agent.skills import SkillManager, create_skill_tools
 from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.base import ToolCall, ToolResult
-from cdy_agent.tools.registry import ToolRegistry
 
 
 class FakeGateway:
@@ -115,9 +114,7 @@ class SpyRecorder:
 
 
 class FailingRecorder(SpyRecorder):
-    def __init__(
-        self, operation: str, *, invalidate_raises: bool = False
-    ) -> None:
+    def __init__(self, operation: str, *, invalidate_raises: bool = False) -> None:
         super().__init__()
         self.operation = operation
         self.invalidate_raises = invalidate_raises
@@ -165,15 +162,20 @@ class FailingRecorder(SpyRecorder):
 
 def test_agent_records_model_and_tool_spans() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
-    gateway = FakeGateway([
-        ToolCallResponse(calls, ResponsesContinuation("next"), TokenUsage(8, 2)),
-        FinalResponse("done", TokenUsage(4, 3)),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next"), TokenUsage(8, 2)),
+            FinalResponse("done", TokenUsage(4, 3)),
+        ]
+    )
     recorder = SpyRecorder()
 
-    assert Agent(gateway, FakeRegistry(), lambda _: True).run(
-        [Message("user", "secret")], recorder
-    ) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: True).run(
+            [Message("user", "secret")], recorder
+        )
+        == "done"
+    )
     assert recorder.events == [
         ("model", "start", 1),
         ("model", "finish", 1, TokenUsage(8, 2), None),
@@ -201,17 +203,17 @@ def test_agent_marks_structured_tool_failure() -> None:
     registry = FakeRegistry()
     registry.result = ToolResult.failure("approval_denied", "secret detail")
     recorder = SpyRecorder()
-    gateway = FakeGateway([
-        ToolCallResponse(
-            (ToolCall("1", "echo", "{}"),),
-            ResponsesContinuation("next"),
-        ),
-        FinalResponse("done"),
-    ])
-
-    Agent(gateway, registry, lambda _: False).run(
-        [Message("user", "hello")], recorder
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),),
+                ResponsesContinuation("next"),
+            ),
+            FinalResponse("done"),
+        ]
     )
+
+    Agent(gateway, registry, lambda _: False).run([Message("user", "hello")], recorder)
 
     assert ("tool", "finish", 1, False, "approval_denied") in recorder.events
 
@@ -223,12 +225,14 @@ def test_agent_records_unexpected_tool_exception_and_reraises() -> None:
             raise RuntimeError("tool secret")
 
     recorder = SpyRecorder()
-    gateway = FakeGateway([
-        ToolCallResponse(
-            (ToolCall("1", "echo", "{}"),),
-            ResponsesContinuation("next"),
-        ),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),),
+                ResponsesContinuation("next"),
+            ),
+        ]
+    )
 
     with pytest.raises(RuntimeError, match="tool secret"):
         Agent(gateway, ExplodingRegistry(), lambda _: True).run(
@@ -236,36 +240,50 @@ def test_agent_records_unexpected_tool_exception_and_reraises() -> None:
         )
 
     assert recorder.events[-1] == (
-        "tool", "finish", 1, False, "RuntimeError",
+        "tool",
+        "finish",
+        1,
+        False,
+        "RuntimeError",
     )
 
 
 def test_agent_disables_tracing_when_model_span_start_fails() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
-    gateway = FakeGateway([
-        ToolCallResponse(calls, ResponsesContinuation("next")),
-        FinalResponse("done"),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next")),
+            FinalResponse("done"),
+        ]
+    )
     recorder = FailingRecorder("start_model")
 
-    assert Agent(gateway, FakeRegistry(), lambda _: True).run(
-        [Message("user", "hello")], recorder
-    ) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
+        == "done"
+    )
     assert recorder.attempts == ["start_model"]
     assert recorder.invalidations == 1
 
 
 def test_agent_disables_tracing_when_model_span_finish_fails_after_success() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
-    gateway = FakeGateway([
-        ToolCallResponse(calls, ResponsesContinuation("next")),
-        FinalResponse("done"),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next")),
+            FinalResponse("done"),
+        ]
+    )
     recorder = FailingRecorder("finish_model")
 
-    assert Agent(gateway, FakeRegistry(), lambda _: True).run(
-        [Message("user", "hello")], recorder
-    ) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
+        == "done"
+    )
     assert recorder.attempts == ["start_model", "finish_model"]
     assert recorder.invalidations == 1
 
@@ -275,9 +293,9 @@ def test_model_finish_failure_does_not_mask_provider_exception() -> None:
     recorder = FailingRecorder("finish_model")
 
     with pytest.raises(RuntimeError) as raised:
-        Agent(
-            FakeGateway([provider_error]), FakeRegistry(), lambda _: True
-        ).run([Message("user", "hello")], recorder)
+        Agent(FakeGateway([provider_error]), FakeRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
 
     assert raised.value is provider_error
     assert recorder.attempts == ["start_model", "finish_model"]
@@ -286,15 +304,20 @@ def test_model_finish_failure_does_not_mask_provider_exception() -> None:
 
 def test_agent_disables_tracing_when_tool_span_start_fails() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
-    gateway = FakeGateway([
-        ToolCallResponse(calls, ResponsesContinuation("next")),
-        FinalResponse("done"),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next")),
+            FinalResponse("done"),
+        ]
+    )
     recorder = FailingRecorder("start_tool")
 
-    assert Agent(gateway, FakeRegistry(), lambda _: True).run(
-        [Message("user", "hello")], recorder
-    ) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
+        == "done"
+    )
     assert recorder.attempts == ["start_model", "finish_model", "start_tool"]
     assert recorder.invalidations == 1
 
@@ -312,20 +335,28 @@ def test_tool_finish_failure_preserves_structured_result(
 ) -> None:
     registry = FakeRegistry()
     registry.result = result
-    gateway = FakeGateway([
-        ToolCallResponse(
-            (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
-        ),
-        FinalResponse("done"),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
+            ),
+            FinalResponse("done"),
+        ]
+    )
     recorder = FailingRecorder(recorder_failure)
 
-    assert Agent(gateway, registry, lambda _: True).run(
-        [Message("user", "hello")], recorder
-    ) == "done"
+    assert (
+        Agent(gateway, registry, lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
+        == "done"
+    )
     assert gateway.calls[1]["tool_outputs"] == (("1", result.to_json()),)
     assert recorder.attempts == [
-        "start_model", "finish_model", "start_tool", "finish_tool",
+        "start_model",
+        "finish_model",
+        "start_tool",
+        "finish_tool",
     ]
     assert recorder.invalidations == 1
 
@@ -338,11 +369,13 @@ def test_tool_finish_failure_does_not_mask_tool_exception() -> None:
             raise tool_error
 
     recorder = FailingRecorder("finish_tool")
-    gateway = FakeGateway([
-        ToolCallResponse(
-            (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
-        ),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
+            ),
+        ]
+    )
 
     with pytest.raises(LookupError) as raised:
         Agent(gateway, ExplodingRegistry(), lambda _: True).run(
@@ -350,7 +383,10 @@ def test_tool_finish_failure_does_not_mask_tool_exception() -> None:
         )
     assert raised.value is tool_error
     assert recorder.attempts == [
-        "start_model", "finish_model", "start_tool", "finish_tool",
+        "start_model",
+        "finish_model",
+        "start_tool",
+        "finish_tool",
     ]
     assert recorder.invalidations == 1
 
@@ -358,18 +394,22 @@ def test_tool_finish_failure_does_not_mask_tool_exception() -> None:
 def test_recorder_invalidation_failure_does_not_replace_primary_result() -> None:
     recorder = FailingRecorder("start_model", invalidate_raises=True)
 
-    assert Agent(
-        FakeGateway([FinalResponse("done")]), FakeRegistry(), lambda _: True
-    ).run([Message("user", "hello")], recorder) == "done"
+    assert (
+        Agent(FakeGateway([FinalResponse("done")]), FakeRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
+        == "done"
+    )
     assert recorder.invalidations == 1
 
 
 def test_agent_returns_direct_response() -> None:
     gateway = FakeGateway([FinalResponse("done")])
 
-    assert Agent(gateway, FakeRegistry(), lambda _: False).run(
-        [Message("user", "hello")]
-    ) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: False).run([Message("user", "hello")])
+        == "done"
+    )
 
 
 def test_agent_streams_direct_response_chunks() -> None:
@@ -411,17 +451,20 @@ def test_agent_executes_streamed_tool_call_without_non_streaming_replay() -> Non
 
 def test_streaming_agent_records_model_and_tool_spans() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
-    gateway = FakeStreamingGateway([
-        ToolCallResponse(
-            calls, ResponsesContinuation("next"), TokenUsage(8, 2)
-        ),
-        FinalResponse("done", TokenUsage(4, 3)),
-    ])
+    gateway = FakeStreamingGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next"), TokenUsage(8, 2)),
+            FinalResponse("done", TokenUsage(4, 3)),
+        ]
+    )
     recorder = SpyRecorder()
 
-    assert Agent(gateway, FakeRegistry(), lambda _: True).run_stream(
-        [Message("user", "secret")], lambda _: None, recorder
-    ) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: True).run_stream(
+            [Message("user", "secret")], lambda _: None, recorder
+        )
+        == "done"
+    )
     assert recorder.events == [
         ("model", "start", 1),
         ("model", "finish", 1, TokenUsage(8, 2), None),
@@ -451,13 +494,15 @@ def test_streaming_agent_records_provider_exception_and_reraises() -> None:
 def test_streaming_agent_serializes_structured_tool_failure() -> None:
     registry = FakeRegistry()
     registry.result = ToolResult.failure("approval_denied", "secret detail")
-    gateway = FakeStreamingGateway([
-        ToolCallResponse(
-            (ToolCall("1", "echo", "{}"),),
-            ResponsesContinuation("next"),
-        ),
-        FinalResponse("done"),
-    ])
+    gateway = FakeStreamingGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),),
+                ResponsesContinuation("next"),
+            ),
+            FinalResponse("done"),
+        ]
+    )
     recorder = SpyRecorder()
 
     Agent(gateway, registry, lambda _: False).run_stream(
@@ -478,9 +523,9 @@ def test_streaming_agent_stops_at_model_call_limit() -> None:
     gateway = FakeStreamingGateway([outcome, outcome])
 
     with pytest.raises(AgentLoopLimitError, match="maximum of 2"):
-        Agent(
-            gateway, FakeRegistry(), lambda _: True, max_model_calls=2
-        ).run_stream([Message("user", "loop")], lambda _: None)
+        Agent(gateway, FakeRegistry(), lambda _: True, max_model_calls=2).run_stream(
+            [Message("user", "loop")], lambda _: None
+        )
 
     assert len(gateway.stream_calls) == 2
     assert gateway.calls == []
@@ -488,17 +533,22 @@ def test_streaming_agent_stops_at_model_call_limit() -> None:
 
 def test_agent_prepends_initialized_system_prompt_to_model_calls() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
-    gateway = FakeGateway([
-        ToolCallResponse(calls, ResponsesContinuation("next")),
-        FinalResponse("done"),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next")),
+            FinalResponse("done"),
+        ]
+    )
 
-    assert Agent(
-        gateway,
-        FakeRegistry(),
-        lambda _: True,
-        system_prompt="  Use local tools carefully.  ",
-    ).run([Message("user", "go")]) == "done"
+    assert (
+        Agent(
+            gateway,
+            FakeRegistry(),
+            lambda _: True,
+            system_prompt="  Use local tools carefully.  ",
+        ).run([Message("user", "go")])
+        == "done"
+    )
 
     assert gateway.calls[0]["messages"] == (
         Message("system", "Use local tools carefully."),
@@ -513,15 +563,17 @@ def test_agent_prepends_initialized_system_prompt_to_model_calls() -> None:
 def test_agent_executes_batch_and_continues() -> None:
     calls = (ToolCall("1", "a", "{}"), ToolCall("2", "b", "{}"))
     continuation = ResponsesContinuation("next")
-    gateway = FakeGateway([
-        ToolCallResponse(calls, continuation),
-        FinalResponse("done"),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(calls, continuation),
+            FinalResponse("done"),
+        ]
+    )
     registry = FakeRegistry()
 
-    assert Agent(gateway, registry, lambda _: True).run(
-        [Message("user", "go")]
-    ) == "done"
+    assert (
+        Agent(gateway, registry, lambda _: True).run([Message("user", "go")]) == "done"
+    )
     assert registry.calls == list(calls)
     assert gateway.calls[1]["continuation"] is continuation
     assert gateway.calls[1]["tool_outputs"] == (
@@ -533,8 +585,7 @@ def test_agent_executes_batch_and_continues() -> None:
 def test_agent_stops_after_eight_model_calls() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
     outcomes = [
-        ToolCallResponse(calls, ResponsesContinuation(str(index)))
-        for index in range(8)
+        ToolCallResponse(calls, ResponsesContinuation(str(index))) for index in range(8)
     ]
     gateway = FakeGateway(outcomes + [FinalResponse("too late")])
 
@@ -559,18 +610,35 @@ def test_builtin_registry_has_deterministic_order(tmp_path: Path) -> None:
         definition["name"]
         for definition in create_builtin_registry(tmp_path).definitions
     ) == (
-        "read_file", "write_file", "shell",
-        "create_note", "list_notes", "get_note", "delete_note",
-        "create_todo", "list_todos", "complete_todo", "delete_todo",
-        "remember_memory", "search_memories", "update_memory", "forget_memory",
+        "read_file",
+        "write_file",
+        "shell",
+        "create_note",
+        "list_notes",
+        "get_note",
+        "delete_note",
+        "create_todo",
+        "list_todos",
+        "complete_todo",
+        "delete_todo",
+        "remember_memory",
+        "search_memories",
+        "update_memory",
+        "forget_memory",
     )
 
 
 def test_builtin_personal_tools_share_one_store(tmp_path: Path) -> None:
     registry = create_builtin_registry(tmp_path)
     personal_tool_names = (
-        "create_note", "list_notes", "get_note", "delete_note",
-        "create_todo", "list_todos", "complete_todo", "delete_todo",
+        "create_note",
+        "list_notes",
+        "get_note",
+        "delete_note",
+        "create_todo",
+        "list_todos",
+        "complete_todo",
+        "delete_todo",
     )
 
     stores = [registry._tools[name].store for name in personal_tool_names]
@@ -592,9 +660,10 @@ def test_agent_passes_registry_definitions_to_real_gateway(tmp_path: Path) -> No
     gateway = ModelGateway(model="test-model", api_mode="responses", client=client)
     registry = create_builtin_registry(tmp_path)
 
-    assert Agent(gateway, registry, lambda _: True).run(
-        [Message("user", "hello")]
-    ) == "done"
+    assert (
+        Agent(gateway, registry, lambda _: True).run([Message("user", "hello")])
+        == "done"
+    )
     assert responses.calls[0]["tools"] == list(registry.definitions)
 
 
@@ -614,9 +683,7 @@ def test_agent_keeps_fixed_skill_definitions_after_activation(
         encoding="utf-8",
     )
     registry = create_builtin_registry(tmp_path)
-    registered = registry.register_many(
-        create_skill_tools(SkillManager(tmp_path))
-    )
+    registered = registry.register_many(create_skill_tools(SkillManager(tmp_path)))
     assert registered.ok
     gateway = FakeGateway(
         [
@@ -637,16 +704,12 @@ def test_agent_keeps_fixed_skill_definitions_after_activation(
     result = Agent(
         gateway,
         registry,
-        lambda request: pytest.fail(
-            f"Activation requested confirmation: {request}"
-        ),
+        lambda request: pytest.fail(f"Activation requested confirmation: {request}"),
     ).run([Message("user", "research this workspace")])
 
     assert result == "done"
     assert gateway.calls[0]["tools"] == gateway.calls[1]["tools"]
-    assert {
-        definition["name"] for definition in gateway.calls[0]["tools"]
-    } >= {
+    assert {definition["name"] for definition in gateway.calls[0]["tools"]} >= {
         "list_skills",
         "search_skills",
         "activate_skill",

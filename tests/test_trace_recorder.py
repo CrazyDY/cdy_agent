@@ -12,7 +12,7 @@ def test_recorder_aggregates_known_usage_and_cost() -> None:
         "ask",
         "model",
         "responses",
-        pricing=Pricing(Decimal("1"), Decimal("2")),
+        pricing=Pricing(Decimal(1), Decimal(2)),
         clock=lambda: next(ticks),
         now=lambda: "2026-07-20T08:30:00.000000Z",
     )

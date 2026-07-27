@@ -83,16 +83,37 @@ def sample_trace() -> TraceRecord:
         error_type=None,
         usage=usage,
         estimated_cost=EstimatedCost(Decimal("0.000010"), Decimal("0.000008")),
-        model_calls=(ModelCallSpan("0cebd5c2-7d4c-4655-a997-f31e05eb74a5", 1, 8, "succeeded", None, usage),),
-        tool_calls=(ToolCallSpan("89be39ea-9485-49f1-977f-70d5e663cf3d", 1, "read_file", 3, "succeeded", None),),
+        model_calls=(
+            ModelCallSpan(
+                "0cebd5c2-7d4c-4655-a997-f31e05eb74a5", 1, 8, "succeeded", None, usage
+            ),
+        ),
+        tool_calls=(
+            ToolCallSpan(
+                "89be39ea-9485-49f1-977f-70d5e663cf3d",
+                1,
+                "read_file",
+                3,
+                "succeeded",
+                None,
+            ),
+        ),
     )
 
 
 def test_trace_round_trip_uses_stable_json_values() -> None:
     record = sample_trace()
     payload = record.to_dict()
-    assert payload["usage"] == {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
-    assert payload["estimated_cost"] == {"input_cost": "0.000010", "output_cost": "0.000008", "total_cost": "0.000018"}
+    assert payload["usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "total_tokens": 14,
+    }
+    assert payload["estimated_cost"] == {
+        "input_cost": "0.000010",
+        "output_cost": "0.000008",
+        "total_cost": "0.000018",
+    }
     assert TraceRecord.from_dict(payload) == record
 
 
@@ -107,7 +128,9 @@ def test_trace_round_trip_uses_stable_json_values() -> None:
         {"usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 99}},
     ],
 )
-def test_trace_rejects_invalid_or_inconsistent_payload(change: dict[str, object]) -> None:
+def test_trace_rejects_invalid_or_inconsistent_payload(
+    change: dict[str, object],
+) -> None:
     payload = sample_trace().to_dict()
     payload.update(change)
     with pytest.raises(ValueError):
@@ -165,13 +188,24 @@ class TokenUsage:
         return self.input_tokens + self.output_tokens
 
     def to_dict(self) -> dict[str, int]:
-        return {"input_tokens": self.input_tokens, "output_tokens": self.output_tokens, "total_tokens": self.total_tokens}
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+        }
 
     @classmethod
     def from_dict(cls, value: object) -> "TokenUsage":
-        if not isinstance(value, dict) or set(value) != {"input_tokens", "output_tokens", "total_tokens"}:
+        if not isinstance(value, dict) or set(value) != {
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+        }:
             raise ValueError("usage has an invalid shape.")
-        usage = cls(_non_negative_int(value["input_tokens"], "input_tokens"), _non_negative_int(value["output_tokens"], "output_tokens"))
+        usage = cls(
+            _non_negative_int(value["input_tokens"], "input_tokens"),
+            _non_negative_int(value["output_tokens"], "output_tokens"),
+        )
         if value["total_tokens"] != usage.total_tokens:
             raise ValueError("total_tokens is inconsistent.")
         return usage
@@ -187,7 +221,10 @@ class EstimatedCost:
     output_cost: Decimal
 
     def __post_init__(self) -> None:
-        if any(not value.is_finite() or value < 0 for value in (self.input_cost, self.output_cost)):
+        if any(
+            not value.is_finite() or value < 0
+            for value in (self.input_cost, self.output_cost)
+        ):
             raise ValueError("estimated costs must be finite and non-negative.")
 
     @property
@@ -195,11 +232,19 @@ class EstimatedCost:
         return self.input_cost + self.output_cost
 
     def to_dict(self) -> dict[str, str]:
-        return {"input_cost": _decimal_text(self.input_cost), "output_cost": _decimal_text(self.output_cost), "total_cost": _decimal_text(self.total_cost)}
+        return {
+            "input_cost": _decimal_text(self.input_cost),
+            "output_cost": _decimal_text(self.output_cost),
+            "total_cost": _decimal_text(self.total_cost),
+        }
 
     @classmethod
     def from_dict(cls, value: object) -> "EstimatedCost":
-        if not isinstance(value, dict) or set(value) != {"input_cost", "output_cost", "total_cost"}:
+        if not isinstance(value, dict) or set(value) != {
+            "input_cost",
+            "output_cost",
+            "total_cost",
+        }:
             raise ValueError("estimated_cost has an invalid shape.")
         try:
             result = cls(Decimal(value["input_cost"]), Decimal(value["output_cost"]))
@@ -221,7 +266,14 @@ class ModelCallSpan:
     usage: TokenUsage | None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"span_id": self.span_id, "sequence": self.sequence, "duration_ms": self.duration_ms, "status": self.status, "error_type": self.error_type, "usage": None if self.usage is None else self.usage.to_dict()}
+        return {
+            "span_id": self.span_id,
+            "sequence": self.sequence,
+            "duration_ms": self.duration_ms,
+            "status": self.status,
+            "error_type": self.error_type,
+            "usage": None if self.usage is None else self.usage.to_dict(),
+        }
 
 
 @dataclass(frozen=True)
@@ -234,7 +286,14 @@ class ToolCallSpan:
     error_type: str | None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"span_id": self.span_id, "sequence": self.sequence, "tool_name": self.tool_name, "duration_ms": self.duration_ms, "status": self.status, "error_type": self.error_type}
+        return {
+            "span_id": self.span_id,
+            "sequence": self.sequence,
+            "tool_name": self.tool_name,
+            "duration_ms": self.duration_ms,
+            "status": self.status,
+            "error_type": self.error_type,
+        }
 
 
 @dataclass(frozen=True)
@@ -255,49 +314,115 @@ class TraceRecord:
     tool_calls: tuple[ToolCallSpan, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        return {"schema_version": self.schema_version, "trace_id": self.trace_id, "started_at": self.started_at, "duration_ms": self.duration_ms, "command": self.command, "status": self.status, "model": self.model, "api_mode": self.api_mode, "session_id": self.session_id, "error_type": self.error_type, "usage": None if self.usage is None else self.usage.to_dict(), "estimated_cost": None if self.estimated_cost is None else self.estimated_cost.to_dict(), "model_calls": [span.to_dict() for span in self.model_calls], "tool_calls": [span.to_dict() for span in self.tool_calls]}
+        return {
+            "schema_version": self.schema_version,
+            "trace_id": self.trace_id,
+            "started_at": self.started_at,
+            "duration_ms": self.duration_ms,
+            "command": self.command,
+            "status": self.status,
+            "model": self.model,
+            "api_mode": self.api_mode,
+            "session_id": self.session_id,
+            "error_type": self.error_type,
+            "usage": None if self.usage is None else self.usage.to_dict(),
+            "estimated_cost": None
+            if self.estimated_cost is None
+            else self.estimated_cost.to_dict(),
+            "model_calls": [span.to_dict() for span in self.model_calls],
+            "tool_calls": [span.to_dict() for span in self.tool_calls],
+        }
 
     @classmethod
     def from_dict(cls, value: object) -> "TraceRecord":
-        payload = _exact_dict(value, {
-            "schema_version", "trace_id", "started_at", "duration_ms", "command",
-            "status", "model", "api_mode", "session_id", "error_type", "usage",
-            "estimated_cost", "model_calls", "tool_calls",
-        }, "trace")
+        payload = _exact_dict(
+            value,
+            {
+                "schema_version",
+                "trace_id",
+                "started_at",
+                "duration_ms",
+                "command",
+                "status",
+                "model",
+                "api_mode",
+                "session_id",
+                "error_type",
+                "usage",
+                "estimated_cost",
+                "model_calls",
+                "tool_calls",
+            },
+            "trace",
+        )
         if payload["schema_version"] != 1:
             raise ValueError("Unsupported trace schema version.")
         started_at = _utc_timestamp(payload["started_at"])
         command = _choice(payload["command"], {"ask", "chat"}, "command")
         status = _choice(payload["status"], {"succeeded", "failed"}, "status")
         model = _non_empty_string(payload["model"], "model")
-        api_mode = _choice(payload["api_mode"], {"responses", "chat_completions"}, "api_mode")
-        session_id = None if payload["session_id"] is None else _uuid(payload["session_id"], "session_id")
+        api_mode = _choice(
+            payload["api_mode"], {"responses", "chat_completions"}, "api_mode"
+        )
+        session_id = (
+            None
+            if payload["session_id"] is None
+            else _uuid(payload["session_id"], "session_id")
+        )
         if (command == "ask") != (session_id is None):
             raise ValueError("session_id does not match command.")
         error_type = _error_type(payload["error_type"], status)
-        usage = None if payload["usage"] is None else TokenUsage.from_dict(payload["usage"])
-        cost = None if payload["estimated_cost"] is None else EstimatedCost.from_dict(payload["estimated_cost"])
+        usage = (
+            None if payload["usage"] is None else TokenUsage.from_dict(payload["usage"])
+        )
+        cost = (
+            None
+            if payload["estimated_cost"] is None
+            else EstimatedCost.from_dict(payload["estimated_cost"])
+        )
         if usage is None and cost is not None:
             raise ValueError("estimated_cost requires usage.")
-        if not isinstance(payload["model_calls"], list) or not isinstance(payload["tool_calls"], list):
+        if not isinstance(payload["model_calls"], list) or not isinstance(
+            payload["tool_calls"], list
+        ):
             raise ValueError("trace spans must be arrays.")
         model_calls = tuple(_model_span(item) for item in payload["model_calls"])
         tool_calls = tuple(_tool_span(item) for item in payload["tool_calls"])
-        if [span.sequence for span in model_calls] != list(range(1, len(model_calls) + 1)):
+        if [span.sequence for span in model_calls] != list(
+            range(1, len(model_calls) + 1)
+        ):
             raise ValueError("model call sequence is invalid.")
-        if [span.sequence for span in tool_calls] != list(range(1, len(tool_calls) + 1)):
+        if [span.sequence for span in tool_calls] != list(
+            range(1, len(tool_calls) + 1)
+        ):
             raise ValueError("tool call sequence is invalid.")
         known = [span.usage for span in model_calls if span.usage is not None]
-        aggregate = None if not known else TokenUsage(
-            sum(item.input_tokens for item in known),
-            sum(item.output_tokens for item in known),
+        aggregate = (
+            None
+            if not known
+            else TokenUsage(
+                sum(item.input_tokens for item in known),
+                sum(item.output_tokens for item in known),
+            )
         )
         if usage != aggregate:
             raise ValueError("trace usage is inconsistent with model calls.")
-        return cls(1, _uuid(payload["trace_id"], "trace_id"), started_at,
-                   _non_negative_int(payload["duration_ms"], "duration_ms"),
-                   command, status, model, api_mode, session_id, error_type, usage,
-                   cost, model_calls, tool_calls)
+        return cls(
+            1,
+            _uuid(payload["trace_id"], "trace_id"),
+            started_at,
+            _non_negative_int(payload["duration_ms"], "duration_ms"),
+            command,
+            status,
+            model,
+            api_mode,
+            session_id,
+            error_type,
+            usage,
+            cost,
+            model_calls,
+            tool_calls,
+        )
 
 
 def _exact_dict(value: object, keys: set[str], field: str) -> dict[str, Any]:
@@ -337,23 +462,38 @@ def _error_type(value: object, status: str) -> str | None:
 
 
 def _model_span(value: object) -> ModelCallSpan:
-    payload = _exact_dict(value, {"span_id", "sequence", "duration_ms", "status", "error_type", "usage"}, "model span")
+    payload = _exact_dict(
+        value,
+        {"span_id", "sequence", "duration_ms", "status", "error_type", "usage"},
+        "model span",
+    )
     status = _choice(payload["status"], {"succeeded", "failed"}, "status")
     usage = None if payload["usage"] is None else TokenUsage.from_dict(payload["usage"])
-    return ModelCallSpan(_uuid(payload["span_id"], "span_id"),
-                         _positive_int(payload["sequence"], "sequence"),
-                         _non_negative_int(payload["duration_ms"], "duration_ms"),
-                         status, _error_type(payload["error_type"], status), usage)
+    return ModelCallSpan(
+        _uuid(payload["span_id"], "span_id"),
+        _positive_int(payload["sequence"], "sequence"),
+        _non_negative_int(payload["duration_ms"], "duration_ms"),
+        status,
+        _error_type(payload["error_type"], status),
+        usage,
+    )
 
 
 def _tool_span(value: object) -> ToolCallSpan:
-    payload = _exact_dict(value, {"span_id", "sequence", "tool_name", "duration_ms", "status", "error_type"}, "tool span")
+    payload = _exact_dict(
+        value,
+        {"span_id", "sequence", "tool_name", "duration_ms", "status", "error_type"},
+        "tool span",
+    )
     status = _choice(payload["status"], {"succeeded", "failed"}, "status")
-    return ToolCallSpan(_uuid(payload["span_id"], "span_id"),
-                        _positive_int(payload["sequence"], "sequence"),
-                        _non_empty_string(payload["tool_name"], "tool_name"),
-                        _non_negative_int(payload["duration_ms"], "duration_ms"),
-                        status, _error_type(payload["error_type"], status))
+    return ToolCallSpan(
+        _uuid(payload["span_id"], "span_id"),
+        _positive_int(payload["sequence"], "sequence"),
+        _non_empty_string(payload["tool_name"], "tool_name"),
+        _non_negative_int(payload["duration_ms"], "duration_ms"),
+        status,
+        _error_type(payload["error_type"], status),
+    )
 
 
 def _positive_int(value: object, field: str) -> int:
@@ -377,7 +517,9 @@ from cdy_agent.observability.models import TokenUsage
 from cdy_agent.observability.pricing import Pricing, estimate_cost, resolve_pricing
 
 
-def test_resolve_pricing_and_estimate_exact_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_pricing_and_estimate_exact_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("CDY_AGENT_INPUT_COST_PER_MILLION", "1.25")
     monkeypatch.setenv("CDY_AGENT_OUTPUT_COST_PER_MILLION", "2.5")
     pricing = resolve_pricing()
@@ -399,8 +541,13 @@ def test_absent_pricing_keeps_cost_unknown(monkeypatch: pytest.MonkeyPatch) -> N
     ("input_price", "output_price"),
     [("1", None), (None, "2"), ("bad", "2"), ("-1", "2"), ("NaN", "2")],
 )
-def test_resolve_pricing_rejects_partial_or_invalid_values(monkeypatch, input_price, output_price) -> None:
-    for name, value in (("CDY_AGENT_INPUT_COST_PER_MILLION", input_price), ("CDY_AGENT_OUTPUT_COST_PER_MILLION", output_price)):
+def test_resolve_pricing_rejects_partial_or_invalid_values(
+    monkeypatch, input_price, output_price
+) -> None:
+    for name, value in (
+        ("CDY_AGENT_INPUT_COST_PER_MILLION", input_price),
+        ("CDY_AGENT_OUTPUT_COST_PER_MILLION", output_price),
+    ):
         if value is None:
             monkeypatch.delenv(name, raising=False)
         else:
@@ -436,11 +583,15 @@ def resolve_pricing() -> Pricing | None:
     if raw_input is None and raw_output is None:
         return None
     if raw_input is None or raw_output is None:
-        raise ValueError("Input and output cost per million must be configured together.")
+        raise ValueError(
+            "Input and output cost per million must be configured together."
+        )
     try:
         values = (Decimal(raw_input.strip()), Decimal(raw_output.strip()))
     except (InvalidOperation, ValueError):
-        raise ValueError("Token cost per million must be a non-negative decimal.") from None
+        raise ValueError(
+            "Token cost per million must be a non-negative decimal."
+        ) from None
     if any(not value.is_finite() or value < 0 for value in values):
         raise ValueError("Token cost per million must be a non-negative decimal.")
     return Pricing(*values)
@@ -484,34 +635,42 @@ git commit -m "Add observability domain models"
 ```python
 def test_gateway_normalizes_responses_usage() -> None:
     client = FakeClient()
-    client.responses.create = FakeResponsesSequence(SimpleNamespace(
-        id="response-1", output_text="Done", output=[],
-        usage=SimpleNamespace(input_tokens=12, output_tokens=3),
-    ))
-    outcome = openai_client.ModelGateway(model="m", api_mode="responses", client=client).create(
-        (Message("user", "secret prompt"),), ()
+    client.responses.create = FakeResponsesSequence(
+        SimpleNamespace(
+            id="response-1",
+            output_text="Done",
+            output=[],
+            usage=SimpleNamespace(input_tokens=12, output_tokens=3),
+        )
     )
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="responses", client=client
+    ).create((Message("user", "secret prompt"),), ())
     assert outcome == openai_client.FinalResponse("Done", TokenUsage(12, 3))
 
 
 def test_gateway_normalizes_chat_usage() -> None:
     client = FakeClient()
-    client.chat.completions.create = FakeChatSequence(SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content="Done", tool_calls=[]))],
-        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=2),
-    ))
-    outcome = openai_client.ModelGateway(model="m", api_mode="chat_completions", client=client).create(
-        (Message("user", "secret prompt"),), ()
+    client.chat.completions.create = FakeChatSequence(
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content="Done", tool_calls=[]))
+            ],
+            usage=SimpleNamespace(prompt_tokens=9, completion_tokens=2),
+        )
     )
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode="chat_completions", client=client
+    ).create((Message("user", "secret prompt"),), ())
     assert outcome == openai_client.FinalResponse("Done", TokenUsage(9, 2))
 
 
 @pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
 def test_gateway_allows_missing_usage(api_mode: str) -> None:
     client = FakeClient(responses_output="Done", chat_output="Done")
-    outcome = openai_client.ModelGateway(model="m", api_mode=api_mode, client=client).create(
-        (Message("user", "Hello"),), ()
-    )
+    outcome = openai_client.ModelGateway(
+        model="m", api_mode=api_mode, client=client
+    ).create((Message("user", "Hello"),), ())
     assert outcome.usage is None
 ```
 
@@ -529,10 +688,12 @@ Expected: FAIL because outcomes have no `usage` field.
 # additions in src/cdy_agent/openai_client.py
 from .observability.models import TokenUsage
 
+
 @dataclass(frozen=True)
 class FinalResponse:
     text: str
     usage: TokenUsage | None = None
+
 
 @dataclass(frozen=True)
 class ToolCallResponse:
@@ -541,7 +702,9 @@ class ToolCallResponse:
     usage: TokenUsage | None = None
 
 
-def _response_usage(response: object, input_name: str, output_name: str) -> TokenUsage | None:
+def _response_usage(
+    response: object, input_name: str, output_name: str
+) -> TokenUsage | None:
     usage = getattr(response, "usage", None)
     if usage is None:
         return None
@@ -592,7 +755,9 @@ from cdy_agent.observability import Pricing, TokenUsage, TraceRecorder
 def test_recorder_aggregates_known_usage_and_cost() -> None:
     ticks = iter([10.000, 10.005, 10.007, 10.010, 10.015, 10.020])
     recorder = TraceRecorder(
-        "ask", "model", "responses",
+        "ask",
+        "model",
+        "responses",
         pricing=Pricing(Decimal("1"), Decimal("2")),
         clock=lambda: next(ticks),
         now=lambda: "2026-07-20T08:30:00.000000Z",
@@ -609,7 +774,12 @@ def test_recorder_aggregates_known_usage_and_cost() -> None:
 
 
 def test_recorder_marks_failures_without_exception_messages() -> None:
-    recorder = TraceRecorder("chat", "model", "chat_completions", session_id="f8605a17-cf86-46ce-87ad-7db57533e5dc")
+    recorder = TraceRecorder(
+        "chat",
+        "model",
+        "chat_completions",
+        session_id="f8605a17-cf86-46ce-87ad-7db57533e5dc",
+    )
     token = recorder.start_tool_call("read_file")
     recorder.finish_tool_call(token, ok=False, error_type="invalid_arguments")
     record = recorder.finish(RuntimeError("secret response body"))
@@ -628,10 +798,16 @@ import logging
 
 import pytest
 
-from cdy_agent.observability.logging import configure_structured_logging, log_event, resolve_log_level
+from cdy_agent.observability.logging import (
+    configure_structured_logging,
+    log_event,
+    resolve_log_level,
+)
 
 
-def test_log_level_defaults_and_rejects_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_log_level_defaults_and_rejects_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("CDY_AGENT_LOG_LEVEL", raising=False)
     assert resolve_log_level() == logging.WARNING
     monkeypatch.setenv("CDY_AGENT_LOG_LEVEL", "verbose")
@@ -641,11 +817,24 @@ def test_log_level_defaults_and_rejects_invalid(monkeypatch: pytest.MonkeyPatch)
 
 def test_structured_log_contains_only_explicit_safe_fields(capsys) -> None:
     configure_structured_logging(logging.DEBUG)
-    log_event(logging.INFO, "trace_finished", trace_id="safe-id", status="failed", duration_ms=4)
+    log_event(
+        logging.INFO,
+        "trace_finished",
+        trace_id="safe-id",
+        status="failed",
+        duration_ms=4,
+    )
     payload = json.loads(capsys.readouterr().err)
     assert payload["event"] == "trace_finished"
     assert payload["trace_id"] == "safe-id"
-    assert set(payload) == {"timestamp", "level", "event", "trace_id", "status", "duration_ms"}
+    assert set(payload) == {
+        "timestamp",
+        "level",
+        "event",
+        "trace_id",
+        "status",
+        "duration_ms",
+    }
 ```
 
 - [ ] **Step 3: Run tests to verify failure**
@@ -666,13 +855,20 @@ import os
 from datetime import datetime, timezone
 
 LOGGER = logging.getLogger("cdy_agent.observability")
-LEVELS = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARNING": logging.WARNING, "ERROR": logging.ERROR}
+LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
 
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+            "timestamp": datetime.now(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z"),
             "level": record.levelname,
             "event": record.msg,
         }
@@ -683,7 +879,9 @@ class JsonFormatter(logging.Formatter):
 def resolve_log_level() -> int:
     configured = os.getenv("CDY_AGENT_LOG_LEVEL", "WARNING").strip().upper()
     if configured not in LEVELS:
-        raise ValueError("CDY_AGENT_LOG_LEVEL must be one of: DEBUG, INFO, WARNING, ERROR.")
+        raise ValueError(
+            "CDY_AGENT_LOG_LEVEL must be one of: DEBUG, INFO, WARNING, ERROR."
+        )
     return LEVELS[configured]
 
 
@@ -718,7 +916,11 @@ from .pricing import Pricing, estimate_cost
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 @dataclass(frozen=True)
@@ -755,7 +957,9 @@ class TraceRecorder:
                 if session_id is None or str(UUID(session_id)) != session_id:
                     raise ValueError
             except ValueError:
-                raise ValueError("chat traces require a complete session UUID.") from None
+                raise ValueError(
+                    "chat traces require a complete session UUID."
+                ) from None
         self.trace_id = str(uuid_factory())
         self.command = command
         self.model = model
@@ -769,10 +973,14 @@ class TraceRecorder:
         self._model_calls: list[ModelCallSpan] = []
         self._tool_calls: list[ToolCallSpan] = []
         self._finished = False
-        log_event(logging.INFO, "trace_started", trace_id=self.trace_id, status="started")
+        log_event(
+            logging.INFO, "trace_started", trace_id=self.trace_id, status="started"
+        )
 
     def start_model_call(self) -> _OpenSpan:
-        return _OpenSpan(str(self._uuid_factory()), len(self._model_calls) + 1, self._clock())
+        return _OpenSpan(
+            str(self._uuid_factory()), len(self._model_calls) + 1, self._clock()
+        )
 
     def finish_model_call(
         self,
@@ -783,12 +991,27 @@ class TraceRecorder:
         duration = self._duration(token.started)
         status = "failed" if error is not None else "succeeded"
         error_type = type(error).__name__ if error is not None else None
-        self._model_calls.append(ModelCallSpan(token.span_id, token.sequence, duration, status, error_type, usage))
-        log_event(logging.DEBUG, "model_call_finished", trace_id=self.trace_id,
-                  span_id=token.span_id, status=status, duration_ms=duration)
+        self._model_calls.append(
+            ModelCallSpan(
+                token.span_id, token.sequence, duration, status, error_type, usage
+            )
+        )
+        log_event(
+            logging.DEBUG,
+            "model_call_finished",
+            trace_id=self.trace_id,
+            span_id=token.span_id,
+            status=status,
+            duration_ms=duration,
+        )
 
     def start_tool_call(self, tool_name: str) -> _OpenSpan:
-        return _OpenSpan(str(self._uuid_factory()), len(self._tool_calls) + 1, self._clock(), tool_name)
+        return _OpenSpan(
+            str(self._uuid_factory()),
+            len(self._tool_calls) + 1,
+            self._clock(),
+            tool_name,
+        )
 
     def finish_tool_call(
         self,
@@ -802,30 +1025,63 @@ class TraceRecorder:
         duration = self._duration(token.started)
         status = "succeeded" if ok else "failed"
         normalized_error = None if ok else (error_type or "tool_error")
-        self._tool_calls.append(ToolCallSpan(token.span_id, token.sequence, token.tool_name, duration, status, normalized_error))
-        log_event(logging.DEBUG, "tool_call_finished", trace_id=self.trace_id,
-                  span_id=token.span_id, status=status, duration_ms=duration)
+        self._tool_calls.append(
+            ToolCallSpan(
+                token.span_id,
+                token.sequence,
+                token.tool_name,
+                duration,
+                status,
+                normalized_error,
+            )
+        )
+        log_event(
+            logging.DEBUG,
+            "tool_call_finished",
+            trace_id=self.trace_id,
+            span_id=token.span_id,
+            status=status,
+            duration_ms=duration,
+        )
 
     def finish(self, error: Exception | None = None) -> TraceRecord:
         if self._finished:
             raise RuntimeError("Trace recorder is already finished.")
         self._finished = True
         known = [span.usage for span in self._model_calls if span.usage is not None]
-        usage = None if not known else TokenUsage(
-            sum(item.input_tokens for item in known),
-            sum(item.output_tokens for item in known),
+        usage = (
+            None
+            if not known
+            else TokenUsage(
+                sum(item.input_tokens for item in known),
+                sum(item.output_tokens for item in known),
+            )
         )
         duration = self._duration(self._started)
         status = "failed" if error is not None else "succeeded"
         record = TraceRecord(
-            1, self.trace_id, self._started_at, duration, self.command, status,
-            self.model, self.api_mode, self.session_id,
+            1,
+            self.trace_id,
+            self._started_at,
+            duration,
+            self.command,
+            status,
+            self.model,
+            self.api_mode,
+            self.session_id,
             type(error).__name__ if error is not None else None,
-            usage, estimate_cost(usage, self._pricing) if usage is not None else None,
-            tuple(self._model_calls), tuple(self._tool_calls),
+            usage,
+            estimate_cost(usage, self._pricing) if usage is not None else None,
+            tuple(self._model_calls),
+            tuple(self._tool_calls),
         )
-        log_event(logging.INFO, "trace_finished", trace_id=self.trace_id,
-                  status=status, duration_ms=duration)
+        log_event(
+            logging.INFO,
+            "trace_finished",
+            trace_id=self.trace_id,
+            status=status,
+            duration_ms=duration,
+        )
         return record
 
     def _duration(self, started: float) -> int:
@@ -837,7 +1093,9 @@ The public methods deliberately have no prompt/reply/arguments/result parameters
 ```python
 def test_recorder_rejects_invalid_session_semantics() -> None:
     with pytest.raises(ValueError, match="ask traces"):
-        TraceRecorder("ask", "m", "responses", session_id="f8605a17-cf86-46ce-87ad-7db57533e5dc")
+        TraceRecorder(
+            "ask", "m", "responses", session_id="f8605a17-cf86-46ce-87ad-7db57533e5dc"
+        )
     with pytest.raises(ValueError, match="session UUID"):
         TraceRecorder("chat", "m", "responses", session_id=None)
 
@@ -890,7 +1148,9 @@ class SpyRecorder:
         self.events.append(("model", "start", self.model_sequence))
         return self.model_sequence
 
-    def finish_model_call(self, token: int, usage: TokenUsage | None, error: Exception | None = None) -> None:
+    def finish_model_call(
+        self, token: int, usage: TokenUsage | None, error: Exception | None = None
+    ) -> None:
         self.events.append(("model", "finish", token, usage, error))
 
     def start_tool_call(self, tool_name: str) -> int:
@@ -898,7 +1158,9 @@ class SpyRecorder:
         self.events.append(("tool", "start", self.tool_sequence, tool_name))
         return self.tool_sequence
 
-    def finish_tool_call(self, token: int, *, ok: bool, error_type: str | None = None) -> None:
+    def finish_tool_call(
+        self, token: int, *, ok: bool, error_type: str | None = None
+    ) -> None:
         self.events.append(("tool", "finish", token, ok, error_type))
 ```
 
@@ -907,16 +1169,26 @@ Then add:
 ```python
 def test_agent_records_model_and_tool_spans() -> None:
     calls = (ToolCall("1", "echo", "{}"),)
-    gateway = FakeGateway([
-        ToolCallResponse(calls, ResponsesContinuation("next"), TokenUsage(8, 2)),
-        FinalResponse("done", TokenUsage(4, 3)),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(calls, ResponsesContinuation("next"), TokenUsage(8, 2)),
+            FinalResponse("done", TokenUsage(4, 3)),
+        ]
+    )
     recorder = SpyRecorder()
-    assert Agent(gateway, FakeRegistry(), lambda _: True).run([Message("user", "secret")], recorder) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: True).run(
+            [Message("user", "secret")], recorder
+        )
+        == "done"
+    )
     assert recorder.events == [
-        ("model", "start", 1), ("model", "finish", 1, TokenUsage(8, 2), None),
-        ("tool", "start", 1, "echo"), ("tool", "finish", 1, True, None),
-        ("model", "start", 2), ("model", "finish", 2, TokenUsage(4, 3), None),
+        ("model", "start", 1),
+        ("model", "finish", 1, TokenUsage(8, 2), None),
+        ("tool", "start", 1, "echo"),
+        ("tool", "finish", 1, True, None),
+        ("model", "start", 2),
+        ("model", "finish", 2, TokenUsage(4, 3), None),
     ]
 
 
@@ -924,7 +1196,9 @@ def test_agent_records_model_exception_and_reraises() -> None:
     gateway = FakeGateway([RuntimeError("provider secret")])
     recorder = SpyRecorder()
     with pytest.raises(RuntimeError, match="provider secret"):
-        Agent(gateway, FakeRegistry(), lambda _: True).run([Message("user", "hello")], recorder)
+        Agent(gateway, FakeRegistry(), lambda _: True).run(
+            [Message("user", "hello")], recorder
+        )
     assert recorder.events[-1][0:3] == ("model", "finish", 1)
     assert isinstance(recorder.events[-1][-1], RuntimeError)
 
@@ -933,7 +1207,14 @@ def test_agent_marks_structured_tool_failure() -> None:
     registry = FakeRegistry()
     registry.result = ToolResult.failure("approval_denied", "secret detail")
     recorder = SpyRecorder()
-    gateway = FakeGateway([ToolCallResponse((ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")), FinalResponse("done")])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
+            ),
+            FinalResponse("done"),
+        ]
+    )
     Agent(gateway, registry, lambda _: False).run([Message("user", "hello")], recorder)
     assert ("tool", "finish", 1, False, "approval_denied") in recorder.events
 ```
@@ -971,7 +1252,9 @@ Expected: FAIL because `Agent.run` does not accept a recorder or emit spans.
 - [ ] **Step 3: Add optional instrumentation without changing registry**
 
 ```python
-def run(self, messages: Sequence[Message], recorder: TraceRecorder | None = None) -> str:
+def run(
+    self, messages: Sequence[Message], recorder: TraceRecorder | None = None
+) -> str:
     if not messages:
         raise ValueError("Conversation history must not be empty.")
     continuation = None
@@ -979,7 +1262,12 @@ def run(self, messages: Sequence[Message], recorder: TraceRecorder | None = None
     for _ in range(self._max_model_calls):
         model_span = recorder.start_model_call() if recorder else None
         try:
-            outcome = self._gateway.create(messages=messages, tools=self._registry.definitions, continuation=continuation, tool_outputs=outputs)
+            outcome = self._gateway.create(
+                messages=messages,
+                tools=self._registry.definitions,
+                continuation=continuation,
+                tool_outputs=outputs,
+            )
         except Exception as exc:
             if recorder and model_span:
                 recorder.finish_model_call(model_span, None, exc)
@@ -995,14 +1283,22 @@ def run(self, messages: Sequence[Message], recorder: TraceRecorder | None = None
                 result = self._registry.execute(call, self._confirm)
             except Exception as exc:
                 if recorder and tool_span:
-                    recorder.finish_tool_call(tool_span, ok=False, error_type=type(exc).__name__)
+                    recorder.finish_tool_call(
+                        tool_span, ok=False, error_type=type(exc).__name__
+                    )
                 raise
             if recorder and tool_span:
-                recorder.finish_tool_call(tool_span, ok=result.ok, error_type=None if result.ok else result.code)
+                recorder.finish_tool_call(
+                    tool_span,
+                    ok=result.ok,
+                    error_type=None if result.ok else result.code,
+                )
             completed_outputs.append((call.call_id, result.to_json()))
         outputs = tuple(completed_outputs)
         continuation = outcome.continuation
-    raise AgentLoopLimitError(f"Agent exceeded the maximum of {self._max_model_calls} model calls.")
+    raise AgentLoopLimitError(
+        f"Agent exceeded the maximum of {self._max_model_calls} model calls."
+    )
 ```
 
 Import `TraceRecorder` only for typing/runtime use; do not add any observability dependency to `ToolRegistry`.
@@ -1038,7 +1334,11 @@ from pathlib import Path
 
 import pytest
 
-from cdy_agent.observability.store import TraceNotFoundError, TraceStore, TraceStoreError
+from cdy_agent.observability.store import (
+    TraceNotFoundError,
+    TraceStore,
+    TraceStoreError,
+)
 from test_observability_models import sample_trace
 
 
@@ -1057,16 +1357,25 @@ def test_append_writes_one_json_line_and_lists_newest_first(tmp_path: Path) -> N
     store = TraceStore(tmp_path)
     store.append(first)
     store.append(second)
-    lines = (tmp_path / ".cdy-agent" / "traces.jsonl").read_text(encoding="utf-8").splitlines()
+    lines = (
+        (tmp_path / ".cdy-agent" / "traces.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
     assert len(lines) == 2
-    assert [record.trace_id for record in store.list_traces()] == [second.trace_id, first.trace_id]
+    assert [record.trace_id for record in store.list_traces()] == [
+        second.trace_id,
+        first.trace_id,
+    ]
     assert store.get(first.trace_id) == first
 
 
 def test_corrupt_line_reports_line_number(tmp_path: Path) -> None:
     path = tmp_path / ".cdy-agent" / "traces.jsonl"
     path.parent.mkdir()
-    path.write_text(json.dumps(sample_trace().to_dict()) + "\nnot-json\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(sample_trace().to_dict()) + "\nnot-json\n", encoding="utf-8"
+    )
     with pytest.raises(TraceStoreError, match="line 2"):
         TraceStore(tmp_path).list_traces()
 
@@ -1113,7 +1422,9 @@ class TraceStore:
     def append(self, record: TraceRecord) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            line = json.dumps(record.to_dict(), ensure_ascii=False, separators=(",", ":"))
+            line = json.dumps(
+                record.to_dict(), ensure_ascii=False, separators=(",", ":")
+            )
             with self.path.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(line + "\n")
         except OSError as exc:
@@ -1121,7 +1432,9 @@ class TraceStore:
 
     def list_traces(self) -> tuple[TraceRecord, ...]:
         records = self._read_all()
-        return tuple(sorted(records, key=lambda record: record.started_at, reverse=True))
+        return tuple(
+            sorted(records, key=lambda record: record.started_at, reverse=True)
+        )
 
     def get(self, trace_id: str) -> TraceRecord:
         try:
@@ -1144,7 +1457,9 @@ class TraceStore:
                     try:
                         records.append(TraceRecord.from_dict(json.loads(line)))
                     except (json.JSONDecodeError, ValueError) as exc:
-                        raise TraceStoreError(f"Invalid trace data on line {line_number}.") from exc
+                        raise TraceStoreError(
+                            f"Invalid trace data on line {line_number}."
+                        ) from exc
         except TraceStoreError:
             raise
         except OSError as exc:
@@ -1215,7 +1530,9 @@ def test_ask_saves_one_successful_trace(monkeypatch, tmp_path) -> None:
 
 def test_chat_saves_each_turn_with_same_session_id(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent(["one", "two"]))
-    result = runner.invoke(app, ["chat", "--workspace", str(tmp_path)], input="first\n\nsecond\n/exit\n")
+    result = runner.invoke(
+        app, ["chat", "--workspace", str(tmp_path)], input="first\n\nsecond\n/exit\n"
+    )
     assert result.exit_code == 0
     records = TraceStore(tmp_path).list_traces()
     assert len(records) == 2
@@ -1224,7 +1541,11 @@ def test_chat_saves_each_turn_with_same_session_id(monkeypatch, tmp_path) -> Non
 
 
 def test_failed_agent_still_saves_failed_trace(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent(error=RuntimeError("private provider body")))
+    monkeypatch.setattr(
+        cli,
+        "_create_agent",
+        lambda *args: FakeAgent(error=RuntimeError("private provider body")),
+    )
     result = runner.invoke(app, ["ask", "private prompt", "--workspace", str(tmp_path)])
     assert result.exit_code == 1
     records = TraceStore(tmp_path).list_traces()
@@ -1255,10 +1576,14 @@ Import `TraceRecord`, `TraceStore`, and `TraceStoreError` in `tests/test_cli.py`
 
 ```python
 @pytest.mark.parametrize("user_input", ["\n/exit\n", "/quit\n", ""])
-def test_chat_without_agent_turn_creates_no_trace(monkeypatch, tmp_path, user_input) -> None:
+def test_chat_without_agent_turn_creates_no_trace(
+    monkeypatch, tmp_path, user_input
+) -> None:
     agent = FakeAgent("unused")
     monkeypatch.setattr(cli, "_create_agent", lambda *args: agent)
-    result = runner.invoke(app, ["chat", "--workspace", str(tmp_path)], input=user_input)
+    result = runner.invoke(
+        app, ["chat", "--workspace", str(tmp_path)], input=user_input
+    )
     assert result.exit_code == 0
     assert agent.calls == []
     assert TraceStore(tmp_path).list_traces() == ()
@@ -1273,7 +1598,9 @@ def test_traces_list_and_show_render_safe_metadata(monkeypatch, tmp_path) -> Non
     record = sample_trace()
     monkeypatch.setattr(cli, "TraceStore", lambda workspace: FakeTraceStore([record]))
     listed = runner.invoke(app, ["traces", "list", "--workspace", str(tmp_path)])
-    shown = runner.invoke(app, ["traces", "show", record.trace_id, "--workspace", str(tmp_path)])
+    shown = runner.invoke(
+        app, ["traces", "show", record.trace_id, "--workspace", str(tmp_path)]
+    )
     assert listed.exit_code == shown.exit_code == 0
     assert record.trace_id in listed.stdout
     assert "14 tokens" in listed.stdout
@@ -1282,7 +1609,9 @@ def test_traces_list_and_show_render_safe_metadata(monkeypatch, tmp_path) -> Non
     assert "private prompt" not in listed.stdout + shown.stdout
 
 
-def test_invalid_observability_configuration_fails_before_agent(monkeypatch, tmp_path) -> None:
+def test_invalid_observability_configuration_fails_before_agent(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setenv("CDY_AGENT_INPUT_COST_PER_MILLION", "1")
     created = []
     monkeypatch.setattr(cli, "_create_agent", lambda *args: created.append(True))
@@ -1359,8 +1688,11 @@ reply = _run_traced(
     agent,
     conversation.history,
     TraceRecorder(
-        "chat", active_model, api_mode,
-        session_id=session_id, pricing=pricing,
+        "chat",
+        active_model,
+        api_mode,
+        session_id=session_id,
+        pricing=pricing,
     ),
     TraceStore(active_workspace),
 )
@@ -1370,7 +1702,11 @@ reply = _run_traced(
 
 ```python
 @traces_app.command("list")
-def list_traces(workspace: Annotated[Path | None, typer.Option(help="Workspace containing saved traces.")] = None) -> None:
+def list_traces(
+    workspace: Annotated[
+        Path | None, typer.Option(help="Workspace containing saved traces.")
+    ] = None,
+) -> None:
     try:
         records = TraceStore(resolve_workspace(workspace or Path.cwd())).list_traces()
     except REQUEST_ERRORS as exc:
@@ -1379,13 +1715,30 @@ def list_traces(workspace: Annotated[Path | None, typer.Option(help="Workspace c
         typer.echo("No saved traces.")
         return
     for record in records:
-        tokens = "unknown tokens" if record.usage is None else f"{record.usage.total_tokens} tokens"
-        cost = "unknown cost" if record.estimated_cost is None else f"{record.estimated_cost.total_cost} cost"
-        typer.echo(f"{record.trace_id}  {record.started_at}  {record.status}  {record.command}  {record.model}  {record.duration_ms} ms  {tokens}  {cost}")
+        tokens = (
+            "unknown tokens"
+            if record.usage is None
+            else f"{record.usage.total_tokens} tokens"
+        )
+        cost = (
+            "unknown cost"
+            if record.estimated_cost is None
+            else f"{record.estimated_cost.total_cost} cost"
+        )
+        typer.echo(
+            f"{record.trace_id}  {record.started_at}  {record.status}  {record.command}  {record.model}  {record.duration_ms} ms  {tokens}  {cost}"
+        )
 
 
 @traces_app.command("show")
-def show_trace(trace_id: Annotated[str, typer.Argument(help="Complete UUID of the trace to show.")], workspace: Annotated[Path | None, typer.Option(help="Workspace containing saved traces.")] = None) -> None:
+def show_trace(
+    trace_id: Annotated[
+        str, typer.Argument(help="Complete UUID of the trace to show.")
+    ],
+    workspace: Annotated[
+        Path | None, typer.Option(help="Workspace containing saved traces.")
+    ] = None,
+) -> None:
     try:
         record = TraceStore(resolve_workspace(workspace or Path.cwd())).get(trace_id)
     except REQUEST_ERRORS as exc:
@@ -1409,18 +1762,30 @@ def _render_trace(record: TraceRecord) -> None:
     if record.usage is None:
         typer.echo("Usage: unknown")
     else:
-        typer.echo(f"Usage: {record.usage.input_tokens} input, {record.usage.output_tokens} output, {record.usage.total_tokens} total")
+        typer.echo(
+            f"Usage: {record.usage.input_tokens} input, {record.usage.output_tokens} output, {record.usage.total_tokens} total"
+        )
     if record.estimated_cost is None:
         typer.echo("Estimated cost: unknown")
     else:
-        typer.echo(f"Estimated cost: {record.estimated_cost.input_cost} input, {record.estimated_cost.output_cost} output, {record.estimated_cost.total_cost} total")
+        typer.echo(
+            f"Estimated cost: {record.estimated_cost.input_cost} input, {record.estimated_cost.output_cost} output, {record.estimated_cost.total_cost} total"
+        )
     typer.echo("Model calls:")
     for span in record.model_calls:
-        tokens = "unknown tokens" if span.usage is None else f"{span.usage.total_tokens} tokens"
-        typer.echo(f"  {span.sequence}. {span.status}, {span.duration_ms} ms, {tokens}, error={span.error_type or '-'}")
+        tokens = (
+            "unknown tokens"
+            if span.usage is None
+            else f"{span.usage.total_tokens} tokens"
+        )
+        typer.echo(
+            f"  {span.sequence}. {span.status}, {span.duration_ms} ms, {tokens}, error={span.error_type or '-'}"
+        )
     typer.echo("Tool calls:")
     for span in record.tool_calls:
-        typer.echo(f"  {span.sequence}. {span.tool_name}, {span.status}, {span.duration_ms} ms, error={span.error_type or '-'}")
+        typer.echo(
+            f"  {span.sequence}. {span.tool_name}, {span.status}, {span.duration_ms} ms, error={span.error_type or '-'}"
+        )
 ```
 
 The renderer receives only `TraceRecord`; never pass original request data to it.

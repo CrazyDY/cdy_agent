@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.base import (
     ConfirmationDecision,
     ConfirmationRequest,
@@ -12,7 +13,6 @@ from cdy_agent.tools.base import (
     ToolCall,
     ToolResult,
 )
-from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.registry import ToolRegistry
 
 
@@ -35,10 +35,7 @@ class EchoTool:
         return "Echo text."
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
-        if (
-            set(arguments) != {"text"}
-            or not isinstance(arguments["text"], str)
-        ):
+        if set(arguments) != {"text"} or not isinstance(arguments["text"], str):
             return ToolResult.failure(
                 "invalid_arguments",
                 "text must be a string.",
@@ -46,10 +43,7 @@ class EchoTool:
         return None
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
-        if (
-            set(arguments) != {"text"}
-            or not isinstance(arguments["text"], str)
-        ):
+        if set(arguments) != {"text"} or not isinstance(arguments["text"], str):
             return ToolResult.failure(
                 "invalid_arguments",
                 "text must be a string.",
@@ -103,8 +97,7 @@ class PreparingEchoTool(EchoTool):
                 or ToolResult.success({"remembered": True})
             ),
             execute=lambda: (
-                self.events.append("execute")
-                or ToolResult.success({"text": text})
+                self.events.append("execute") or ToolResult.success({"text": text})
             ),
         )
 
@@ -124,12 +117,14 @@ def test_registry_exposes_function_definition_and_executes() -> None:
         ToolCall("call-1", "echo", '{"text":"hello"}'),
         confirm=lambda request: True,
     )
-    assert registry.definitions == ({
-        "type": "function",
-        "name": "echo",
-        "description": "Echo text.",
-        "parameters": EchoTool().parameters,
-    },)
+    assert registry.definitions == (
+        {
+            "type": "function",
+            "name": "echo",
+            "description": "Echo text.",
+            "parameters": EchoTool().parameters,
+        },
+    )
     assert json.loads(result.to_json()) == {
         "ok": True,
         "data": {"text": "hello"},
@@ -186,8 +181,7 @@ def test_registry_allows_once_without_persisting() -> None:
 
     result = ToolRegistry([tool]).execute(
         ToolCall("1", "echo", '{"text":"hello"}'),
-        lambda request: requests.append(request)
-        or ConfirmationDecision.ALLOW_ONCE,
+        lambda request: requests.append(request) or ConfirmationDecision.ALLOW_ONCE,
     )
 
     assert result.ok
@@ -199,12 +193,10 @@ def test_registry_persists_before_execution() -> None:
     events: list[str] = []
     tool = DynamicEchoTool()
     tool.remember_approval = lambda arguments: (
-        events.append("remember")
-        or ToolResult.success({"remembered": True})
+        events.append("remember") or ToolResult.success({"remembered": True})
     )  # type: ignore[method-assign]
     tool.execute = lambda arguments: (
-        events.append("execute")
-        or ToolResult.success({"text": arguments["text"]})
+        events.append("execute") or ToolResult.success({"text": arguments["text"]})
     )  # type: ignore[method-assign]
 
     result = ToolRegistry([tool]).execute(
@@ -250,8 +242,7 @@ def test_registry_uses_one_immutable_prepared_execution_context() -> None:
 
     result = ToolRegistry([tool]).execute(
         ToolCall("1", "echo", '{"text":"hello"}'),
-        lambda request: requests.append(request)
-        or ConfirmationDecision.ALLOW_ALWAYS,
+        lambda request: requests.append(request) or ConfirmationDecision.ALLOW_ALWAYS,
     )
 
     assert result == ToolResult.success({"text": "hello"})
@@ -311,15 +302,19 @@ def test_registry_preflights_before_confirmation() -> None:
 def test_register_many_adds_valid_tools_in_order() -> None:
     registry = ToolRegistry([EchoTool(name="first")])
 
-    result = registry.register_many([
-        EchoTool(name="second"),
-        EchoTool(name="third"),
-    ])
+    result = registry.register_many(
+        [
+            EchoTool(name="second"),
+            EchoTool(name="third"),
+        ]
+    )
 
     assert result == ToolResult.success({"names": ["second", "third"]})
-    assert [
-        item["name"] for item in registry.definitions
-    ] == ["first", "second", "third"]
+    assert [item["name"] for item in registry.definitions] == [
+        "first",
+        "second",
+        "third",
+    ]
 
 
 def test_register_many_is_atomic_on_name_conflict() -> None:
@@ -329,9 +324,7 @@ def test_register_many_is_atomic_on_name_conflict() -> None:
     replacement = EchoTool(name="existing")
     replacement.description = "Replacement behavior."
     replacement.execute = (  # type: ignore[method-assign]
-        lambda arguments: ToolResult.success(
-            {"text": "replacement"}
-        )
+        lambda arguments: ToolResult.success({"text": "replacement"})
     )
 
     result = registry.register_many([EchoTool(name="new"), replacement])
@@ -358,10 +351,12 @@ def test_register_many_rejects_invalid_tool_without_mutation() -> None:
 def test_register_many_rejects_duplicate_candidates_atomically() -> None:
     registry = ToolRegistry([EchoTool(name="existing")])
 
-    result = registry.register_many([
-        EchoTool(name="new"),
-        EchoTool(name="new"),
-    ])
+    result = registry.register_many(
+        [
+            EchoTool(name="new"),
+            EchoTool(name="new"),
+        ]
+    )
 
     assert result.code == "tool_name_conflict"
     assert [item["name"] for item in registry.definitions] == ["existing"]
@@ -424,10 +419,7 @@ def test_register_many_handles_failure_while_materializing_iterable(
 def test_builtin_registry_exposes_tools_in_deterministic_order(
     tmp_path: Path,
 ) -> None:
-    assert [
-        item["name"]
-        for item in create_builtin_registry(tmp_path).definitions
-    ] == [
+    assert [item["name"] for item in create_builtin_registry(tmp_path).definitions] == [
         "read_file",
         "write_file",
         "shell",

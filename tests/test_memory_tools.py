@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta, timezone
 import json
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
@@ -18,7 +19,6 @@ from cdy_agent.tools.memories import (
     UpdateMemoryTool,
 )
 from cdy_agent.tools.registry import ToolRegistry
-
 
 FIRST_ID = "11111111-1111-1111-1111-111111111111"
 SECOND_ID = "22222222-2222-2222-2222-222222222222"

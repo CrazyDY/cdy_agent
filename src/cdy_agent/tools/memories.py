@@ -8,16 +8,15 @@ from cdy_agent.memory import (
     InvalidMemoryError,
     MemoryConflictError,
     MemoryNotFoundError,
+    MemoryStore,
+    MemoryStoreError,
     PreparedCreate,
     PreparedDelete,
     PreparedUpdate,
-    MemoryStore,
-    MemoryStoreError,
     StoredMemory,
 )
 
 from .base import ToolResult
-
 
 CONTENT_TAGS_SCHEMA = {
     "type": "object",
@@ -132,9 +131,7 @@ def _tags_description(tags: tuple[str, ...]) -> str:
 @dataclass
 class RememberMemoryTool:
     store: MemoryStore
-    _prepared: PreparedCreate | None = field(
-        init=False, default=None, repr=False
-    )
+    _prepared: PreparedCreate | None = field(init=False, default=None, repr=False)
     name: ClassVar[str] = "remember_memory"
     description: ClassVar[str] = (
         "Store a long-term memory only when the user explicitly asks to remember it."
@@ -213,9 +210,7 @@ class SearchMemoriesTool:
 @dataclass
 class UpdateMemoryTool:
     store: MemoryStore
-    _prepared: PreparedUpdate | None = field(
-        init=False, default=None, repr=False
-    )
+    _prepared: PreparedUpdate | None = field(init=False, default=None, repr=False)
     name: ClassVar[str] = "update_memory"
     description: ClassVar[str] = (
         "Update a long-term memory only when the user explicitly asks to change it."
@@ -269,9 +264,7 @@ class UpdateMemoryTool:
 @dataclass
 class ForgetMemoryTool:
     store: MemoryStore
-    _prepared: PreparedDelete | None = field(
-        init=False, default=None, repr=False
-    )
+    _prepared: PreparedDelete | None = field(init=False, default=None, repr=False)
     name: ClassVar[str] = "forget_memory"
     description: ClassVar[str] = (
         "Delete a long-term memory only when the user explicitly asks to forget it."
@@ -308,9 +301,7 @@ class ForgetMemoryTool:
             if self._prepared is None:
                 raise MemoryStoreError("Memory operation was not prepared.")
             self.store.commit_delete(self._prepared)
-            return ToolResult.success(
-                {"id": self._prepared.before.id, "deleted": True}
-            )
+            return ToolResult.success({"id": self._prepared.before.id, "deleted": True})
         except MemoryStoreError as error:
             return _failure(error)
         finally:

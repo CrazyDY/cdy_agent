@@ -80,7 +80,9 @@ def test_missing_skills_directory_is_empty_and_not_created(tmp_path: Path) -> No
     assert not (tmp_path / ".cdy-agent").exists()
 
 
-def test_discovers_sorted_metadata_instructions_and_optional_tools(tmp_path: Path) -> None:
+def test_discovers_sorted_metadata_instructions_and_optional_tools(
+    tmp_path: Path,
+) -> None:
     write_skill(tmp_path, "zeta", "# Zeta")
     alpha = write_skill(tmp_path, "alpha", "# Alpha")
     (alpha / "tools.py").write_text("def create_tools(workspace): return []\n")
@@ -171,7 +173,9 @@ def discover_skills(workspace: Path) -> SkillDiscovery:
         _require_safe(root, workspace, directory=True)
         entries = sorted(root.iterdir(), key=lambda path: path.name)
     except (InvalidSkillError, OSError):
-        diagnostic = SkillDiagnostic("skills", "invalid_skills_root", "Skills root is invalid.")
+        diagnostic = SkillDiagnostic(
+            "skills", "invalid_skills_root", "Skills root is invalid."
+        )
         return SkillDiscovery((), (diagnostic,))
 
     skills: list[DiscoveredSkill] = []
@@ -249,7 +253,7 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
     description = values["description"].strip()
     if not description or len(description) > 500:
         raise InvalidSkillError("Skill description must be 1 to 500 characters.")
-    instructions = "\n".join(lines[closing + 1:]).strip()
+    instructions = "\n".join(lines[closing + 1 :]).strip()
     if not instructions:
         raise InvalidSkillError("Skill instructions must not be empty.")
     return SkillMetadata(values["name"], description), instructions
@@ -308,7 +312,10 @@ def test_rejects_oversized_skill_and_symlinked_tools(tmp_path: Path) -> None:
 
     discovery = discover_skills(tmp_path)
 
-    assert [item.entry for item in discovery.diagnostics] == ["linked_tools", "oversized"]
+    assert [item.entry for item in discovery.diagnostics] == [
+        "linked_tools",
+        "oversized",
+    ]
 
 
 def test_rejects_symlinked_skills_root(tmp_path: Path) -> None:
@@ -356,7 +363,11 @@ def test_register_many_adds_valid_tools_in_order() -> None:
     result = registry.register_many([EchoTool(name="second"), EchoTool(name="third")])
 
     assert result == ToolResult.success({"names": ["second", "third"]})
-    assert [item["name"] for item in registry.definitions] == ["first", "second", "third"]
+    assert [item["name"] for item in registry.definitions] == [
+        "first",
+        "second",
+        "third",
+    ]
 
 
 def test_register_many_is_atomic_on_name_conflict() -> None:
@@ -478,8 +489,10 @@ def test_instruction_only_skill_activates_without_confirmation(tmp_path: Path) -
     second = manager.activate("content-summary")
 
     assert first.data == {
-        "name": "content-summary", "status": "activated",
-        "instructions": "# content-summary", "tools": [],
+        "name": "content-summary",
+        "status": "activated",
+        "instructions": "# content-summary",
+        "tools": [],
     }
     assert second.data["status"] == "already_active"
     assert confirmations == []
@@ -542,7 +555,9 @@ class SkillManager:
         skill = self._skills.get(name)
         if skill is None:
             if any(item.entry == name for item in self._diagnostics):
-                return ToolResult.failure("invalid_skill", f"Skill '{name}' is invalid.")
+                return ToolResult.failure(
+                    "invalid_skill", f"Skill '{name}' is invalid."
+                )
             return ToolResult.failure("unknown_skill", f"Unknown Skill: {name}.")
         if name in self._active:
             return self._success(skill, "already_active", self._active[name])
@@ -554,12 +569,14 @@ class SkillManager:
     def _success(
         self, skill: DiscoveredSkill, status: str, names: tuple[str, ...]
     ) -> ToolResult:
-        return ToolResult.success({
-            "name": skill.metadata.name,
-            "status": status,
-            "instructions": skill.instructions,
-            "tools": list(names),
-        })
+        return ToolResult.success(
+            {
+                "name": skill.metadata.name,
+                "status": status,
+                "instructions": skill.instructions,
+                "tools": list(names),
+            }
+        )
 
     def _activate_tools(self, skill: DiscoveredSkill) -> ToolResult:
         raise NotImplementedError
@@ -569,7 +586,7 @@ class SkillManager:
 
 ```python
 # append to tests/test_skill_manager.py
-ECHO_TOOL = '''
+ECHO_TOOL = """
 from cdy_agent.tools.base import ToolResult
 class Echo:
     name = "skill_echo"
@@ -580,33 +597,44 @@ class Echo:
     def confirmation_description(self, arguments): return "Echo."
     def execute(self, arguments): return ToolResult.success(arguments)
 def create_tools(workspace): return [Echo()]
-'''
+"""
 
 
-def test_python_skill_requires_one_confirmation_and_registers_tool(tmp_path: Path) -> None:
+def test_python_skill_requires_one_confirmation_and_registers_tool(
+    tmp_path: Path,
+) -> None:
     write_skill(tmp_path, "python_skill", ECHO_TOOL)
     requests = []
     registry = ToolRegistry([])
-    manager = SkillManager(tmp_path, registry, lambda request: requests.append(request) or True)
+    manager = SkillManager(
+        tmp_path, registry, lambda request: requests.append(request) or True
+    )
 
     assert manager.activate("python_skill").data["tools"] == ["skill_echo"]
     assert manager.activate("python_skill").data["status"] == "already_active"
     assert len(requests) == 1
     assert requests[0].tool_name == "activate_skill"
-    assert str(tmp_path / ".cdy-agent/skills/python_skill/tools.py") in requests[0].description
+    assert (
+        str(tmp_path / ".cdy-agent/skills/python_skill/tools.py")
+        in requests[0].description
+    )
     assert [item["name"] for item in registry.definitions] == ["skill_echo"]
 
 
 def test_denied_or_broken_python_skill_does_not_mutate_registry(tmp_path: Path) -> None:
     write_skill(tmp_path, "denied", ECHO_TOOL)
     denied_registry = ToolRegistry([])
-    denied = SkillManager(tmp_path, denied_registry, lambda request: False).activate("denied")
+    denied = SkillManager(tmp_path, denied_registry, lambda request: False).activate(
+        "denied"
+    )
     assert denied.code == "approval_denied"
     assert denied_registry.definitions == ()
 
     write_skill(tmp_path, "broken", "raise RuntimeError('secret detail')\n")
     broken_registry = ToolRegistry([])
-    broken = SkillManager(tmp_path, broken_registry, lambda request: True).activate("broken")
+    broken = SkillManager(tmp_path, broken_registry, lambda request: True).activate(
+        "broken"
+    )
     assert broken.code == "load_failed"
     assert "secret detail" not in (broken.message or "")
     assert broken_registry.definitions == ()
@@ -773,13 +801,21 @@ class ListSkillsTool:
     manager: SkillManager
     name: str = "list_skills"
     description: str = "List workspace Skills available for optional activation."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object", "properties": {}, "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = False
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
-        return None if not arguments else ToolResult.failure("invalid_arguments", "No arguments are accepted.")
+        return (
+            None
+            if not arguments
+            else ToolResult.failure("invalid_arguments", "No arguments are accepted.")
+        )
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         return "List workspace Skills."
@@ -793,18 +829,28 @@ class ListSkillsTool:
 class ActivateSkillTool:
     manager: SkillManager
     name: str = "activate_skill"
-    description: str = "Activate one workspace Skill and receive its instructions and tools."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object",
-        "properties": {"name": {"type": "string"}},
-        "required": ["name"],
-        "additionalProperties": False,
-    })
+    description: str = (
+        "Activate one workspace Skill and receive its instructions and tools."
+    )
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = False
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
-        if set(arguments) != {"name"} or not isinstance(arguments["name"], str) or NAME_PATTERN.fullmatch(arguments["name"]) is None:
-            return ToolResult.failure("invalid_arguments", "name must be a valid Skill name.")
+        if (
+            set(arguments) != {"name"}
+            or not isinstance(arguments["name"], str)
+            or NAME_PATTERN.fullmatch(arguments["name"]) is None
+        ):
+            return ToolResult.failure(
+                "invalid_arguments", "name must be a valid Skill name."
+            )
         return None
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
@@ -815,7 +861,9 @@ class ActivateSkillTool:
         return invalid or self.manager.activate(arguments["name"])
 
 
-def create_skill_tools(manager: SkillManager) -> tuple[ListSkillsTool, ActivateSkillTool]:
+def create_skill_tools(
+    manager: SkillManager,
+) -> tuple[ListSkillsTool, ActivateSkillTool]:
     return ListSkillsTool(manager), ActivateSkillTool(manager)
 ```
 
@@ -894,6 +942,7 @@ Expected: the registration assertion fails because the two tools are absent.
 # add imports in src/cdy_agent/cli.py
 from .skills import SkillManager, create_skill_tools
 
+
 # replace _create_agent body
 def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     """Construct the CLI's shared model-and-local-tools boundary."""
@@ -935,20 +984,36 @@ def test_agent_refreshes_definitions_after_registry_mutation() -> None:
         description = "Echo."
         parameters = {"type": "object", "properties": {}}
         requires_confirmation = False
-        def preflight(self, arguments): return None
-        def confirmation_description(self, arguments): return "Echo."
-        def execute(self, arguments): return ToolResult.success(arguments)
+
+        def preflight(self, arguments):
+            return None
+
+        def confirmation_description(self, arguments):
+            return "Echo."
+
+        def execute(self, arguments):
+            return ToolResult.success(arguments)
 
     registry = ToolRegistry([])
     registry.register_many([AddTool(registry)])
-    gateway = FakeGateway([
-        ToolCallResponse((ToolCall("1", "add_tool", "{}"),), ResponsesContinuation("next")),
-        FinalResponse("done"),
-    ])
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "add_tool", "{}"),), ResponsesContinuation("next")
+            ),
+            FinalResponse("done"),
+        ]
+    )
 
-    assert Agent(gateway, registry, lambda request: True).run([Message("user", "go")]) == "done"
+    assert (
+        Agent(gateway, registry, lambda request: True).run([Message("user", "go")])
+        == "done"
+    )
     assert [item["name"] for item in gateway.calls[0]["tools"]] == ["add_tool"]
-    assert [item["name"] for item in gateway.calls[1]["tools"]] == ["add_tool", "dynamic_echo"]
+    assert [item["name"] for item in gateway.calls[1]["tools"]] == [
+        "add_tool",
+        "dynamic_echo",
+    ]
 ```
 
 Add the exact import to `tests/test_agent.py`:

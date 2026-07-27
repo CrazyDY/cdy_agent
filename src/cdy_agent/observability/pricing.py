@@ -42,9 +42,7 @@ def resolve_pricing(workspace_config: WorkspaceConfig | None = None) -> Pricing 
     return Pricing(*values)
 
 
-def estimate_cost(
-    usage: TokenUsage, pricing: Pricing | None
-) -> EstimatedCost | None:
+def estimate_cost(usage: TokenUsage, pricing: Pricing | None) -> EstimatedCost | None:
     if pricing is None:
         return None
     return EstimatedCost(

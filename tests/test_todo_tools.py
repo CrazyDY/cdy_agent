@@ -13,7 +13,6 @@ from cdy_agent.tools.todos import (
     ListTodosTool,
 )
 
-
 TODO_ID = "00000000-0000-4000-8000-000000000020"
 OTHER_TODO_ID = "00000000-0000-4000-8000-000000000021"
 CREATED = "2026-07-18T04:00:00Z"
@@ -24,9 +23,7 @@ def build_tools(tmp_path: Path):
     store = PersonalStore(tmp_path)
     return (
         store,
-        CreateTodoTool(
-            store, id_factory=lambda: TODO_ID, now_factory=lambda: CREATED
-        ),
+        CreateTodoTool(store, id_factory=lambda: TODO_ID, now_factory=lambda: CREATED),
         ListTodosTool(store),
         CompleteTodoTool(store, now_factory=lambda: COMPLETED),
         DeleteTodoTool(store),
@@ -43,8 +40,7 @@ def test_todo_tool_schemas_and_confirmation_flags(tmp_path: Path) -> None:
         "delete_todo",
     ]
     assert [
-        tool.requires_confirmation
-        for tool in (create, list_todos, complete, delete)
+        tool.requires_confirmation for tool in (create, list_todos, complete, delete)
     ] == [True, False, True, True]
     assert [tool.parameters for tool in (create, list_todos, complete, delete)] == [
         {
@@ -102,9 +98,7 @@ def test_todo_lifecycle(tmp_path: Path) -> None:
         "completed": True,
         "completed_at": COMPLETED,
     }
-    assert confirmations[1].description == (
-        f"Complete Todo {TODO_ID}: Write tests."
-    )
+    assert confirmations[1].description == (f"Complete Todo {TODO_ID}: Write tests.")
 
     deleted = registry.execute(
         ToolCall("3", "delete_todo", f'{{"todo_id":"{TODO_ID}"}}'),
@@ -155,10 +149,7 @@ def test_todo_preflight_rejects_invalid_missing_and_completed_items(
 
     assert create.execute({"text": "x"}).ok
     assert complete.execute({"todo_id": TODO_ID}).ok
-    assert (
-        complete.preflight({"todo_id": TODO_ID}).code
-        == "todo_already_completed"
-    )
+    assert complete.preflight({"todo_id": TODO_ID}).code == "todo_already_completed"
     assert complete.execute({"todo_id": TODO_ID}).code == "todo_already_completed"
 
 
@@ -166,9 +157,7 @@ def test_todo_preflight_rejects_invalid_missing_and_completed_items(
     "text",
     ["x" * 1001, "\ud800"],
 )
-def test_create_rejects_invalid_text_without_writing(
-    tmp_path: Path, text: str
-) -> None:
+def test_create_rejects_invalid_text_without_writing(tmp_path: Path, text: str) -> None:
     store, create, _, _, _ = build_tools(tmp_path)
 
     result = create.execute({"text": text})
@@ -232,8 +221,7 @@ def test_todo_tools_propagate_load_errors(tmp_path: Path) -> None:
     ]
 
     assert all(
-        result is not None and result.code == "invalid_store"
-        for result in results
+        result is not None and result.code == "invalid_store" for result in results
     )
 
 
@@ -278,9 +266,7 @@ def test_todo_mutations_propagate_save_errors_and_preserve_store(
         id_factory=lambda: OTHER_TODO_ID,
         now_factory=lambda: CREATED,
     )
-    failing_complete = CompleteTodoTool(
-        failing_store, now_factory=lambda: COMPLETED
-    )
+    failing_complete = CompleteTodoTool(failing_store, now_factory=lambda: COMPLETED)
     failing_delete = DeleteTodoTool(failing_store)
 
     assert failing_create.execute({"text": "Other"}).code == "store_error"
@@ -410,9 +396,7 @@ def test_create_does_not_persist_noncanonical_generated_values(
 def test_complete_does_not_persist_non_utc_completion_time(tmp_path: Path) -> None:
     store, create, _, _, _ = build_tools(tmp_path)
     assert create.execute({"text": "Write tests"}).ok
-    complete = CompleteTodoTool(
-        store, now_factory=lambda: "2026-07-18T13:00:00+08:00"
-    )
+    complete = CompleteTodoTool(store, now_factory=lambda: "2026-07-18T13:00:00+08:00")
 
     result = complete.execute({"todo_id": TODO_ID})
 

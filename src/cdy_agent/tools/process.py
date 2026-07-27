@@ -5,10 +5,10 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Mapping, Sequence
-
+from typing import BinaryIO
 
 MAX_OUTPUT_BYTES = 64 * 1024
 
@@ -45,9 +45,7 @@ def sanitized_environment(
     return environment
 
 
-def limited_output(
-    output: str, limit: int = MAX_OUTPUT_BYTES
-) -> tuple[str, bool]:
+def limited_output(output: str, limit: int = MAX_OUTPUT_BYTES) -> tuple[str, bool]:
     encoded = output.encode("utf-8")
     if len(encoded) <= limit:
         return output, False
@@ -177,9 +175,7 @@ def _wait_for_process(
     process.wait(timeout=remaining)
 
 
-def _join_threads(
-    threads: tuple[threading.Thread, ...], deadline: float
-) -> bool:
+def _join_threads(threads: tuple[threading.Thread, ...], deadline: float) -> bool:
     for thread in threads:
         if not thread.is_alive():
             continue
@@ -227,9 +223,7 @@ def _close_stream(stream: BinaryIO) -> None:
         pass
 
 
-def _reap_process(
-    process: subprocess.Popen[bytes], deadline: float
-) -> None:
+def _reap_process(process: subprocess.Popen[bytes], deadline: float) -> None:
     if process.poll() is not None:
         return
     remaining = deadline - time.monotonic()
@@ -281,9 +275,7 @@ def _terminate_windows_job(handle: int) -> bool:
             ctypes.c_void_p,
             ctypes.c_uint,
         )
-        return bool(
-            kernel32.TerminateJobObject(ctypes.c_void_p(handle), 1)
-        )
+        return bool(kernel32.TerminateJobObject(ctypes.c_void_p(handle), 1))
     except (AttributeError, OSError, TypeError, ValueError):
         return False
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Literal
 
 ResourceCategory = Literal["scripts", "references", "assets"]
 
@@ -14,9 +15,7 @@ class SkillMetadata:
     description: str
     license: str | None = None
     compatibility: str | None = None
-    metadata: Mapping[str, str] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    metadata: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     allowed_tools: str | None = None
 
 

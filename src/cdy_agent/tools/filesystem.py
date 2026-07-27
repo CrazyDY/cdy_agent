@@ -6,7 +6,6 @@ from typing import Any
 
 from cdy_agent.tools.base import ToolResult
 
-
 MAX_READ_BYTES = 1024 * 1024
 
 
@@ -89,8 +88,10 @@ class ReadFileTool:
         try:
             content = content_bytes.decode("utf-8")
         except UnicodeDecodeError as error:
-            if truncated and error.reason == "unexpected end of data" and error.end == len(
-                content_bytes
+            if (
+                truncated
+                and error.reason == "unexpected end of data"
+                and error.end == len(content_bytes)
             ):
                 content = content_bytes[: error.start].decode("utf-8")
             else:

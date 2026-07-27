@@ -73,13 +73,17 @@ def _load_cases(path: Path) -> tuple[_EvalCase, ...]:
         raise EvalFileError(f"Could not read eval file: {exc}") from None
 
     try:
-        raw = json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)
+        raw = (
+            json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)
+        )
     except (json.JSONDecodeError, yaml.YAMLError) as exc:
         raise EvalFileError(f"Invalid eval file: {exc}") from None
 
     if not isinstance(raw, dict) or not isinstance(raw.get("cases"), list):
         raise EvalFileError("Eval file must contain a cases list.")
-    return tuple(_parse_case(index, raw_case) for index, raw_case in enumerate(raw["cases"], 1))
+    return tuple(
+        _parse_case(index, raw_case) for index, raw_case in enumerate(raw["cases"], 1)
+    )
 
 
 def _parse_case(index: int, raw_case: object) -> _EvalCase:
@@ -96,9 +100,7 @@ def _parse_case(index: int, raw_case: object) -> _EvalCase:
         raise EvalFileError(f"Eval case {index} expect.exact must be text.")
     contains = _parse_contains(expect.get("contains"), index)
     if exact is None and not contains:
-        raise EvalFileError(
-            f"Eval case {index} expect must include exact or contains."
-        )
+        raise EvalFileError(f"Eval case {index} expect must include exact or contains.")
     return _EvalCase(name, prompt, exact, contains)
 
 

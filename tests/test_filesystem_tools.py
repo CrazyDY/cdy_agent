@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from cdy_agent.tools.filesystem import ReadFileTool, WriteFileTool, resolve_workspace
+from cdy_agent.tools.filesystem import (
+    ReadFileTool,
+    WriteFileTool,
+    resolve_workspace,
+)
 
 
 def test_resolve_workspace_requires_directory(tmp_path: Path) -> None:
@@ -104,9 +108,7 @@ def test_write_file_creates_and_explicitly_overwrites(tmp_path: Path) -> None:
     assert denied.code == "overwrite_not_allowed"
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "hello"
 
-    replaced = tool.execute(
-        {"path": "note.txt", "content": "new", "overwrite": True}
-    )
+    replaced = tool.execute({"path": "note.txt", "content": "new", "overwrite": True})
     assert replaced.ok is True
     assert replaced.data["overwritten"] is True
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "new"
@@ -209,7 +211,10 @@ def test_write_symlinks_stay_in_workspace_or_are_rejected(tmp_path: Path) -> Non
     assert tool.execute({"path": "parent-link/new.txt", "content": "ok"}).ok
     assert tool.execute({"path": "file-link", "content": "one"}).ok
     assert tool.execute({"path": "file-link", "content": "two", "overwrite": True}).ok
-    assert tool.execute({"path": "escape/new.txt", "content": "no"}).code == "path_outside_workspace"
+    assert (
+        tool.execute({"path": "escape/new.txt", "content": "no"}).code
+        == "path_outside_workspace"
+    )
 
 
 def test_registry_rejects_bad_writes_before_confirmation(tmp_path: Path) -> None:
@@ -251,7 +256,8 @@ def test_registry_confirms_real_write_create_and_overwrite(tmp_path: Path) -> No
     assert created.ok and len(requests) == 1
     denied = registry.execute(
         ToolCall(
-            "2", "write_file",
+            "2",
+            "write_file",
             '{"path":"note.txt","content":"denied","overwrite":true}',
         ),
         lambda request: requests.append(request) or False,
@@ -260,7 +266,8 @@ def test_registry_confirms_real_write_create_and_overwrite(tmp_path: Path) -> No
     assert target.read_text() == "old"
     approved = registry.execute(
         ToolCall(
-            "3", "write_file",
+            "3",
+            "write_file",
             '{"path":"note.txt","content":"new","overwrite":true}',
         ),
         lambda request: requests.append(request) or True,
@@ -277,9 +284,7 @@ def test_write_file_maps_oserror_to_structured_error(
 
     monkeypatch.setattr(Path, "write_text", fail_write)
 
-    result = WriteFileTool(tmp_path).execute(
-        {"path": "note.txt", "content": "content"}
-    )
+    result = WriteFileTool(tmp_path).execute({"path": "note.txt", "content": "content"})
 
     assert result.code == "file_error"
     assert "write failed" in result.message

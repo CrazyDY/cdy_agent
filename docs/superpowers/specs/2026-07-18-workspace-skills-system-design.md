@@ -76,8 +76,7 @@ from pathlib import Path
 from cdy_agent.tools.base import Tool
 
 
-def create_tools(workspace: Path) -> Iterable[Tool]:
-    ...
+def create_tools(workspace: Path) -> Iterable[Tool]: ...
 ```
 
 模块通过包含 Skill 名和进程内唯一标识的内部模块名加载，避免不同 Skill 之间发生普通模块名冲突。加载器把当前解析后的 workspace 传给 `create_tools()`；Skill 工具自行使用这个路径建立所需的文件边界。首版只加载单个 `tools.py`，不把 Skill 目录加入 `sys.path`，也不支持相对导入同目录的辅助模块。

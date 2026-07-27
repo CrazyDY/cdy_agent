@@ -250,9 +250,7 @@ def test_shell_maps_nonzero_exit_to_command_failed(tmp_path: Path) -> None:
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 2, "out", "err")
 
-    result = ShellTool(tmp_path, runner=runner).execute(
-        {"argv": ["git", "diff"]}
-    )
+    result = ShellTool(tmp_path, runner=runner).execute({"argv": ["git", "diff"]})
     assert result.ok is False
     assert result.code == "command_failed"
     assert "2" in (result.message or "")
@@ -294,6 +292,7 @@ def test_shell_caps_utf8_bytes_and_drops_only_incomplete_codepoint(
         **kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 0, output, "你" * 30000)
+
     result = ShellTool(tmp_path, runner=runner).execute({"argv": ["pwd"]})
     assert result.data["stdout"] == "a" * (MAX_OUTPUT_BYTES - 1)
     assert len(result.data["stderr"].encode()) <= MAX_OUTPUT_BYTES
@@ -384,12 +383,11 @@ def test_shell_confirmation_and_execution_use_effective_argv(
     calls: list[list[str]] = []
     tool = ShellTool(
         tmp_path,
-        runner=lambda argv, **kwargs: calls.append(argv)
-        or subprocess.CompletedProcess(argv, 0, "", ""),
+        runner=lambda argv, **kwargs: (
+            calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+        ),
     )
-    assert repr(effective_argv) in tool.confirmation_description(
-        {"argv": user_argv}
-    )
+    assert repr(effective_argv) in tool.confirmation_description({"argv": user_argv})
     assert tool.execute({"argv": user_argv}).ok
     assert calls == [effective_argv]
 
@@ -415,8 +413,9 @@ def test_shell_retains_safe_sed_scripts(
     calls: list[list[str]] = []
     tool = ShellTool(
         tmp_path,
-        runner=lambda argv, **kwargs: calls.append(argv)
-        or subprocess.CompletedProcess(argv, 0, "", ""),
+        runner=lambda argv, **kwargs: (
+            calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+        ),
     )
     assert tool.execute({"argv": argv}).ok
     assert calls == [expected]
@@ -432,8 +431,9 @@ def test_shell_arbitrary_command_requires_confirmation_in_registry(
     requests: list[object] = []
     tool = ShellTool(
         tmp_path,
-        runner=lambda argv, **kwargs: calls.append(argv)
-        or subprocess.CompletedProcess(argv, 0, "", ""),
+        runner=lambda argv, **kwargs: (
+            calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+        ),
     )
 
     denied = ToolRegistry([tool]).execute(
@@ -456,8 +456,9 @@ def test_shell_rejects_nul_before_confirmation_and_runner(
     requests: list[object] = []
     tool = ShellTool(
         tmp_path,
-        runner=lambda argv, **kwargs: calls.append(argv)
-        or subprocess.CompletedProcess(argv, 0, "", ""),
+        runner=lambda argv, **kwargs: (
+            calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+        ),
     )
 
     rejected = ToolRegistry([tool]).execute(
@@ -478,22 +479,21 @@ def test_shell_allow_always_persists_final_argv_before_running(
 
     python = _bind_executable(monkeypatch, tmp_path, "python")
     calls: list[list[str]] = []
-    registry = ToolRegistry([
-        ShellTool(
-            tmp_path,
-            runner=lambda argv, **kwargs: calls.append(argv)
-            or subprocess.CompletedProcess(argv, 0, "", ""),
-        )
-    ])
+    registry = ToolRegistry(
+        [
+            ShellTool(
+                tmp_path,
+                runner=lambda argv, **kwargs: (
+                    calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+                ),
+            )
+        ]
+    )
     call = ToolCall("1", "shell", '{"argv":["python","script.py"]}')
 
-    first = registry.execute(
-        call, lambda request: ConfirmationDecision.ALLOW_ALWAYS
-    )
+    first = registry.execute(call, lambda request: ConfirmationDecision.ALLOW_ALWAYS)
     callbacks: list[object] = []
-    second = registry.execute(
-        call, lambda request: callbacks.append(request) or False
-    )
+    second = registry.execute(call, lambda request: callbacks.append(request) or False)
 
     assert first.ok and second.ok
     assert calls == [
@@ -511,29 +511,33 @@ def test_shell_persists_and_executes_resolved_builtin_argv(
 
     rg = _bind_executable(monkeypatch, tmp_path, "rg")
     calls: list[list[str]] = []
-    registry = ToolRegistry([
-        ShellTool(
-            tmp_path,
-            runner=lambda argv, **kwargs: calls.append(argv)
-            or subprocess.CompletedProcess(argv, 0, "", ""),
-        )
-    ])
+    registry = ToolRegistry(
+        [
+            ShellTool(
+                tmp_path,
+                runner=lambda argv, **kwargs: (
+                    calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+                ),
+            )
+        ]
+    )
     call = ToolCall(
         "1",
         "shell",
         '{"argv":["rg","--pre","python","needle","."]}',
     )
 
-    first = registry.execute(
-        call, lambda request: ConfirmationDecision.ALLOW_ALWAYS
-    )
+    first = registry.execute(call, lambda request: ConfirmationDecision.ALLOW_ALWAYS)
     callbacks: list[object] = []
-    second = registry.execute(
-        call, lambda request: callbacks.append(request) or False
-    )
+    second = registry.execute(call, lambda request: callbacks.append(request) or False)
 
     expected = [
-        str(rg), "--no-config", "--pre", "python", "needle", ".",
+        str(rg),
+        "--no-config",
+        "--pre",
+        "python",
+        "needle",
+        ".",
     ]
     assert first.ok and second.ok
     assert calls == [expected, expected]
@@ -543,13 +547,17 @@ def test_shell_persists_and_executes_resolved_builtin_argv(
 @pytest.mark.parametrize(
     ("command", "arguments", "effective_tail"),
     [
-        ("rg", ["rg", "--pre", "python", "needle", "."], [
-            "--no-config",
-            "--pre",
-            "python",
-            "needle",
-            ".",
-        ]),
+        (
+            "rg",
+            ["rg", "--pre", "python", "needle", "."],
+            [
+                "--no-config",
+                "--pre",
+                "python",
+                "needle",
+                ".",
+            ],
+        ),
         ("python", ["python", "-c", "print(1)"], ["-c", "print(1)"]),
     ],
 )
@@ -580,13 +588,16 @@ def test_registry_binds_prompt_persistence_and_spawn_to_one_executable(
         monkeypatch.setenv("PATHEXT", ".EXE")
     calls: list[list[str]] = []
     requests: list[object] = []
-    registry = ToolRegistry([
-        ShellTool(
-            tmp_path,
-            runner=lambda argv, **kwargs: calls.append(argv)
-            or subprocess.CompletedProcess(argv, 0, "", ""),
-        )
-    ])
+    registry = ToolRegistry(
+        [
+            ShellTool(
+                tmp_path,
+                runner=lambda argv, **kwargs: (
+                    calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+                ),
+            )
+        ]
+    )
     call = ToolCall(
         "1",
         "shell",
@@ -604,9 +615,7 @@ def test_registry_binds_prompt_persistence_and_spawn_to_one_executable(
     second_result = registry.execute(call, lambda request: False)
     expected = [str(first.resolve()), *effective_tail]
     stored = json.loads(
-        (
-            tmp_path / ".cdy-agent" / "shell-approvals.json"
-        ).read_text(encoding="utf-8")
+        (tmp_path / ".cdy-agent" / "shell-approvals.json").read_text(encoding="utf-8")
     )
 
     assert first_result.ok
@@ -624,13 +633,16 @@ def test_confirmation_argument_mutation_cannot_change_prepared_shell_command(
 
     python = _bind_executable(monkeypatch, tmp_path, "python")
     calls: list[list[str]] = []
-    registry = ToolRegistry([
-        ShellTool(
-            tmp_path,
-            runner=lambda argv, **kwargs: calls.append(argv)
-            or subprocess.CompletedProcess(argv, 0, "", ""),
-        )
-    ])
+    registry = ToolRegistry(
+        [
+            ShellTool(
+                tmp_path,
+                runner=lambda argv, **kwargs: (
+                    calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+                ),
+            )
+        ]
+    )
 
     def mutate(request: object) -> ConfirmationDecision:
         request.arguments["argv"][:] = ["other", "--mutated"]
@@ -643,9 +655,9 @@ def test_confirmation_argument_mutation_cannot_change_prepared_shell_command(
 
     assert result.ok
     assert calls == [[str(python), "script.py"]]
-    assert ShellApprovalStore(tmp_path).contains(
-        [str(python), "script.py"]
-    ).data is True
+    assert (
+        ShellApprovalStore(tmp_path).contains([str(python), "script.py"]).data is True
+    )
 
 
 def test_prepared_context_binds_workspace_policy_and_runner(
@@ -710,8 +722,9 @@ def test_unresolved_executable_fails_after_confirmation_without_runner(
     calls: list[list[str]] = []
     tool = ShellTool(
         tmp_path,
-        runner=lambda argv, **kwargs: calls.append(argv)
-        or subprocess.CompletedProcess(argv, 0, "", ""),
+        runner=lambda argv, **kwargs: (
+            calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+        ),
     )
 
     result = ToolRegistry([tool]).execute(

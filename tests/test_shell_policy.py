@@ -10,11 +10,20 @@ from cdy_agent.tools.shell_policy import (
     ShellExecutionPolicy,
 )
 
-
-BUILTIN_COMMANDS = frozenset({
-    "pwd", "ls", "rg", "grep", "head", "tail",
-    "wc", "sort", "uniq", "git",
-})
+BUILTIN_COMMANDS = frozenset(
+    {
+        "pwd",
+        "ls",
+        "rg",
+        "grep",
+        "head",
+        "tail",
+        "wc",
+        "sort",
+        "uniq",
+        "git",
+    }
+)
 
 
 def _bind_executables(
@@ -77,9 +86,7 @@ def test_policy_builds_final_rg_and_git_argv(
     status = policy.prepare({"argv": ["git", "status", "--short"]})
     diff = policy.prepare({"argv": ["git", "diff", "--", "file.py"]})
 
-    assert rg.argv == (
-        str(executables["rg"]), "--no-config", "needle", "."
-    )
+    assert rg.argv == (str(executables["rg"]), "--no-config", "needle", ".")
     assert status.argv == (
         str(executables["git"]),
         "--no-pager",
@@ -109,23 +116,29 @@ def test_policy_hardens_git_after_global_options_and_for_bare_git(
     git = _bind_executables(monkeypatch, tmp_path, "git")["git"]
     policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
 
-    with_directory = policy.prepare({
-        "argv": ["git", "-C", ".", "diff", "--", "file.py"],
-    })
-    with_override = policy.prepare({
-        "argv": ["git", "-c", "core.fsmonitor=true", "diff"],
-    })
-    with_long_options = policy.prepare({
-        "argv": [
-            "git",
-            "--git-dir",
-            ".git",
-            "--work-tree",
-            ".",
-            "status",
-            "--short",
-        ],
-    })
+    with_directory = policy.prepare(
+        {
+            "argv": ["git", "-C", ".", "diff", "--", "file.py"],
+        }
+    )
+    with_override = policy.prepare(
+        {
+            "argv": ["git", "-c", "core.fsmonitor=true", "diff"],
+        }
+    )
+    with_long_options = policy.prepare(
+        {
+            "argv": [
+                "git",
+                "--git-dir",
+                ".git",
+                "--work-tree",
+                ".",
+                "status",
+                "--short",
+            ],
+        }
+    )
     bare = policy.prepare({"argv": ["git"]})
 
     assert with_directory.argv == (
@@ -182,18 +195,20 @@ def test_policy_preserves_diff_safety_named_path_operands(
     git = _bind_executables(monkeypatch, tmp_path, "git")["git"]
     policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
 
-    prepared = policy.prepare({
-        "argv": [
-            "git",
-            "diff",
-            "--no-ext-diff",
-            "--stat",
-            "--no-textconv",
-            "--",
-            "--no-ext-diff",
-            "--no-textconv",
-        ],
-    })
+    prepared = policy.prepare(
+        {
+            "argv": [
+                "git",
+                "diff",
+                "--no-ext-diff",
+                "--stat",
+                "--no-textconv",
+                "--",
+                "--no-ext-diff",
+                "--no-textconv",
+            ],
+        }
+    )
 
     assert prepared.argv == (
         str(git),
@@ -278,8 +293,13 @@ def test_safe_workspace_read_commands_auto_approve(
         ["git", "diff", "--ext-diff"],
         ["git", "diff", "--textconv"],
         [
-            "git", "diff", "--unified", "--no-index",
-            "-U", "..", "README.md",
+            "git",
+            "diff",
+            "--unified",
+            "--no-index",
+            "-U",
+            "..",
+            "README.md",
         ],
         ["git", "diff", "--unified=invalid", "--", "README.md"],
         ["ls", "--unknown-option"],
@@ -335,9 +355,10 @@ def test_workspace_external_reads_require_confirmation(
         ),
     )
 
-    assert policy.classify(
-        {"argv": argv}
-    ).decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    assert (
+        policy.classify({"argv": argv}).decision
+        is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    )
 
 
 def test_symlink_to_external_input_requires_confirmation(
@@ -358,9 +379,10 @@ def test_symlink_to_external_input_requires_confirmation(
         trusted_executable_roots=(head.parent,),
     )
 
-    assert policy.classify(
-        {"argv": ["head", "linked.txt"]}
-    ).decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    assert (
+        policy.classify({"argv": ["head", "linked.txt"]}).decision
+        is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    )
 
 
 def test_unavailable_builtin_requires_confirmation(
@@ -405,9 +427,7 @@ def test_workspace_local_builtin_shadow_requires_confirmation(
 
     assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
     assert result.command is not None
-    assert result.command.argv == (
-        str(shadow), "--no-config", "needle", "."
-    )
+    assert result.command.argv == (str(shadow), "--no-config", "needle", ".")
 
 
 def test_external_path_wrapper_requires_confirmation(
@@ -420,9 +440,7 @@ def test_external_path_wrapper_requires_confirmation(
 
     assert result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
     assert result.command is not None
-    assert result.command.argv == (
-        str(rg), "--no-config", "needle", "."
-    )
+    assert result.command.argv == (str(rg), "--no-config", "needle", ".")
 
 
 @pytest.mark.skipif(
@@ -463,9 +481,7 @@ def test_trusted_system_executable_auto_approves_safe_builtin(
 
     assert result.decision is ShellExecutionDecision.AUTO_APPROVE
     assert result.command is not None
-    assert result.command.argv == (
-        str(rg), "--no-config", "needle", "."
-    )
+    assert result.command.argv == (str(rg), "--no-config", "needle", ".")
 
 
 def test_script_wrapper_in_trusted_root_requires_confirmation(

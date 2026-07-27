@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import os
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_API_MODE = "responses"
 DEFAULT_SYSTEM_PROMPT = (
     "You are CDY Agent, a local personal AI assistant. Follow the user's "
     "instructions, use local tools only when useful, and avoid exposing secrets."
+    f"\n**Current OS**: {platform.system()} {platform.release()}"
 )
 SUPPORTED_API_MODES = ("responses", "chat_completions")
 CONFIG_RELATIVE_PATH = Path(".cdy-agent") / "config.yaml"

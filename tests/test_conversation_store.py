@@ -14,7 +14,6 @@ from cdy_agent.memory import (
     InvalidConversationStoreError,
 )
 
-
 FIXED_TIME = datetime(2026, 7, 18, 8, 30, tzinfo=timezone.utc)
 SESSION_ID = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
 
@@ -271,9 +270,7 @@ def test_corrupt_message_order_is_rejected_and_append_is_atomic(
     with pytest.raises(InvalidConversationStoreError, match="history is invalid"):
         store.load(session_id)
     with pytest.raises((InvalidConversationStoreError, ConversationStoreError)):
-        store.append_turn(
-            session_id, Message("user", "Two"), Message("assistant", "2")
-        )
+        store.append_turn(session_id, Message("user", "Two"), Message("assistant", "2"))
     with sqlite3.connect(database) as connection:
         count = connection.execute(
             "SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,)

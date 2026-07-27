@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 from .base import ToolResult
 from .personal_store import PersonalStore
-
 
 MAX_TODO_CHARACTERS = 1000
 
@@ -35,9 +35,7 @@ def _utf8_encodable(value: str) -> bool:
     return True
 
 
-def _find(
-    items: list[dict[str, Any]], todo_id: str
-) -> dict[str, Any] | None:
+def _find(items: list[dict[str, Any]], todo_id: str) -> dict[str, Any] | None:
     return next((item for item in items if item["id"] == todo_id), None)
 
 
@@ -62,9 +60,7 @@ def _validate_create(arguments: dict[str, Any]) -> ToolResult | None:
 
 
 def _validate_id(arguments: dict[str, Any]) -> ToolResult | None:
-    if set(arguments) != {"todo_id"} or not _valid_id(
-        arguments.get("todo_id")
-    ):
+    if set(arguments) != {"todo_id"} or not _valid_id(arguments.get("todo_id")):
         return ToolResult.failure(
             "invalid_arguments", "todo_id must be a canonical UUID."
         )
@@ -73,9 +69,7 @@ def _validate_id(arguments: dict[str, Any]) -> ToolResult | None:
 
 def _validate_empty(arguments: dict[str, Any]) -> ToolResult | None:
     if arguments:
-        return ToolResult.failure(
-            "invalid_arguments", "No arguments are accepted."
-        )
+        return ToolResult.failure("invalid_arguments", "No arguments are accepted.")
     return None
 
 
@@ -157,9 +151,7 @@ class ListTodosTool:
         loaded = self.store.load_todos()
         if not loaded.ok:
             return loaded
-        items = sorted(
-            loaded.data, key=lambda item: (item["created_at"], item["id"])
-        )
+        items = sorted(loaded.data, key=lambda item: (item["created_at"], item["id"]))
         return ToolResult.success([dict(item) for item in items])
 
 
@@ -197,11 +189,7 @@ class CompleteTodoTool:
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         loaded = self.store.load_todos()
-        todo = (
-            _find(loaded.data, arguments.get("todo_id", ""))
-            if loaded.ok
-            else None
-        )
+        todo = _find(loaded.data, arguments.get("todo_id", "")) if loaded.ok else None
         if todo is None:
             return "Complete Todo."
         return f"Complete Todo {todo['id']}: {todo['text']}."
@@ -256,11 +244,7 @@ class DeleteTodoTool:
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         loaded = self.store.load_todos()
-        todo = (
-            _find(loaded.data, arguments.get("todo_id", ""))
-            if loaded.ok
-            else None
-        )
+        todo = _find(loaded.data, arguments.get("todo_id", "")) if loaded.ok else None
         if todo is None:
             return "Delete Todo."
         return f"Delete Todo {todo['id']}: {todo['text']}."
@@ -275,9 +259,7 @@ class DeleteTodoTool:
         todo = _find(loaded.data, arguments["todo_id"])
         if todo is None:
             return ToolResult.failure("todo_not_found", "Todo was not found.")
-        remaining = [
-            item for item in loaded.data if item["id"] != todo["id"]
-        ]
+        remaining = [item for item in loaded.data if item["id"] != todo["id"]]
         saved = self.store.save_todos(remaining)
         if not saved.ok:
             return saved

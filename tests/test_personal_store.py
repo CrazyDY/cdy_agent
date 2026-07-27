@@ -5,7 +5,6 @@ import pytest
 
 from cdy_agent.tools.personal_store import PersonalStore
 
-
 NOTE = {
     "id": "00000000-0000-4000-8000-000000000001",
     "title": "Plan",
@@ -155,9 +154,7 @@ def test_save_existing_read_error_preserves_original_and_creates_no_temp(
 
 
 @pytest.mark.parametrize("version", [True, 1.0])
-def test_store_version_requires_integer_one(
-    tmp_path: Path, version: object
-) -> None:
+def test_store_version_requires_integer_one(tmp_path: Path, version: object) -> None:
     data_directory = tmp_path / ".cdy-agent"
     data_directory.mkdir()
     (data_directory / "notes.json").write_text(

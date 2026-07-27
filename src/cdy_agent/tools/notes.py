@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 from .base import ToolResult
 from .personal_store import PersonalStore
-
 
 MAX_TITLE_CHARACTERS = 200
 MAX_CONTENT_BYTES = 64 * 1024
@@ -35,9 +35,7 @@ def _utf8_size(value: str) -> int | None:
         return None
 
 
-def _find(
-    items: list[dict[str, Any]], note_id: str
-) -> dict[str, Any] | None:
+def _find(items: list[dict[str, Any]], note_id: str) -> dict[str, Any] | None:
     return next((item for item in items if item["id"] == note_id), None)
 
 
@@ -164,9 +162,7 @@ class ListNotesTool:
         loaded = self.store.load_notes()
         if not loaded.ok:
             return loaded
-        items = sorted(
-            loaded.data, key=lambda item: (item["created_at"], item["id"])
-        )
+        items = sorted(loaded.data, key=lambda item: (item["created_at"], item["id"]))
         return ToolResult.success(
             [
                 {key: item[key] for key in ("id", "title", "created_at")}
@@ -237,9 +233,7 @@ class DeleteNoteTool:
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         loaded = self.store.load_notes()
-        note = (
-            _find(loaded.data, arguments.get("note_id", "")) if loaded.ok else None
-        )
+        note = _find(loaded.data, arguments.get("note_id", "")) if loaded.ok else None
         if note is None:
             return "Delete note."
         return f"Delete note {note['id']} titled '{note['title']}'."

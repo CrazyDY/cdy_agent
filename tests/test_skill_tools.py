@@ -8,10 +8,12 @@ from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import cdy_agent.skills as skills_package
 import cdy_agent.skills.loader as skill_loader
-import pytest
 from cdy_agent.skills import SkillManager
+from cdy_agent.skills.models import SkillResource
 from cdy_agent.skills.tools import (
     ActivateSkillTool,
     ListSkillsTool,
@@ -20,7 +22,6 @@ from cdy_agent.skills.tools import (
     SearchSkillsTool,
     create_skill_tools,
 )
-from cdy_agent.skills.models import SkillResource
 from cdy_agent.tools.base import ToolCall, ToolResult
 from cdy_agent.tools.process import MAX_OUTPUT_BYTES
 from cdy_agent.tools.registry import ToolRegistry
@@ -81,9 +82,7 @@ def test_list_skills_accepts_only_empty_arguments() -> None:
 def test_activate_skill_requires_exactly_one_valid_name() -> None:
     tool = ActivateSkillTool(FakeManager())
 
-    assert tool.execute({"name": "research-skill"}).data == {
-        "name": "research-skill"
-    }
+    assert tool.execute({"name": "research-skill"}).data == {"name": "research-skill"}
     assert tool.preflight({}).code == "invalid_arguments"
     assert tool.preflight({"name": 1}).code == "invalid_arguments"
     assert tool.preflight({"name": "research-skill", "extra": True}).code == (
@@ -109,9 +108,7 @@ def test_search_skills_requires_query_and_accepts_optional_limit() -> None:
     assert tool.preflight({"query": ""}).code == "invalid_arguments"
     assert tool.preflight({"query": "x", "limit": 0}).code == "invalid_arguments"
     assert tool.preflight({"query": "x", "limit": 11}).code == "invalid_arguments"
-    assert tool.preflight({"query": "x", "extra": True}).code == (
-        "invalid_arguments"
-    )
+    assert tool.preflight({"query": "x", "extra": True}).code == ("invalid_arguments")
     assert tool.requires_confirmation is False
 
 
@@ -222,12 +219,8 @@ def test_read_skill_resource_returns_text_and_binary_metadata(
     manager.activate("runtime-skill")
     tool = ReadSkillResourceTool(manager)
 
-    text = tool.execute(
-        {"name": "runtime-skill", "path": "references/guide.md"}
-    )
-    binary = tool.execute(
-        {"name": "runtime-skill", "path": "assets/image.bin"}
-    )
+    text = tool.execute({"name": "runtime-skill", "path": "references/guide.md"})
+    binary = tool.execute({"name": "runtime-skill", "path": "assets/image.bin"})
 
     assert text.data == {
         "path": str(reference.resolve()),
@@ -346,9 +339,7 @@ def test_run_skill_script_resolves_one_script_and_never_uses_shell(
     manager.activate("runtime-skill")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append((argv, kwargs))
         return subprocess.CompletedProcess(argv, 0, "ok", "")
 
@@ -395,9 +386,7 @@ def test_run_skill_script_accepts_direct_executable_form(
     manager.activate("runtime-skill")
     seen: list[list[str]] = []
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         seen.append(argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -457,9 +446,7 @@ def test_run_skill_script_rejects_nul_in_argv(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("timeout", [1, 300])
-def test_run_skill_script_accepts_timeout_range(
-    tmp_path: Path, timeout: int
-) -> None:
+def test_run_skill_script_accepts_timeout_range(tmp_path: Path, timeout: int) -> None:
     _, directory = write_runtime_skill(tmp_path)
     script = directory / "scripts" / "run.py"
     script.parent.mkdir()
@@ -468,9 +455,7 @@ def test_run_skill_script_accepts_timeout_range(
     manager.activate("runtime-skill")
     seen: list[int] = []
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         seen.append(kwargs["timeout"])  # type: ignore[arg-type]
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -497,9 +482,7 @@ def test_run_skill_script_defaults_timeout_to_thirty_seconds(
     manager.activate("runtime-skill")
     seen: list[object] = []
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         seen.append(kwargs["timeout"])
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -614,9 +597,7 @@ def test_run_skill_script_caps_stdout_and_stderr_independently(
     stdout = "a" * MAX_OUTPUT_BYTES
     stderr = "你" * MAX_OUTPUT_BYTES
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 0, stdout, stderr)
 
     result = RunSkillScriptTool(manager, runner=runner).execute(
@@ -744,9 +725,7 @@ def test_run_skill_script_returns_structured_nonzero_failure(
     manager = SkillManager(tmp_path)
     manager.activate("runtime-skill")
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 9, "out", "err")
 
     result = RunSkillScriptTool(manager, runner=runner).execute(
@@ -779,9 +758,7 @@ def test_script_confirmation_describes_resolved_execution(
         "argv": ["python", "scripts/run.py", "--flag"],
     }
 
-    description = RunSkillScriptTool(manager).confirmation_description(
-        arguments
-    )
+    description = RunSkillScriptTool(manager).confirmation_description(arguments)
 
     assert "runtime-skill" in description
     assert str(script.resolve()) in description
@@ -801,9 +778,7 @@ def test_run_skill_script_registry_denial_does_not_call_runner(
     manager.activate("runtime-skill")
     called = False
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         nonlocal called
         called = True
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -892,9 +867,7 @@ def test_run_skill_script_requires_approval_every_time_despite_allowed_tools(
     approvals: list[str] = []
     runs = 0
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         nonlocal runs
         runs += 1
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -953,9 +926,7 @@ def test_run_skill_script_revalidates_after_confirmation(
     manager.activate("runtime-skill")
     called = False
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         nonlocal called
         called = True
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -991,9 +962,7 @@ def test_run_skill_script_rejects_regular_file_replacement_after_confirmation(
     manager.activate("runtime-skill")
     called = False
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         nonlocal called
         called = True
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -1032,9 +1001,7 @@ def test_run_skill_script_rejects_same_size_timestamp_restored_rewrite(
     resource = manager._skills["runtime-skill"].resources[0]
     called = False
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         nonlocal called
         called = True
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -1080,9 +1047,7 @@ def test_run_skill_script_rejects_nested_directory_symlink_swap(
     manager.activate("runtime-skill")
     called = False
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         nonlocal called
         called = True
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -1093,16 +1058,11 @@ def test_run_skill_script_rejects_nested_directory_symlink_swap(
         make_symlink(renamed, nested, target_is_directory=True)
         return True
 
-    result = ToolRegistry(
-        [RunSkillScriptTool(manager, runner=runner)]
-    ).execute(
+    result = ToolRegistry([RunSkillScriptTool(manager, runner=runner)]).execute(
         ToolCall(
             "run-1",
             "run_skill_script",
-            (
-                '{"name":"runtime-skill",'
-                '"argv":["python","scripts/nested/run.py"]}'
-            ),
+            ('{"name":"runtime-skill","argv":["python","scripts/nested/run.py"]}'),
         ),
         swap_nested_directory,
     )
@@ -1141,8 +1101,6 @@ def test_activate_tool_preserves_manager_failure_identity() -> None:
         def activate(self, name: str) -> ToolResult:
             return failure
 
-    result = ActivateSkillTool(FailingManager()).execute(
-        {"name": "research-skill"}
-    )
+    result = ActivateSkillTool(FailingManager()).execute({"name": "research-skill"})
 
     assert result is failure

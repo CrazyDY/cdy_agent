@@ -197,9 +197,7 @@ def test_generate_reply_sends_normalized_prompt_and_model() -> None:
     )
 
     assert result == "Hello from the model."
-    assert client.responses.calls == [
-        {"model": "gpt-5.6-terra", "input": "Hello"}
-    ]
+    assert client.responses.calls == [{"model": "gpt-5.6-terra", "input": "Hello"}]
 
 
 def test_generate_reply_rejects_blank_prompt_before_api_call() -> None:

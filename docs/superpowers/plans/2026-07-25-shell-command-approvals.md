@@ -108,8 +108,7 @@ def test_registry_allows_once_without_persisting() -> None:
 
     result = ToolRegistry([tool]).execute(
         ToolCall("1", "echo", '{"text":"hello"}'),
-        lambda request: requests.append(request)
-        or ConfirmationDecision.ALLOW_ONCE,
+        lambda request: requests.append(request) or ConfirmationDecision.ALLOW_ONCE,
     )
 
     assert result.ok
@@ -121,8 +120,7 @@ def test_registry_persists_before_execution() -> None:
     events: list[str] = []
     tool = DynamicEchoTool()
     tool.remember_approval = lambda arguments: (
-        events.append("remember")
-        or ToolResult.success({"remembered": True})
+        events.append("remember") or ToolResult.success({"remembered": True})
     )  # type: ignore[method-assign]
     tool.execute = lambda arguments: (
         events.append("execute") or ToolResult.success({"text": arguments["text"]})
@@ -198,9 +196,7 @@ class ConfirmationRequest:
     allow_always: bool = False
 
 
-ConfirmationCallback = Callable[
-    [ConfirmationRequest], bool | ConfirmationDecision
-]
+ConfirmationCallback = Callable[[ConfirmationRequest], bool | ConfirmationDecision]
 ```
 
 Keep the existing `Tool` protocol unchanged apart from using the new callback
@@ -234,49 +230,43 @@ def _normalize_decision(
 ) -> ConfirmationDecision:
     if isinstance(decision, ConfirmationDecision):
         return decision
-    return (
-        ConfirmationDecision.ALLOW_ONCE
-        if decision
-        else ConfirmationDecision.DENY
-    )
+    return ConfirmationDecision.ALLOW_ONCE if decision else ConfirmationDecision.DENY
 ```
 
 Replace the static confirmation block in `ToolRegistry.execute` with:
 
 ```python
-        if _confirmation_required(tool, arguments):
-            remember = getattr(tool, "remember_approval", None)
-            try:
-                request = ConfirmationRequest(
-                    tool.name,
-                    arguments,
-                    tool.confirmation_description(arguments),
-                    allow_always=callable(remember),
-                )
-                decision = _normalize_decision(confirm(request))
-            except BaseException:
-                try:
-                    _cancel_tool(tool)
-                except BaseException:
-                    pass
-                raise
-            if decision is ConfirmationDecision.DENY:
-                _cancel_tool(tool)
-                return ToolResult.failure(
-                    "approval_denied", "User declined this tool call."
-                )
-            if decision is ConfirmationDecision.ALLOW_ALWAYS:
-                if not callable(remember):
-                    _cancel_tool(tool)
-                    return ToolResult.failure(
-                        "persistent_approval_not_supported",
-                        "This tool does not support persistent approval.",
-                    )
-                remembered = remember(arguments)
-                if not remembered.ok:
-                    _cancel_tool(tool)
-                    return remembered
-        return tool.execute(arguments)
+if _confirmation_required(tool, arguments):
+    remember = getattr(tool, "remember_approval", None)
+    try:
+        request = ConfirmationRequest(
+            tool.name,
+            arguments,
+            tool.confirmation_description(arguments),
+            allow_always=callable(remember),
+        )
+        decision = _normalize_decision(confirm(request))
+    except BaseException:
+        try:
+            _cancel_tool(tool)
+        except BaseException:
+            pass
+        raise
+    if decision is ConfirmationDecision.DENY:
+        _cancel_tool(tool)
+        return ToolResult.failure("approval_denied", "User declined this tool call.")
+    if decision is ConfirmationDecision.ALLOW_ALWAYS:
+        if not callable(remember):
+            _cancel_tool(tool)
+            return ToolResult.failure(
+                "persistent_approval_not_supported",
+                "This tool does not support persistent approval.",
+            )
+        remembered = remember(arguments)
+        if not remembered.ok:
+            _cancel_tool(tool)
+            return remembered
+return tool.execute(arguments)
 ```
 
 - [ ] **Step 5: Run registry tests**
@@ -352,9 +342,7 @@ def test_approval_store_writes_versioned_json_and_deduplicates(
     assert store.add(["uv", "run", "pytest"]).ok
 
     document = json.loads(
-        (tmp_path / ".cdy-agent" / "shell-approvals.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / ".cdy-agent" / "shell-approvals.json").read_text(encoding="utf-8")
     )
     assert document == {
         "version": 1,
@@ -456,110 +444,110 @@ def _valid_document(value: object) -> bool:
 Add these methods inside `ShellApprovalStore`:
 
 ```python
-    def _load(self) -> ToolResult:
-        target = self._target(create_directory=False)
-        if isinstance(target, ToolResult):
-            return target
-        if target is None:
-            return ToolResult.success([])
-        try:
-            document = json.loads(target.read_text(encoding="utf-8"))
-        except OSError:
-            return ToolResult.failure(
-                "approval_store_error", "Could not read Shell approvals."
-            )
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return ToolResult.failure(
-                "invalid_approval_store", "Stored Shell approvals are invalid."
-            )
-        if not _valid_document(document):
-            return ToolResult.failure(
-                "invalid_approval_store", "Stored Shell approvals are invalid."
-            )
-        return ToolResult.success([
-            list(command) for command in document["allowed_commands"]
-        ])
+def _load(self) -> ToolResult:
+    target = self._target(create_directory=False)
+    if isinstance(target, ToolResult):
+        return target
+    if target is None:
+        return ToolResult.success([])
+    try:
+        document = json.loads(target.read_text(encoding="utf-8"))
+    except OSError:
+        return ToolResult.failure(
+            "approval_store_error", "Could not read Shell approvals."
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ToolResult.failure(
+            "invalid_approval_store", "Stored Shell approvals are invalid."
+        )
+    if not _valid_document(document):
+        return ToolResult.failure(
+            "invalid_approval_store", "Stored Shell approvals are invalid."
+        )
+    return ToolResult.success(
+        [list(command) for command in document["allowed_commands"]]
+    )
 
-    def _save(self, commands: list[list[str]]) -> ToolResult:
-        document = {
-            "version": APPROVAL_VERSION,
-            "allowed_commands": commands,
-        }
-        if not _valid_document(document):
-            return ToolResult.failure(
-                "invalid_approval_store",
-                "Refusing to write invalid Shell approvals.",
-            )
-        target = self._target(create_directory=True)
-        if isinstance(target, ToolResult) or target is None:
-            return target or ToolResult.failure(
-                "approval_store_error", "Could not create Shell approval store."
-            )
-        temporary: Path | None = None
-        try:
-            descriptor, raw_path = tempfile.mkstemp(
-                dir=target.parent,
-                prefix=f".{APPROVAL_FILENAME}.",
-            )
-            temporary = Path(raw_path)
-            with os.fdopen(
-                descriptor, "w", encoding="utf-8", newline="\n"
-            ) as file:
-                json.dump(document, file, ensure_ascii=False, indent=2)
-                file.write("\n")
-                file.flush()
-                os.fsync(file.fileno())
-            self._replace(temporary, target)
-        except OSError:
-            if temporary is not None:
-                try:
-                    temporary.unlink(missing_ok=True)
-                except OSError:
-                    pass
-            return ToolResult.failure(
-                "approval_store_error", "Could not write Shell approvals."
-            )
-        return ToolResult.success({
+
+def _save(self, commands: list[list[str]]) -> ToolResult:
+    document = {
+        "version": APPROVAL_VERSION,
+        "allowed_commands": commands,
+    }
+    if not _valid_document(document):
+        return ToolResult.failure(
+            "invalid_approval_store",
+            "Refusing to write invalid Shell approvals.",
+        )
+    target = self._target(create_directory=True)
+    if isinstance(target, ToolResult) or target is None:
+        return target or ToolResult.failure(
+            "approval_store_error", "Could not create Shell approval store."
+        )
+    temporary: Path | None = None
+    try:
+        descriptor, raw_path = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{APPROVAL_FILENAME}.",
+        )
+        temporary = Path(raw_path)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
+            json.dump(document, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        self._replace(temporary, target)
+    except OSError:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return ToolResult.failure(
+            "approval_store_error", "Could not write Shell approvals."
+        )
+    return ToolResult.success(
+        {
             "path": str(target),
             "count": len(commands),
-        })
+        }
+    )
 
-    def _target(
-        self, create_directory: bool
-    ) -> Path | ToolResult | None:
-        data_directory = self.workspace / DATA_DIRECTORY
-        try:
-            if not data_directory.exists() and not data_directory.is_symlink():
-                if not create_directory:
-                    return None
-                data_directory.mkdir()
-            resolved_directory = data_directory.resolve()
-            resolved_directory.relative_to(self.workspace)
-            if not resolved_directory.is_dir():
+
+def _target(self, create_directory: bool) -> Path | ToolResult | None:
+    data_directory = self.workspace / DATA_DIRECTORY
+    try:
+        if not data_directory.exists() and not data_directory.is_symlink():
+            if not create_directory:
+                return None
+            data_directory.mkdir()
+        resolved_directory = data_directory.resolve()
+        resolved_directory.relative_to(self.workspace)
+        if not resolved_directory.is_dir():
+            return ToolResult.failure(
+                "approval_store_error",
+                "Shell approval path is not a directory.",
+            )
+        target = resolved_directory / APPROVAL_FILENAME
+        if target.is_symlink() or target.exists():
+            resolved_target = target.resolve()
+            resolved_target.relative_to(self.workspace)
+            if not resolved_target.is_file():
                 return ToolResult.failure(
                     "approval_store_error",
-                    "Shell approval path is not a directory.",
+                    "Shell approval path is not a file.",
                 )
-            target = resolved_directory / APPROVAL_FILENAME
-            if target.is_symlink() or target.exists():
-                resolved_target = target.resolve()
-                resolved_target.relative_to(self.workspace)
-                if not resolved_target.is_file():
-                    return ToolResult.failure(
-                        "approval_store_error",
-                        "Shell approval path is not a file.",
-                    )
-                return resolved_target
-            return target
-        except ValueError:
-            return ToolResult.failure(
-                "path_outside_workspace",
-                "Shell approvals are outside the workspace.",
-            )
-        except OSError:
-            return ToolResult.failure(
-                "approval_store_error", "Could not access Shell approvals."
-            )
+            return resolved_target
+        return target
+    except ValueError:
+        return ToolResult.failure(
+            "path_outside_workspace",
+            "Shell approvals are outside the workspace.",
+        )
+    except OSError:
+        return ToolResult.failure(
+            "approval_store_error", "Could not access Shell approvals."
+        )
 ```
 
 - [ ] **Step 4: Add failure, containment, and atomicity tests**
@@ -699,13 +687,25 @@ def test_policy_builds_final_rg_and_git_argv(tmp_path: Path) -> None:
 
     assert rg.argv == ("rg", "--no-config", "needle", ".")
     assert status.argv == (
-        "git", "--no-pager", "--no-optional-locks",
-        "-c", "core.fsmonitor=false", "status", "--short",
+        "git",
+        "--no-pager",
+        "--no-optional-locks",
+        "-c",
+        "core.fsmonitor=false",
+        "status",
+        "--short",
     )
     assert diff.argv == (
-        "git", "--no-pager", "--no-optional-locks",
-        "-c", "core.fsmonitor=false", "diff",
-        "--no-ext-diff", "--no-textconv", "--", "file.py",
+        "git",
+        "--no-pager",
+        "--no-optional-locks",
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--",
+        "file.py",
     )
 ```
 
@@ -767,9 +767,7 @@ class ShellExecutionPolicy:
         self.workspace = resolve_workspace(workspace)
         self.approvals = approvals
 
-    def prepare(
-        self, arguments: dict[str, Any]
-    ) -> PreparedShellCommand | ToolResult:
+    def prepare(self, arguments: dict[str, Any]) -> PreparedShellCommand | ToolResult:
         validated = _validate_arguments(arguments)
         if isinstance(validated, ToolResult):
             return validated
@@ -829,8 +827,7 @@ def _validate_arguments(
     ):
         return ToolResult.failure(
             "invalid_arguments",
-            f"timeout_seconds must be an integer from 1 to "
-            f"{MAX_TIMEOUT_SECONDS}.",
+            f"timeout_seconds must be an integer from 1 to {MAX_TIMEOUT_SECONDS}.",
         )
     return argv, timeout
 
@@ -883,8 +880,9 @@ def test_shell_arbitrary_command_requires_confirmation_in_registry(
     requests: list[object] = []
     tool = ShellTool(
         tmp_path,
-        runner=lambda argv, **kwargs: calls.append(argv)
-        or subprocess.CompletedProcess(argv, 0, "", ""),
+        runner=lambda argv, **kwargs: (
+            calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+        ),
     )
 
     denied = ToolRegistry([tool]).execute(
@@ -904,22 +902,21 @@ def test_shell_allow_always_persists_final_argv_before_running(
     from cdy_agent.tools.registry import ToolRegistry
 
     calls: list[list[str]] = []
-    registry = ToolRegistry([
-        ShellTool(
-            tmp_path,
-            runner=lambda argv, **kwargs: calls.append(argv)
-            or subprocess.CompletedProcess(argv, 0, "", ""),
-        )
-    ])
+    registry = ToolRegistry(
+        [
+            ShellTool(
+                tmp_path,
+                runner=lambda argv, **kwargs: (
+                    calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+                ),
+            )
+        ]
+    )
     call = ToolCall("1", "shell", '{"argv":["python","script.py"]}')
 
-    first = registry.execute(
-        call, lambda request: ConfirmationDecision.ALLOW_ALWAYS
-    )
+    first = registry.execute(call, lambda request: ConfirmationDecision.ALLOW_ALWAYS)
     callbacks: list[object] = []
-    second = registry.execute(
-        call, lambda request: callbacks.append(request) or False
-    )
+    second = registry.execute(call, lambda request: callbacks.append(request) or False)
 
     assert first.ok and second.ok
     assert calls == [
@@ -963,18 +960,18 @@ class ShellTool:
 Implement the hooks:
 
 ```python
-    def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
-        result = self.policy.classify(arguments)
-        return result.failure
+def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
+    result = self.policy.classify(arguments)
+    return result.failure
 
-    def requires_confirmation_for(
-        self, arguments: dict[str, Any]
-    ) -> bool:
-        result = self.policy.classify(arguments)
-        return result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
 
-    def remember_approval(self, arguments: dict[str, Any]) -> ToolResult:
-        return self.policy.remember(arguments)
+def requires_confirmation_for(self, arguments: dict[str, Any]) -> bool:
+    result = self.policy.classify(arguments)
+    return result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+
+
+def remember_approval(self, arguments: dict[str, Any]) -> ToolResult:
+    return self.policy.remember(arguments)
 ```
 
 Make `confirmation_description` and `execute` call `policy.prepare` again.
@@ -1126,9 +1123,10 @@ def test_workspace_external_reads_require_confirmation(
 ) -> None:
     policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
 
-    assert policy.classify(
-        {"argv": argv}
-    ).decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    assert (
+        policy.classify({"argv": argv}).decision
+        is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    )
 
 
 def test_symlink_to_external_input_requires_confirmation(tmp_path: Path) -> None:
@@ -1142,9 +1140,10 @@ def test_symlink_to_external_input_requires_confirmation(tmp_path: Path) -> None
 
     policy = ShellExecutionPolicy(tmp_path, ShellApprovalStore(tmp_path))
 
-    assert policy.classify(
-        {"argv": ["head", "linked.txt"]}
-    ).decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    assert (
+        policy.classify({"argv": ["head", "linked.txt"]}).decision
+        is ShellExecutionDecision.REQUIRE_CONFIRMATION
+    )
 ```
 
 - [ ] **Step 3: Run classifier tests and verify failure**
@@ -1163,67 +1162,202 @@ does not yet recognize read-only calls.
 Add these module-level constants to `shell_policy.py`:
 
 ```python
-SAFE_COMMANDS = frozenset({
-    "pwd", "ls", "rg", "grep", "head", "tail", "wc", "sort", "uniq",
-})
+SAFE_COMMANDS = frozenset(
+    {
+        "pwd",
+        "ls",
+        "rg",
+        "grep",
+        "head",
+        "tail",
+        "wc",
+        "sort",
+        "uniq",
+    }
+)
 PWD_OPTIONS = frozenset({"-L", "-P", "--logical", "--physical"})
 LS_SHORT_OPTIONS = frozenset("aAlhRdF1rtS")
-LS_LONG_OPTIONS = frozenset({
-    "--all", "--almost-all", "--human-readable", "--recursive",
-    "--directory", "--classify", "--group-directories-first",
-})
-RG_FLAGS = frozenset({
-    "-n", "--line-number", "-i", "--ignore-case", "-S", "--smart-case",
-    "-F", "--fixed-strings", "-l", "--files-with-matches", "--files",
-    "--hidden", "--no-ignore",
-})
-RG_VALUE_OPTIONS = frozenset({
-    "-g", "--glob", "-t", "--type", "-T", "--type-not",
-    "-A", "--after-context", "-B", "--before-context",
-    "-C", "--context", "-e", "--regexp",
-})
-GREP_FLAGS = frozenset({
-    "-n", "--line-number", "-i", "--ignore-case", "-F", "--fixed-strings",
-    "-E", "--extended-regexp", "-l", "--files-with-matches",
-    "-v", "--invert-match", "-s", "--no-messages",
-})
-GREP_VALUE_OPTIONS = frozenset({
-    "-e", "--regexp", "-A", "--after-context", "-B", "--before-context",
-    "-C", "--context",
-})
+LS_LONG_OPTIONS = frozenset(
+    {
+        "--all",
+        "--almost-all",
+        "--human-readable",
+        "--recursive",
+        "--directory",
+        "--classify",
+        "--group-directories-first",
+    }
+)
+RG_FLAGS = frozenset(
+    {
+        "-n",
+        "--line-number",
+        "-i",
+        "--ignore-case",
+        "-S",
+        "--smart-case",
+        "-F",
+        "--fixed-strings",
+        "-l",
+        "--files-with-matches",
+        "--files",
+        "--hidden",
+        "--no-ignore",
+    }
+)
+RG_VALUE_OPTIONS = frozenset(
+    {
+        "-g",
+        "--glob",
+        "-t",
+        "--type",
+        "-T",
+        "--type-not",
+        "-A",
+        "--after-context",
+        "-B",
+        "--before-context",
+        "-C",
+        "--context",
+        "-e",
+        "--regexp",
+    }
+)
+GREP_FLAGS = frozenset(
+    {
+        "-n",
+        "--line-number",
+        "-i",
+        "--ignore-case",
+        "-F",
+        "--fixed-strings",
+        "-E",
+        "--extended-regexp",
+        "-l",
+        "--files-with-matches",
+        "-v",
+        "--invert-match",
+        "-s",
+        "--no-messages",
+    }
+)
+GREP_VALUE_OPTIONS = frozenset(
+    {
+        "-e",
+        "--regexp",
+        "-A",
+        "--after-context",
+        "-B",
+        "--before-context",
+        "-C",
+        "--context",
+    }
+)
 HEAD_TAIL_FLAGS = frozenset({"-q", "--quiet", "--silent", "-v", "--verbose"})
-HEAD_TAIL_VALUE_OPTIONS = frozenset({
-    "-n", "--lines", "-c", "--bytes",
-})
-WC_FLAGS = frozenset({
-    "-c", "--bytes", "-m", "--chars", "-l", "--lines",
-    "-w", "--words", "-L", "--max-line-length",
-})
-SORT_FLAGS = frozenset({
-    "-b", "--ignore-leading-blanks", "-f", "--ignore-case",
-    "-n", "--numeric-sort", "-r", "--reverse", "-s", "--stable",
-    "-u", "--unique",
-})
-SORT_VALUE_OPTIONS = frozenset({
-    "-k", "--key", "-t", "--field-separator",
-})
-UNIQ_FLAGS = frozenset({
-    "-c", "--count", "-d", "--repeated", "-D", "--all-repeated",
-    "-i", "--ignore-case", "-u", "--unique",
-})
-UNIQ_VALUE_OPTIONS = frozenset({
-    "-f", "--skip-fields", "-s", "--skip-chars", "-w", "--check-chars",
-})
-GIT_STATUS_FLAGS = frozenset({
-    "-s", "--short", "-b", "--branch", "--porcelain",
-    "--long", "-z", "--null", "-u", "--untracked-files",
-    "--ignored", "--no-renames",
-})
-GIT_DIFF_FLAGS = frozenset({
-    "--stat", "--numstat", "--shortstat", "--name-only", "--name-status",
-    "--check", "--summary", "--patch", "-p",
-    "-w", "--ignore-all-space", "--no-renames", "--cached", "--staged",
-})
+HEAD_TAIL_VALUE_OPTIONS = frozenset(
+    {
+        "-n",
+        "--lines",
+        "-c",
+        "--bytes",
+    }
+)
+WC_FLAGS = frozenset(
+    {
+        "-c",
+        "--bytes",
+        "-m",
+        "--chars",
+        "-l",
+        "--lines",
+        "-w",
+        "--words",
+        "-L",
+        "--max-line-length",
+    }
+)
+SORT_FLAGS = frozenset(
+    {
+        "-b",
+        "--ignore-leading-blanks",
+        "-f",
+        "--ignore-case",
+        "-n",
+        "--numeric-sort",
+        "-r",
+        "--reverse",
+        "-s",
+        "--stable",
+        "-u",
+        "--unique",
+    }
+)
+SORT_VALUE_OPTIONS = frozenset(
+    {
+        "-k",
+        "--key",
+        "-t",
+        "--field-separator",
+    }
+)
+UNIQ_FLAGS = frozenset(
+    {
+        "-c",
+        "--count",
+        "-d",
+        "--repeated",
+        "-D",
+        "--all-repeated",
+        "-i",
+        "--ignore-case",
+        "-u",
+        "--unique",
+    }
+)
+UNIQ_VALUE_OPTIONS = frozenset(
+    {
+        "-f",
+        "--skip-fields",
+        "-s",
+        "--skip-chars",
+        "-w",
+        "--check-chars",
+    }
+)
+GIT_STATUS_FLAGS = frozenset(
+    {
+        "-s",
+        "--short",
+        "-b",
+        "--branch",
+        "--porcelain",
+        "--long",
+        "-z",
+        "--null",
+        "-u",
+        "--untracked-files",
+        "--ignored",
+        "--no-renames",
+    }
+)
+GIT_DIFF_FLAGS = frozenset(
+    {
+        "--stat",
+        "--numstat",
+        "--shortstat",
+        "--name-only",
+        "--name-status",
+        "--check",
+        "--summary",
+        "--patch",
+        "-p",
+        "-w",
+        "--ignore-all-space",
+        "--no-renames",
+        "--cached",
+        "--staged",
+    }
+)
 GIT_DIFF_VALUE_OPTIONS = frozenset({"-U", "--unified"})
 ```
 
@@ -1270,8 +1404,7 @@ def _parse_options(
             (
                 option
                 for option in value_options
-                if option.startswith("--")
-                and argument.startswith(f"{option}=")
+                if option.startswith("--") and argument.startswith(f"{option}=")
             ),
             None,
         )
@@ -1283,10 +1416,7 @@ def _parse_options(
             argument.startswith("-")
             and not argument.startswith("--")
             and len(argument) > 2
-            and all(
-                character in combined_short_flags
-                for character in argument[1:]
-            )
+            and all(character in combined_short_flags for character in argument[1:])
         ):
             seen.update(f"-{character}" for character in argument[1:])
             index += 1
@@ -1295,14 +1425,11 @@ def _parse_options(
     return ParsedOptions(tuple(positionals), frozenset(seen))
 
 
-def _has_option(
-    arguments: list[str], names: frozenset[str]
-) -> bool:
+def _has_option(arguments: list[str], names: frozenset[str]) -> bool:
     return any(
         argument in names
         or any(
-            name.startswith("--") and argument.startswith(f"{name}=")
-            for name in names
+            name.startswith("--") and argument.startswith(f"{name}=") for name in names
         )
         for argument in arguments
     )
@@ -1349,9 +1476,7 @@ def _safe_rg(arguments: list[str], workspace: Path) -> bool:
     )
     if parsed is None:
         return False
-    pattern_is_option = bool(
-        parsed.seen & frozenset({"-e", "--regexp"})
-    )
+    pattern_is_option = bool(parsed.seen & frozenset({"-e", "--regexp"}))
     paths = list(parsed.positionals)
     if "--files" not in parsed.seen and not pattern_is_option:
         if not paths:
@@ -1369,9 +1494,7 @@ def _safe_grep(arguments: list[str], workspace: Path) -> bool:
     )
     if parsed is None:
         return False
-    pattern_is_option = bool(
-        parsed.seen & frozenset({"-e", "--regexp"})
-    )
+    pattern_is_option = bool(parsed.seen & frozenset({"-e", "--regexp"}))
     paths = list(parsed.positionals)
     if not pattern_is_option:
         if not paths:
@@ -1406,10 +1529,15 @@ def _safe_wc(arguments: list[str], workspace: Path) -> bool:
 
 
 def _safe_sort(arguments: list[str], workspace: Path) -> bool:
-    dangerous = frozenset({
-        "-o", "--output", "--compress-program",
-        "-T", "--temporary-directory",
-    })
+    dangerous = frozenset(
+        {
+            "-o",
+            "--output",
+            "--compress-program",
+            "-T",
+            "--temporary-directory",
+        }
+    )
     if _has_option(arguments, dangerous):
         return False
     parsed = _parse_options(
@@ -1442,9 +1570,13 @@ def _safe_git(argv: list[str], workspace: Path) -> bool:
     if argv[1] == "status":
         parsed = _parse_options(arguments, GIT_STATUS_FLAGS)
     else:
-        dangerous = frozenset({
-            "--output", "--ext-diff", "--textconv",
-        })
+        dangerous = frozenset(
+            {
+                "--output",
+                "--ext-diff",
+                "--textconv",
+            }
+        )
         if _has_option(arguments, dangerous):
             return False
         parsed = _parse_options(
@@ -1627,22 +1759,14 @@ callback so they do not rely on enum truthiness:
 @confirm_test_app.callback(invoke_without_command=True)
 def confirm_test() -> None:
     decision = cli._confirm_tool(confirmation_request)
-    typer.echo(
-        "APPROVED"
-        if decision is ConfirmationDecision.ALLOW_ONCE
-        else "DENIED"
-    )
+    typer.echo("APPROVED" if decision is ConfirmationDecision.ALLOW_ONCE else "DENIED")
 ```
 
 Use the same identity comparison inside the two local `invoke()` callbacks:
 
 ```python
-        decision = cli._confirm_tool(request)
-        typer.echo(
-            "APPROVED"
-            if decision is ConfirmationDecision.ALLOW_ONCE
-            else "DENIED"
-        )
+decision = cli._confirm_tool(request)
+typer.echo("APPROVED" if decision is ConfirmationDecision.ALLOW_ONCE else "DENIED")
 ```
 
 - [ ] **Step 2: Run CLI confirmation tests and verify failure**
@@ -1663,11 +1787,7 @@ Replace `_confirm_tool` with:
 ```python
 def _confirm_tool(request: ConfirmationRequest) -> ConfirmationDecision:
     """Confirm a tool call, treating interruptions as denial."""
-    prompt = (
-        "[y] once / [a] always / [N] deny: "
-        if request.allow_always
-        else "[y/N]: "
-    )
+    prompt = "[y] once / [a] always / [N] deny: " if request.allow_always else "[y/N]: "
     try:
         typer.echo(f"{request.description} {prompt}", nl=False)
         answer = input().strip().lower()

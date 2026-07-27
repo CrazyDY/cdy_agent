@@ -107,21 +107,20 @@ Expected: the first test fails because `ToolResult.failure` accepts only
 Change `ToolResult.failure` and `to_json` in `src/cdy_agent/tools/base.py`:
 
 ```python
-    @classmethod
-    def failure(
-        cls, code: str, message: str, data: Any = None
-    ) -> "ToolResult":
-        return cls(ok=False, data=data, code=code, message=message)
+@classmethod
+def failure(cls, code: str, message: str, data: Any = None) -> "ToolResult":
+    return cls(ok=False, data=data, code=code, message=message)
 
-    def to_json(self) -> str:
-        if self.ok:
-            value = {"ok": True, "data": self.data}
-        else:
-            error = {"code": self.code, "message": self.message}
-            if self.data is not None:
-                error["data"] = self.data
-            value = {"ok": False, "error": error}
-        return json.dumps(value, ensure_ascii=False)
+
+def to_json(self) -> str:
+    if self.ok:
+        value = {"ok": True, "data": self.data}
+    else:
+        error = {"code": self.code, "message": self.message}
+        if self.data is not None:
+            error["data"] = self.data
+        value = {"ok": False, "error": error}
+    return json.dumps(value, ensure_ascii=False)
 ```
 
 - [ ] **Step 4: Run the structured-result tests and verify GREEN**
@@ -189,9 +188,7 @@ def sanitized_environment() -> dict[str, str]:
     return environment
 
 
-def limited_output(
-    output: str, limit: int = MAX_OUTPUT_BYTES
-) -> tuple[str, bool]:
+def limited_output(output: str, limit: int = MAX_OUTPUT_BYTES) -> tuple[str, bool]:
     encoded = output.encode("utf-8")
     if len(encoded) <= limit:
         return output, False
@@ -281,8 +278,7 @@ def write_skill(
     directory = root / ".cdy-agent" / "skills" / name
     directory.mkdir(parents=True)
     metadata = frontmatter or (
-        f"name: {name}\n"
-        f"description: Use {name} for matching tasks.\n"
+        f"name: {name}\ndescription: Use {name} for matching tasks.\n"
     )
     (directory / "SKILL.md").write_text(
         f"---\n{metadata}---\n\n{body}\n",
@@ -321,9 +317,7 @@ def test_parses_all_standard_metadata_fields(tmp_path: Path) -> None:
 
     assert skill.metadata.name == "pdf-processing"
     assert skill.metadata.license == "Apache-2.0"
-    assert skill.metadata.compatibility == (
-        "Requires Python 3.10+ and network access"
-    )
+    assert skill.metadata.compatibility == ("Requires Python 3.10+ and network access")
     assert dict(skill.metadata.metadata) == {
         "author": "example-org",
         "version": "1.0",
@@ -367,11 +361,7 @@ def test_rejects_nonstandard_frontmatter(
 def test_rejects_duplicate_keys_and_empty_body(tmp_path: Path) -> None:
     write_skill(
         tmp_path,
-        frontmatter=(
-            "name: sample-skill\n"
-            "name: sample-skill\n"
-            "description: valid\n"
-        ),
+        frontmatter=("name: sample-skill\nname: sample-skill\ndescription: valid\n"),
     )
     write_skill(tmp_path, "empty-body", body="   ")
     discovery = discover_skills(tmp_path)
@@ -417,9 +407,7 @@ class SkillMetadata:
     description: str
     license: str | None = None
     compatibility: str | None = None
-    metadata: Mapping[str, str] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    metadata: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     allowed_tools: str | None = None
 
 
@@ -461,9 +449,7 @@ workspace-root error isolation, then use these constants and validation shape:
 MAX_SKILL_BYTES = 256 * 1024
 MAX_RESOURCES = 512
 RESOURCE_CATEGORIES = ("scripts", "references", "assets")
-NAME_PATTERN = re.compile(
-    r"(?=.{1,64}\Z)[a-z0-9]+(?:-[a-z0-9]+)*\Z"
-)
+NAME_PATTERN = re.compile(r"(?=.{1,64}\Z)[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 FRONTMATTER_FIELDS = {
     "name",
     "description",
@@ -526,8 +512,7 @@ def test_discovers_only_standard_resources_recursively_in_stable_order(
     skill = discover_skills(tmp_path).skills[0]
 
     assert [
-        (item.category, item.relative_path, item.size)
-        for item in skill.resources
+        (item.category, item.relative_path, item.size) for item in skill.resources
     ] == [
         ("assets", "assets/template.txt", len("template")),
         ("references", "references/guide.md", len("# Guide")),
@@ -549,9 +534,7 @@ def test_rejects_too_many_resources(tmp_path: Path) -> None:
     assert "more than 512 resources" in discovery.diagnostics[0].message
 
 
-@pytest.mark.skipif(
-    not hasattr(os, "symlink"), reason="symbolic links are unavailable"
-)
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symbolic links are unavailable")
 def test_rejects_symlinks_inside_standard_resource_trees(tmp_path: Path) -> None:
     directory = write_skill(tmp_path)
     references = directory / "references"
@@ -777,9 +760,7 @@ Replace `SkillManager.__init__` with:
 def __init__(self, workspace: Path) -> None:
     self.workspace = workspace.resolve()
     discovery = discover_skills(self.workspace)
-    self._skills = {
-        skill.metadata.name: skill for skill in discovery.skills
-    }
+    self._skills = {skill.metadata.name: skill for skill in discovery.skills}
     self._diagnostics = discovery.diagnostics
     self._active: set[str] = set()
 ```
@@ -1100,12 +1081,8 @@ def test_read_skill_resource_returns_text_and_binary_metadata(
     manager.activate("runtime-skill")
     tool = ReadSkillResourceTool(manager)
 
-    text = tool.execute(
-        {"name": "runtime-skill", "path": "references/guide.md"}
-    )
-    binary = tool.execute(
-        {"name": "runtime-skill", "path": "assets/image.bin"}
-    )
+    text = tool.execute({"name": "runtime-skill", "path": "references/guide.md"})
+    binary = tool.execute({"name": "runtime-skill", "path": "assets/image.bin"})
 
     assert text.data["content"] == "# Guide"
     assert text.data["binary"] is False
@@ -1168,9 +1145,7 @@ def test_run_skill_script_resolves_one_script_and_never_uses_shell(
     manager.activate("runtime-skill")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def runner(
-        argv: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append((argv, kwargs))
         return subprocess.CompletedProcess(argv, 0, "ok", "")
 
@@ -1404,9 +1379,7 @@ def test_agent_keeps_fixed_skill_definitions_after_activation(
         encoding="utf-8",
     )
     registry = create_builtin_registry(tmp_path)
-    registered = registry.register_many(
-        create_skill_tools(SkillManager(tmp_path))
-    )
+    registered = registry.register_many(create_skill_tools(SkillManager(tmp_path)))
     assert registered.ok
     gateway = FakeGateway(
         [
@@ -1427,16 +1400,12 @@ def test_agent_keeps_fixed_skill_definitions_after_activation(
     result = Agent(
         gateway,
         registry,
-        lambda request: pytest.fail(
-            f"Activation requested confirmation: {request}"
-        ),
+        lambda request: pytest.fail(f"Activation requested confirmation: {request}"),
     ).run([Message("user", "research this workspace")])
 
     assert result == "done"
     assert gateway.calls[0]["tools"] == gateway.calls[1]["tools"]
-    assert {
-        definition["name"] for definition in gateway.calls[0]["tools"]
-    } >= {
+    assert {definition["name"] for definition in gateway.calls[0]["tools"]} >= {
         "list_skills",
         "search_skills",
         "activate_skill",

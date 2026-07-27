@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -21,13 +22,11 @@ class ToolResult:
     message: str | None = None
 
     @classmethod
-    def success(cls, data: Any) -> "ToolResult":
+    def success(cls, data: Any) -> ToolResult:
         return cls(ok=True, data=data)
 
     @classmethod
-    def failure(
-        cls, code: str, message: str, data: Any = None
-    ) -> "ToolResult":
+    def failure(cls, code: str, message: str, data: Any = None) -> ToolResult:
         return cls(ok=False, data=data, code=code, message=message)
 
     def to_json(self) -> str:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-
 MessageRole = Literal["system", "user", "assistant"]
 SUPPORTED_MESSAGE_ROLES = ("system", "user", "assistant")
 

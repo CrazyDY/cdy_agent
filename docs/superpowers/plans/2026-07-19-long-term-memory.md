@@ -137,9 +137,12 @@ def test_read_empty_database_does_not_create_files(tmp_path: Path) -> None:
 
 def test_first_write_creates_schema_version_two(tmp_path: Path) -> None:
     with WorkspaceDatabase(tmp_path).write() as connection:
-        names = {row[0] for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )}
+        names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
     assert {"sessions", "messages", "memories", "memory_tags"} <= names
     path = tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
     with sqlite3.connect(path) as connection:
@@ -154,7 +157,11 @@ def test_write_migrates_v1_without_changing_conversations(tmp_path: Path) -> Non
         connection.executescript(V1_SCHEMA)
         connection.execute(
             "INSERT INTO sessions VALUES (?, ?, ?)",
-            ("11111111-1111-1111-1111-111111111111", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+            (
+                "11111111-1111-1111-1111-111111111111",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            ),
         )
         connection.executemany(
             "INSERT INTO messages VALUES (?, ?, ?, ?)",
@@ -167,9 +174,9 @@ def test_write_migrates_v1_without_changing_conversations(tmp_path: Path) -> Non
         pass
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (2,)
-        assert connection.execute("SELECT role, content FROM messages ORDER BY sequence").fetchall() == [
-            ("user", "hello"), ("assistant", "hi")
-        ]
+        assert connection.execute(
+            "SELECT role, content FROM messages ORDER BY sequence"
+        ).fetchall() == [("user", "hello"), ("assistant", "hi")]
 
 
 def test_failed_write_rolls_back_schema_migration(tmp_path: Path) -> None:
@@ -183,9 +190,12 @@ def test_failed_write_rolls_back_schema_migration(tmp_path: Path) -> None:
             raise RuntimeError("stop")
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (1,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE name = 'memories'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'memories'"
+            ).fetchone()
+            is None
+        )
 ```
 
 Add `test_read_rejects_symlinked_data_directory`, `test_read_rejects_symlinked_database`, and `test_read_rejects_non_regular_database` by creating those exact filesystem shapes under `tmp_path` and asserting `InvalidConversationStoreError` matches `symbolic link` or `regular file`. Add `test_read_rejects_corrupt_database` by writing `b"not sqlite"` to the database path and asserting the public error contains `read` but not `sqlite`. Add `test_read_rejects_unsupported_version` by creating the v1 tables, setting `PRAGMA user_version = 3`, and asserting `schema version is not supported`.
@@ -307,7 +317,10 @@ def test_append_turn_migrates_v1_and_preserves_existing_history(tmp_path: Path) 
         Message(role="assistant", content="reply"),
     )
     assert [message.content for message in store.load(SESSION_ID).messages] == [
-        "first", "answer", "second", "reply"
+        "first",
+        "answer",
+        "second",
+        "reply",
     ]
 ```
 
@@ -370,7 +383,9 @@ SECOND_TIME = datetime(2026, 7, 19, 2, 0, tzinfo=timezone.utc)
 
 def test_create_normalizes_content_tags_and_timestamps(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: FIRST_ID)
-    record = store.create("  Use uv for Python\nprojects.  ", [" Python ", "TOOLS", "python"])
+    record = store.create(
+        "  Use uv for Python\nprojects.  ", [" Python ", "TOOLS", "python"]
+    )
     assert record.id == FIRST_ID
     assert record.content == "Use uv for Python\nprojects."
     assert record.tags == ("python", "tools")
@@ -395,16 +410,22 @@ def test_create_rejects_invalid_memory(content, tags, message, tmp_path: Path) -
 
 def test_exact_duplicate_reports_existing_id(tmp_path: Path) -> None:
     ids = iter((FIRST_ID, SECOND_ID))
-    store = MemoryStore(tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids))
+    store = MemoryStore(
+        tmp_path, clock=lambda: FIRST_TIME, id_factory=lambda: next(ids)
+    )
     store.create("Remember this", ["B", "a"])
     with pytest.raises(DuplicateMemoryError) as caught:
         store.create("Remember this", ["A", "b"])
     assert caught.value.existing_id == FIRST_ID
 
 
-def test_update_replaces_content_and_tags_but_preserves_identity(tmp_path: Path) -> None:
+def test_update_replaces_content_and_tags_but_preserves_identity(
+    tmp_path: Path,
+) -> None:
     times = iter((FIRST_TIME, SECOND_TIME))
-    store = MemoryStore(tmp_path, clock=lambda: next(times), id_factory=lambda: FIRST_ID)
+    store = MemoryStore(
+        tmp_path, clock=lambda: next(times), id_factory=lambda: FIRST_ID
+    )
     original = store.create("old", ["before"])
     updated = store.update(FIRST_ID, "new", ["AFTER"])
     assert updated.id == original.id
@@ -634,8 +655,7 @@ terms = tuple(normalized_query.casefold().split()) if normalized_query else ()
 haystack = record.content.casefold()
 tag_haystack = record.tags
 matches_terms = all(
-    term in haystack or any(term in tag for tag in tag_haystack)
-    for term in terms
+    term in haystack or any(term in tag for tag in tag_haystack) for term in terms
 )
 matches_tags = set(normalized_tags).issubset(tag_haystack)
 ```
@@ -681,27 +701,35 @@ def test_memory_tool_confirmation_policy(tmp_path: Path) -> None:
     assert ForgetMemoryTool(store).requires_confirmation is True
 
 
-def test_remember_preflight_rejects_duplicate_before_confirmation(tmp_path: Path) -> None:
+def test_remember_preflight_rejects_duplicate_before_confirmation(
+    tmp_path: Path,
+) -> None:
     store = fixed_store(tmp_path)
     store.create("Use uv", ["python"])
-    result = RememberMemoryTool(store).preflight({"content": "Use uv", "tags": ["PYTHON"]})
+    result = RememberMemoryTool(store).preflight(
+        {"content": "Use uv", "tags": ["PYTHON"]}
+    )
     assert result is not None
     assert (result.ok, result.code) == (False, "duplicate_memory")
     assert FIRST_ID in result.message
 
 
-def test_search_executes_without_confirmation_and_returns_records(tmp_path: Path) -> None:
+def test_search_executes_without_confirmation_and_returns_records(
+    tmp_path: Path,
+) -> None:
     store = fixed_store(tmp_path)
     record = store.create("Use uv", ["python"])
     result = SearchMemoriesTool(store).execute({"query": "uv", "tags": []})
     assert result.ok
-    assert result.data == [{
-        "id": record.id,
-        "content": record.content,
-        "tags": ["python"],
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-    }]
+    assert result.data == [
+        {
+            "id": record.id,
+            "content": record.content,
+            "tags": ["python"],
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+    ]
 ```
 
 Add `test_memory_tool_schemas_are_closed` to compare every `parameters` dict with the constants in Step 3 and assert `additionalProperties is False`. Add `test_descriptions_require_explicit_user_request` to casefold all four descriptions and assert `only when the user explicitly asks` is present. Parameterize malformed argument dictionaries and assert `invalid_arguments`. Add `test_update_confirmation_shows_complete_before_and_after` and `test_forget_confirmation_shows_complete_record`, asserting the UUID, untruncated content, and every tag. Execute remember/update/forget through a real `ToolRegistry` with `confirm=lambda _: False` and assert `approval_denied` plus unchanged store contents. Use a fake store whose methods raise `MemoryStoreError("safe")` and assert `memory_store_error` with no traceback text. Use a valid missing UUID for update/forget and assert `memory_not_found`.
@@ -769,10 +797,10 @@ and update must render `Current:` and `Replacement:` blocks. Do not truncate con
 Modify `create_builtin_registry` to construct one `MemoryStore(workspace)` and append the tools after Todo tools in this deterministic order:
 
 ```python
-RememberMemoryTool(memory_store),
-SearchMemoriesTool(memory_store),
-UpdateMemoryTool(memory_store),
-ForgetMemoryTool(memory_store),
+(RememberMemoryTool(memory_store),)
+(SearchMemoriesTool(memory_store),)
+(UpdateMemoryTool(memory_store),)
+(ForgetMemoryTool(memory_store),)
 ```
 
 Update explicit tool-name assertions in `tests/test_tool_registry.py` to include these four names in that order. Add a regression test that merely creating the registry does not create `.cdy-agent` or the SQLite database.
@@ -819,7 +847,9 @@ def test_memories_add_defaults_to_no(tmp_path: Path, monkeypatch) -> None:
     assert store.created == []
 
 
-def test_memories_add_confirmed_creates_normalized_record(tmp_path: Path, monkeypatch) -> None:
+def test_memories_add_confirmed_creates_normalized_record(
+    tmp_path: Path, monkeypatch
+) -> None:
     store = FakeMemoryStore()
     monkeypatch.setattr(cli, "MemoryStore", lambda workspace: store)
     result = runner.invoke(
@@ -883,9 +913,14 @@ Add CLI/agent regression tests that inspect the fake gateway call for both `ask`
 
 ```python
 assert {tool["name"] for tool in gateway.calls[0]["tools"]} >= {
-    "remember_memory", "search_memories", "update_memory", "forget_memory"
+    "remember_memory",
+    "search_memories",
+    "update_memory",
+    "forget_memory",
 }
-assert all(memory.content not in message.content for message in gateway.calls[0]["messages"])
+assert all(
+    memory.content not in message.content for message in gateway.calls[0]["messages"]
+)
 ```
 
 Seed a memory in the fake/temporary store but make the model return a final response without a tool call. Assert no search method was called and no memory content entered messages.

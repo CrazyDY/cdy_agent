@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from .base import ToolResult
 from .filesystem import resolve_workspace
-
 
 STORE_VERSION = 1
 DATA_DIRECTORY = ".cdy-agent"
@@ -54,9 +54,13 @@ class PersonalStore:
         except OSError:
             return ToolResult.failure("store_error", "Could not read personal data.")
         except (UnicodeDecodeError, json.JSONDecodeError):
-            return ToolResult.failure("invalid_store", "Stored personal data is invalid.")
+            return ToolResult.failure(
+                "invalid_store", "Stored personal data is invalid."
+            )
         if not validator(document):
-            return ToolResult.failure("invalid_store", "Stored personal data is invalid.")
+            return ToolResult.failure(
+                "invalid_store", "Stored personal data is invalid."
+            )
         return ToolResult.success([dict(item) for item in document["items"]])
 
     def _save(
@@ -111,7 +115,9 @@ class PersonalStore:
             return ToolResult.failure("store_error", "Could not write personal data.")
         return ToolResult.success({"path": str(target), "count": len(items)})
 
-    def _target(self, filename: str, create_directory: bool) -> Path | ToolResult | None:
+    def _target(
+        self, filename: str, create_directory: bool
+    ) -> Path | ToolResult | None:
         data_directory = self.workspace / DATA_DIRECTORY
         try:
             if not data_directory.exists() and not data_directory.is_symlink():
@@ -139,9 +145,7 @@ class PersonalStore:
                 "path_outside_workspace", "Personal data is outside the workspace."
             )
         except OSError:
-            return ToolResult.failure(
-                "store_error", "Could not access personal data."
-            )
+            return ToolResult.failure("store_error", "Could not access personal data.")
 
 
 def _is_uuid(value: object) -> bool:

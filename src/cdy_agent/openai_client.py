@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from openai import OpenAI
 
@@ -154,27 +154,36 @@ class ModelGateway:
         request_messages: list[dict[str, Any]] = _message_dicts(messages)
         if continuation is not None:
             if not isinstance(continuation, ChatContinuation):
-                raise ValueError("Continuation does not match Chat Completions API mode.")
+                raise ValueError(
+                    "Continuation does not match Chat Completions API mode."
+                )
             request_messages.extend(continuation.history)
-            request_messages.append({
-                "role": "assistant",
-                "content": continuation.content,
-                "tool_calls": [_chat_tool_call(call) for call in continuation.calls],
-            })
+            request_messages.append(
+                {
+                    "role": "assistant",
+                    "content": continuation.content,
+                    "tool_calls": [
+                        _chat_tool_call(call) for call in continuation.calls
+                    ],
+                }
+            )
             request_messages.extend(
                 {"role": "tool", "tool_call_id": call_id, "content": output}
                 for call_id, output in tool_outputs
             )
         request: dict[str, Any] = {"model": self.model, "messages": request_messages}
         if tools:
-            request["tools"] = [{
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool["description"],
-                    "parameters": tool["parameters"],
-                },
-            } for tool in tools]
+            request["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": tool["parameters"],
+                    },
+                }
+                for tool in tools
+            ]
 
         response = self.client.chat.completions.create(**request)
         usage = _response_usage(response, "prompt_tokens", "completion_tokens")
@@ -196,7 +205,7 @@ class ModelGateway:
             # assistant tool-call messages plus tool results, so the next
             # request rebuilds the full tool-call chain without re-sending
             # the original input messages.
-            history = tuple(request_messages[len(_message_dicts(messages)):])
+            history = tuple(request_messages[len(_message_dicts(messages)) :])
             return ToolCallResponse(
                 calls, ChatContinuation(calls, content, history), usage
             )
@@ -286,17 +295,13 @@ class ModelGateway:
                     if output_index in completed_indexes:
                         raise _unsupported_response()
                     item_id = _stream_item_id(item)
-                    _merge_stream_item_id(
-                        item_ids, item_indexes, output_index, item_id
-                    )
+                    _merge_stream_item_id(item_ids, item_indexes, output_index, item_id)
                     _claim_stream_call_id(
                         call_indexes,
                         output_index,
                         getattr(item, "call_id", None),
                     )
-                    part = tool_call_parts.setdefault(
-                        output_index, _StreamedToolCall()
-                    )
+                    part = tool_call_parts.setdefault(output_index, _StreamedToolCall())
                     _merge_responses_tool_metadata(part, item)
             elif event_type == "response.function_call_arguments.delta":
                 output_index = _stream_output_index(event)
@@ -324,9 +329,7 @@ class ModelGateway:
                     if output_index in completed_indexes:
                         raise _unsupported_response()
                     item_id = _stream_item_id(item)
-                    _merge_stream_item_id(
-                        item_ids, item_indexes, output_index, item_id
-                    )
+                    _merge_stream_item_id(item_ids, item_indexes, output_index, item_id)
                     _claim_stream_call_id(
                         call_indexes,
                         output_index,
@@ -343,9 +346,7 @@ class ModelGateway:
                         or not isinstance(arguments, str)
                     ):
                         raise _unsupported_response()
-                    part = tool_call_parts.setdefault(
-                        output_index, _StreamedToolCall()
-                    )
+                    part = tool_call_parts.setdefault(output_index, _StreamedToolCall())
                     _merge_responses_tool_metadata(part, item)
                     part.final_arguments = arguments
                     completed_indexes.add(output_index)
@@ -366,9 +367,7 @@ class ModelGateway:
         if calls:
             if response_id is None:
                 raise _unsupported_response()
-            return ToolCallResponse(
-                calls, ResponsesContinuation(response_id), usage
-            )
+            return ToolCallResponse(calls, ResponsesContinuation(response_id), usage)
         return _final_response("".join(chunks), usage)
 
     def _stream_chat_completion(
@@ -382,13 +381,19 @@ class ModelGateway:
         request_messages: list[dict[str, Any]] = _message_dicts(messages)
         if continuation is not None:
             if not isinstance(continuation, ChatContinuation):
-                raise ValueError("Continuation does not match Chat Completions API mode.")
+                raise ValueError(
+                    "Continuation does not match Chat Completions API mode."
+                )
             request_messages.extend(continuation.history)
-            request_messages.append({
-                "role": "assistant",
-                "content": continuation.content,
-                "tool_calls": [_chat_tool_call(call) for call in continuation.calls],
-            })
+            request_messages.append(
+                {
+                    "role": "assistant",
+                    "content": continuation.content,
+                    "tool_calls": [
+                        _chat_tool_call(call) for call in continuation.calls
+                    ],
+                }
+            )
             request_messages.extend(
                 {"role": "tool", "tool_call_id": call_id, "content": output}
                 for call_id, output in tool_outputs
@@ -400,14 +405,17 @@ class ModelGateway:
             "stream_options": {"include_usage": True},
         }
         if tools:
-            request["tools"] = [{
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool["description"],
-                    "parameters": tool["parameters"],
-                },
-            } for tool in tools]
+            request["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": tool["parameters"],
+                    },
+                }
+                for tool in tools
+            ]
 
         chunks: list[str] = []
         usage: TokenUsage | None = None
@@ -417,9 +425,7 @@ class ModelGateway:
         call_indexes: dict[str, int] = {}
         for event in self.client.chat.completions.create(**request):
             choices = _sdk_sequence(getattr(event, "choices", ()))
-            event_usage = _response_usage(
-                event, "prompt_tokens", "completion_tokens"
-            )
+            event_usage = _response_usage(event, "prompt_tokens", "completion_tokens")
             if terminal_reason is not None:
                 if choices or event_usage is None or trailing_usage_seen:
                     raise _unsupported_response()
@@ -486,7 +492,7 @@ class ModelGateway:
             # assistant tool-call messages plus tool results, so the next
             # request rebuilds the full tool-call chain without re-sending
             # the original input messages.
-            history = tuple(request_messages[len(_message_dicts(messages)):])
+            history = tuple(request_messages[len(_message_dicts(messages)) :])
             content = "".join(chunks) or None
             return ToolCallResponse(
                 calls, ChatContinuation(calls, content, history), usage
@@ -510,9 +516,7 @@ def _unsupported_response() -> RuntimeError:
     return RuntimeError("OpenAI returned an unsupported response.")
 
 
-def _merge_chat_tool_delta(
-    part: _StreamedToolCall, tool_delta: object
-) -> None:
+def _merge_chat_tool_delta(part: _StreamedToolCall, tool_delta: object) -> None:
     call_id = getattr(tool_delta, "id", None)
     if call_id is not None:
         if not isinstance(call_id, str) or not call_id.strip():
@@ -601,8 +605,10 @@ def _merge_responses_tool_metadata(part: _StreamedToolCall, item: object) -> Non
 
 def _tool_call(call_id: object, name: object, arguments: object) -> ToolCall:
     if (
-        not isinstance(call_id, str) or not call_id.strip()
-        or not isinstance(name, str) or not name.strip()
+        not isinstance(call_id, str)
+        or not call_id.strip()
+        or not isinstance(name, str)
+        or not name.strip()
         or not isinstance(arguments, str)
     ):
         raise RuntimeError("OpenAI returned an unsupported response.")
@@ -640,9 +646,7 @@ def _response_usage(
         raise RuntimeError("OpenAI returned an unsupported response.") from None
 
 
-def _final_response(
-    text: object, usage: TokenUsage | None = None
-) -> FinalResponse:
+def _final_response(text: object, usage: TokenUsage | None = None) -> FinalResponse:
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError("OpenAI returned an unsupported response.")
     return FinalResponse(text, usage)

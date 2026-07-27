@@ -2,9 +2,9 @@ from decimal import Decimal
 
 import pytest
 
+from cdy_agent.config import WorkspaceConfig
 from cdy_agent.observability.models import TokenUsage
 from cdy_agent.observability.pricing import Pricing, estimate_cost, resolve_pricing
-from cdy_agent.config import WorkspaceConfig
 
 
 def test_resolve_pricing_and_estimate_exact_cost(
@@ -50,7 +50,7 @@ def test_environment_pricing_wins_over_workspace_config(
         output_cost_per_million="4.5",
     )
 
-    assert resolve_pricing(config) == Pricing(Decimal("1"), Decimal("2"))
+    assert resolve_pricing(config) == Pricing(Decimal(1), Decimal(2))
 
 
 @pytest.mark.parametrize(

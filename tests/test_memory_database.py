@@ -1,13 +1,12 @@
-from collections.abc import Callable
-from pathlib import Path
 import sqlite3
 import threading
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
-from cdy_agent.memory.database import WorkspaceDatabase
 from cdy_agent.memory import InvalidConversationStoreError
-
+from cdy_agent.memory.database import WorkspaceDatabase
 
 V1_SCHEMA = """
 CREATE TABLE sessions (
@@ -91,9 +90,10 @@ def test_concurrent_first_writes_preserve_both_transactions(
     assert database.is_file()
     with original_connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (2,)
-        assert connection.execute(
-            "SELECT id FROM sessions ORDER BY id"
-        ).fetchall() == [("first",), ("second",)]
+        assert connection.execute("SELECT id FROM sessions ORDER BY id").fetchall() == [
+            ("first",),
+            ("second",),
+        ]
 
 
 def test_failed_first_write_leaves_recoverable_version_zero_placeholder(
@@ -108,10 +108,13 @@ def test_failed_first_write_leaves_recoverable_version_zero_placeholder(
     assert database.is_file()
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (0,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall() == []
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            == []
+        )
 
     with WorkspaceDatabase(tmp_path).write():
         pass
@@ -133,10 +136,13 @@ def test_read_treats_version_zero_placeholder_as_empty_without_mutating(
 
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (0,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall() == []
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            == []
+        )
 
 
 def test_version_zero_database_with_user_table_is_rejected(
@@ -223,9 +229,12 @@ def test_failed_write_rolls_back_schema_migration(tmp_path: Path) -> None:
             raise RuntimeError("stop")
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (1,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE name = 'memories'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'memories'"
+            ).fetchone()
+            is None
+        )
 
 
 def test_read_rejects_symlinked_data_directory(
@@ -284,11 +293,13 @@ def test_read_rejects_unsupported_version(tmp_path: Path) -> None:
         connection.executescript(V1_SCHEMA)
         connection.execute("PRAGMA user_version = 3")
 
-    with pytest.raises(
-        InvalidConversationStoreError, match="schema version is not supported"
+    with (
+        pytest.raises(
+            InvalidConversationStoreError, match="schema version is not supported"
+        ),
+        WorkspaceDatabase(tmp_path).read(),
     ):
-        with WorkspaceDatabase(tmp_path).read():
-            pass
+        pass
 
 
 @pytest.mark.parametrize(
@@ -392,9 +403,12 @@ def test_read_and_migration_reject_malformed_v1_schema(
 
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (1,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE name = 'memories'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'memories'"
+            ).fetchone()
+            is None
+        )
 
 
 @pytest.mark.parametrize(
@@ -544,9 +558,7 @@ def test_read_and_write_reject_schema_with_explicit_user_index(
         pass
     database = tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
     with sqlite3.connect(database) as connection:
-        connection.execute(
-            "CREATE INDEX memory_content_index ON memories(content)"
-        )
+        connection.execute("CREATE INDEX memory_content_index ON memories(content)")
 
     with pytest.raises(InvalidConversationStoreError):
         with WorkspaceDatabase(tmp_path).read():

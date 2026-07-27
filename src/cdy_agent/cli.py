@@ -37,7 +37,6 @@ from .memory import (
     MemoryStoreError,
     StoredMemory,
 )
-from .openai_client import MissingAPIKeyError, ModelGateway
 from .observability import (
     Pricing,
     TraceRecord,
@@ -47,11 +46,11 @@ from .observability import (
     resolve_pricing,
 )
 from .observability.logging import configure_structured_logging, resolve_log_level
+from .openai_client import MissingAPIKeyError, ModelGateway
 from .skills import SkillManager, create_skill_tools
 from .tools import create_builtin_registry
 from .tools.base import ConfirmationDecision, ConfirmationRequest
 from .tools.filesystem import resolve_workspace
-
 
 app = typer.Typer(help="Run the CDY local personal AI assistant.")
 sessions_app = typer.Typer(help="List and delete saved conversations.")
@@ -107,11 +106,7 @@ def _fail_for_exception(exc: Exception) -> NoReturn:
 
 def _confirm_tool(request: ConfirmationRequest) -> ConfirmationDecision:
     """Confirm a tool call, treating interruptions as denial."""
-    prompt = (
-        "[y] once / [a] always / [N] deny: "
-        if request.allow_always
-        else "[y/N]: "
-    )
+    prompt = "[y] once / [a] always / [N] deny: " if request.allow_always else "[y/N]: "
     try:
         typer.echo(f"{request.description} {prompt}", nl=False)
         answer = input().strip().lower()
@@ -139,9 +134,7 @@ def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     return Agent(gateway, registry, _confirm_tool, system_prompt=system_prompt)
 
 
-def _system_prompt_with_skills(
-    base_prompt: str, catalog: dict[str, object]
-) -> str:
+def _system_prompt_with_skills(base_prompt: str, catalog: dict[str, object]) -> str:
     """Append a concise workspace Skill catalog when Skills are available."""
     raw_skills = catalog.get("skills")
     if not isinstance(raw_skills, list):
@@ -157,14 +150,14 @@ def _system_prompt_with_skills(
             continue
         if not name.strip() or not description.strip():
             continue
-        entries.append(f"- {name.strip()}: {description.strip()}")
+        entries.append(f"- *{name.strip()}*: {description.strip()}")
     if not entries:
         return base_prompt
 
     skill_catalog = "\n".join(entries)
     return (
         f"{base_prompt.rstrip()}\n\n"
-        "Available workspace Skills:\n"
+        "**Available workspace Skills**:\n"
         f"{skill_catalog}\n\n"
         "When a Skill matches the task, activate it with activate_skill and "
         "follow its instructions."
@@ -250,6 +243,7 @@ def _run_stream_with_best_effort_trace(
     session_id: str | None = None,
 ) -> str:
     """Run one streamed agent turn while preserving best-effort traces."""
+
     def write_chunk(chunk: str) -> None:
         typer.echo(chunk, nl=False)
 
@@ -541,9 +535,7 @@ def delete_session(
     try:
         active_workspace = resolve_workspace(workspace or Path.cwd())
         store = ConversationStore(active_workspace)
-        approved = typer.confirm(
-            f"Delete conversation {session_id}?", default=False
-        )
+        approved = typer.confirm(f"Delete conversation {session_id}?", default=False)
         if not approved:
             typer.echo("Aborted.")
             return
@@ -565,9 +557,7 @@ def list_traces(
 ) -> None:
     """List saved trace metadata, newest first."""
     try:
-        records = TraceStore(
-            resolve_workspace(workspace or Path.cwd())
-        ).list_traces()
+        records = TraceStore(resolve_workspace(workspace or Path.cwd())).list_traces()
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
     if not records:
@@ -604,9 +594,7 @@ def show_trace(
 ) -> None:
     """Show detailed metadata for one saved trace."""
     try:
-        record = TraceStore(resolve_workspace(workspace or Path.cwd())).get(
-            trace_id
-        )
+        record = TraceStore(resolve_workspace(workspace or Path.cwd())).get(trace_id)
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
     _render_trace(record)
@@ -678,9 +666,7 @@ def run_evals(
         typer.echo(f"{status} {result.name}")
         if not result.passed:
             typer.echo(f"  {result.message}")
-    typer.echo(
-        f"{report.passed} passed, {report.failed} failed, {report.total} total"
-    )
+    typer.echo(f"{report.passed} passed, {report.failed} failed, {report.total} total")
     if report.failed:
         raise typer.Exit(code=1)
 

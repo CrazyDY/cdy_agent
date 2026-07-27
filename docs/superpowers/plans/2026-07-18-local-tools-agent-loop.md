@@ -91,12 +91,14 @@ def test_registry_exposes_function_definition_and_executes() -> None:
         ToolCall("call-1", "echo", '{"text":"hello"}'),
         confirm=lambda request: True,
     )
-    assert registry.definitions == ({
-        "type": "function",
-        "name": "echo",
-        "description": "Echo text.",
-        "parameters": EchoTool().parameters,
-    },)
+    assert registry.definitions == (
+        {
+            "type": "function",
+            "name": "echo",
+            "description": "Echo text.",
+            "parameters": EchoTool().parameters,
+        },
+    )
     assert json.loads(result.to_json()) == {
         "ok": True,
         "data": {"text": "hello"},
@@ -105,9 +107,18 @@ def test_registry_exposes_function_definition_and_executes() -> None:
 
 def test_registry_returns_structured_errors() -> None:
     registry = ToolRegistry([EchoTool()])
-    assert registry.execute(ToolCall("1", "missing", "{}"), lambda _: True).code == "unknown_tool"
-    assert registry.execute(ToolCall("2", "echo", "{"), lambda _: True).code == "invalid_arguments"
-    assert registry.execute(ToolCall("3", "echo", "[]"), lambda _: True).code == "invalid_arguments"
+    assert (
+        registry.execute(ToolCall("1", "missing", "{}"), lambda _: True).code
+        == "unknown_tool"
+    )
+    assert (
+        registry.execute(ToolCall("2", "echo", "{"), lambda _: True).code
+        == "invalid_arguments"
+    )
+    assert (
+        registry.execute(ToolCall("3", "echo", "[]"), lambda _: True).code
+        == "invalid_arguments"
+    )
 
 
 def test_registry_denies_confirmed_tool_without_executing() -> None:
@@ -161,10 +172,14 @@ class ToolResult:
         return cls(ok=False, code=code, message=message)
 
     def to_json(self) -> str:
-        value = {"ok": True, "data": self.data} if self.ok else {
-            "ok": False,
-            "error": {"code": self.code, "message": self.message},
-        }
+        value = (
+            {"ok": True, "data": self.data}
+            if self.ok
+            else {
+                "ok": False,
+                "error": {"code": self.code, "message": self.message},
+            }
+        )
         return json.dumps(value, ensure_ascii=False)
 
 
@@ -204,12 +219,15 @@ class ToolRegistry:
 
     @property
     def definitions(self) -> tuple[dict[str, object], ...]:
-        return tuple({
-            "type": "function",
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters,
-        } for tool in self._tools.values())
+        return tuple(
+            {
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            }
+            for tool in self._tools.values()
+        )
 
     def execute(self, call: ToolCall, confirm: ConfirmationCallback) -> ToolResult:
         tool = self._tools.get(call.name)
@@ -218,9 +236,13 @@ class ToolRegistry:
         try:
             arguments = json.loads(call.arguments_json)
         except json.JSONDecodeError:
-            return ToolResult.failure("invalid_arguments", "Arguments must be valid JSON.")
+            return ToolResult.failure(
+                "invalid_arguments", "Arguments must be valid JSON."
+            )
         if not isinstance(arguments, dict):
-            return ToolResult.failure("invalid_arguments", "Arguments must be a JSON object.")
+            return ToolResult.failure(
+                "invalid_arguments", "Arguments must be a JSON object."
+            )
         if tool.requires_confirmation:
             request = ConfirmationRequest(
                 tool.name,
@@ -228,7 +250,9 @@ class ToolRegistry:
                 tool.confirmation_description(arguments),
             )
             if not confirm(request):
-                return ToolResult.failure("approval_denied", "User declined this tool call.")
+                return ToolResult.failure(
+                    "approval_denied", "User declined this tool call."
+                )
         return tool.execute(arguments)
 ```
 
@@ -291,7 +315,9 @@ def test_read_file_reads_utf8_and_truncates(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("arguments", [{}, {"path": 1}, {"path": "a", "extra": 1}])
-def test_read_file_rejects_invalid_arguments(tmp_path: Path, arguments: dict[str, object]) -> None:
+def test_read_file_rejects_invalid_arguments(
+    tmp_path: Path, arguments: dict[str, object]
+) -> None:
     assert ReadFileTool(tmp_path).execute(arguments).code == "invalid_arguments"
 
 
@@ -331,12 +357,20 @@ def resolve_workspace(path: Path) -> Path:
 
 def _resolve_existing(workspace: Path, raw_path: object) -> Path | ToolResult:
     if not isinstance(raw_path, str) or not raw_path:
-        return ToolResult.failure("invalid_arguments", "path must be a non-empty string.")
-    target = (workspace / raw_path).resolve() if not Path(raw_path).is_absolute() else Path(raw_path).resolve()
+        return ToolResult.failure(
+            "invalid_arguments", "path must be a non-empty string."
+        )
+    target = (
+        (workspace / raw_path).resolve()
+        if not Path(raw_path).is_absolute()
+        else Path(raw_path).resolve()
+    )
     try:
         target.relative_to(workspace)
     except ValueError:
-        return ToolResult.failure("path_outside_workspace", "Path is outside the workspace.")
+        return ToolResult.failure(
+            "path_outside_workspace", "Path is outside the workspace."
+        )
     return target
 ```
 
@@ -383,10 +417,18 @@ def test_write_file_creates_and_explicitly_overwrites(tmp_path: Path) -> None:
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "new"
 
 
-def test_write_file_requires_existing_parent_and_stays_in_workspace(tmp_path: Path) -> None:
+def test_write_file_requires_existing_parent_and_stays_in_workspace(
+    tmp_path: Path,
+) -> None:
     tool = WriteFileTool(tmp_path)
-    assert tool.execute({"path": "missing/note.txt", "content": "x"}).code == "parent_not_found"
-    assert tool.execute({"path": "../outside.txt", "content": "x"}).code == "path_outside_workspace"
+    assert (
+        tool.execute({"path": "missing/note.txt", "content": "x"}).code
+        == "parent_not_found"
+    )
+    assert (
+        tool.execute({"path": "../outside.txt", "content": "x"}).code
+        == "path_outside_workspace"
+    )
 
 
 def test_write_description_identifies_create_or_overwrite(tmp_path: Path) -> None:
@@ -446,35 +488,55 @@ import pytest
 from cdy_agent.tools.shell import ShellTool
 
 
-@pytest.mark.parametrize("argv", [
-    ["rm", "file"], ["/bin/ls"], ["./ls"], ["git", "log"],
-    ["git", "-C", "..", "status"], ["git", "--git-dir=../.git", "diff"],
-])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["rm", "file"],
+        ["/bin/ls"],
+        ["./ls"],
+        ["git", "log"],
+        ["git", "-C", "..", "status"],
+        ["git", "--git-dir=../.git", "diff"],
+    ],
+)
 def test_shell_rejects_disallowed_commands(tmp_path: Path, argv: list[str]) -> None:
     assert ShellTool(tmp_path).execute({"argv": argv}).code == "command_not_allowed"
 
 
 def test_shell_invokes_runner_without_shell(tmp_path: Path) -> None:
     calls: list[dict[str, object]] = []
+
     def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append({"argv": argv, **kwargs})
         return subprocess.CompletedProcess(argv, 0, "ok", "")
-    result = ShellTool(tmp_path, runner=runner).execute({
-        "argv": ["git", "status", "--short"], "timeout_seconds": 4,
-    })
+
+    result = ShellTool(tmp_path, runner=runner).execute(
+        {
+            "argv": ["git", "status", "--short"],
+            "timeout_seconds": 4,
+        }
+    )
     assert result.ok is True
-    assert calls == [{
-        "argv": ["git", "status", "--short"],
-        "cwd": tmp_path.resolve(), "shell": False, "capture_output": True,
-        "text": True, "timeout": 4, "check": False,
-    }]
+    assert calls == [
+        {
+            "argv": ["git", "status", "--short"],
+            "cwd": tmp_path.resolve(),
+            "shell": False,
+            "capture_output": True,
+            "text": True,
+            "timeout": 4,
+            "check": False,
+        }
+    ]
 
 
 def test_shell_metacharacters_are_plain_arguments(tmp_path: Path) -> None:
     calls: list[list[str]] = []
+
     def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
+
     ShellTool(tmp_path, runner=runner).execute({"argv": ["rg", "|", "."]})
     assert calls == [["rg", "|", "."]]
 ```
@@ -492,10 +554,21 @@ Expected: collection fails because `shell.py` does not exist.
 Define:
 
 ```python
-ALLOWED_COMMANDS = frozenset({
-    "pwd", "ls", "find", "rg", "grep", "sed", "head", "tail",
-    "wc", "sort", "uniq",
-})
+ALLOWED_COMMANDS = frozenset(
+    {
+        "pwd",
+        "ls",
+        "find",
+        "rg",
+        "grep",
+        "sed",
+        "head",
+        "tail",
+        "wc",
+        "sort",
+        "uniq",
+    }
+)
 ALLOWED_GIT_SUBCOMMANDS = frozenset({"status", "diff"})
 MAX_OUTPUT_CHARS = 64 * 1024
 DEFAULT_TIMEOUT_SECONDS = 10
@@ -543,9 +616,14 @@ Assert a text-only response becomes `FinalResponse`, and missing text plus missi
 Create fake assistant messages with `content` and `tool_calls`. Assert tool definitions are converted to:
 
 ```python
-{"type": "function", "function": {
-    "name": "read_file", "description": "Read a file.", "parameters": parameters,
-}}
+{
+    "type": "function",
+    "function": {
+        "name": "read_file",
+        "description": "Read a file.",
+        "parameters": parameters,
+    },
+}
 ```
 
 Assert continuation retains the assistant tool-call message and appends one `{"role": "tool", "tool_call_id": call_id, "content": result_json}` per output before the next request.
@@ -609,9 +687,13 @@ class FakeGateway:
 
 
 class FakeRegistry:
-    definitions = ({"type": "function", "name": "echo", "description": "", "parameters": {}},)
+    definitions = (
+        {"type": "function", "name": "echo", "description": "", "parameters": {}},
+    )
+
     def __init__(self) -> None:
         self.calls: list[ToolCall] = []
+
     def execute(self, call: ToolCall, confirm: object) -> ToolResult:
         self.calls.append(call)
         return ToolResult.success({"value": call.name})
@@ -619,16 +701,19 @@ class FakeRegistry:
 
 def test_agent_returns_direct_response() -> None:
     gateway = FakeGateway([FinalResponse("done")])
-    assert Agent(gateway, FakeRegistry(), lambda _: False).run(
-        [Message("user", "hello")]
-    ) == "done"
+    assert (
+        Agent(gateway, FakeRegistry(), lambda _: False).run([Message("user", "hello")])
+        == "done"
+    )
 
 
 def test_agent_executes_batch_and_continues() -> None:
     calls = (ToolCall("1", "a", "{}"), ToolCall("2", "b", "{}"))
     gateway = FakeGateway([ToolCallResponse(calls, "next"), FinalResponse("done")])
     registry = FakeRegistry()
-    assert Agent(gateway, registry, lambda _: True).run([Message("user", "go")]) == "done"
+    assert (
+        Agent(gateway, registry, lambda _: True).run([Message("user", "go")]) == "done"
+    )
     assert registry.calls == list(calls)
     assert gateway.calls[1]["tool_outputs"] == (
         ("1", ToolResult.success({"value": "a"}).to_json()),
@@ -717,7 +802,11 @@ Add tests:
 def test_ask_defaults_workspace_to_invocation_directory(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     seen = []
-    monkeypatch.setattr(cli, "_create_agent", lambda model, api_mode, workspace: seen.append(workspace) or FakeAgent("ok"))
+    monkeypatch.setattr(
+        cli,
+        "_create_agent",
+        lambda model, api_mode, workspace: seen.append(workspace) or FakeAgent("ok"),
+    )
     result = runner.invoke(app, ["ask", "hello"])
     assert result.exit_code == 0
     assert seen == [tmp_path.resolve()]

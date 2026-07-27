@@ -22,8 +22,7 @@ def write_skill(
     directory = root / ".cdy-agent" / "skills" / name
     directory.mkdir(parents=True)
     metadata = frontmatter or (
-        f"name: {name}\n"
-        f"description: Use {name} for matching tasks.\n"
+        f"name: {name}\ndescription: Use {name} for matching tasks.\n"
     )
     (directory / "SKILL.md").write_text(
         f"---\n{metadata}---\n\n{body}\n",
@@ -59,9 +58,7 @@ def test_parses_all_standard_metadata_fields(tmp_path: Path) -> None:
 
     assert skill.metadata.name == "pdf-processing"
     assert skill.metadata.license == "Apache-2.0"
-    assert skill.metadata.compatibility == (
-        "Requires Python 3.10+ and network access"
-    )
+    assert skill.metadata.compatibility == ("Requires Python 3.10+ and network access")
     assert dict(skill.metadata.metadata) == {
         "author": "example-org",
         "version": "1.0",
@@ -71,9 +68,7 @@ def test_parses_all_standard_metadata_fields(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("raw_name", ['" sample-skill"', '"sample-skill "'])
-def test_rejects_quoted_skill_name_whitespace(
-    tmp_path: Path, raw_name: str
-) -> None:
+def test_rejects_quoted_skill_name_whitespace(tmp_path: Path, raw_name: str) -> None:
     write_skill(
         tmp_path,
         frontmatter=f"name: {raw_name}\ndescription: valid\n",
@@ -182,11 +177,7 @@ def test_rejects_nonstandard_frontmatter(
 def test_rejects_duplicate_keys_and_empty_body(tmp_path: Path) -> None:
     write_skill(
         tmp_path,
-        frontmatter=(
-            "name: sample-skill\n"
-            "name: sample-skill\n"
-            "description: valid\n"
-        ),
+        frontmatter=("name: sample-skill\nname: sample-skill\ndescription: valid\n"),
     )
     write_skill(tmp_path, "empty-body", body="   ")
     discovery = discover_skills(tmp_path)
@@ -319,8 +310,7 @@ def test_discovers_only_standard_resources_recursively_in_stable_order(
     skill = discover_skills(tmp_path).skills[0]
 
     assert [
-        (item.category, item.relative_path, item.size)
-        for item in skill.resources
+        (item.category, item.relative_path, item.size) for item in skill.resources
     ] == [
         ("assets", "assets/template.txt", len("template")),
         ("references", "references/guide.md", len("# Guide")),
@@ -373,9 +363,7 @@ def test_revalidate_rejects_removed_or_replaced_resource(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("replace", [False, True], ids=["rewrite", "replace"])
-def test_revalidate_rejects_changed_regular_file(
-    tmp_path: Path, replace: bool
-) -> None:
+def test_revalidate_rejects_changed_regular_file(tmp_path: Path, replace: bool) -> None:
     directory = write_skill(tmp_path)
     script = directory / "scripts" / "run.py"
     script.parent.mkdir()

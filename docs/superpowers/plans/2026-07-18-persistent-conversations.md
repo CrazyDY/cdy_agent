@@ -288,7 +288,9 @@ class ConversationStore:
         except ConversationStoreError:
             raise
         except sqlite3.Error as error:
-            raise ConversationStoreError("Could not write conversation data.") from error
+            raise ConversationStoreError(
+                "Could not write conversation data."
+            ) from error
 
     def load(self, session_id: str) -> StoredConversation:
         session_id = _canonical_uuid(session_id)
@@ -365,9 +367,13 @@ class ConversationStore:
             )
 
     @staticmethod
-    def _validated_messages(rows: list[tuple[object, object, object]]) -> tuple[Message, ...]:
+    def _validated_messages(
+        rows: list[tuple[object, object, object]],
+    ) -> tuple[Message, ...]:
         if not rows or len(rows) % 2:
-            raise InvalidConversationStoreError("Stored conversation history is invalid.")
+            raise InvalidConversationStoreError(
+                "Stored conversation history is invalid."
+            )
         messages: list[Message] = []
         for expected, (sequence, role, content) in enumerate(rows):
             expected_role = "user" if expected % 2 == 0 else "assistant"
@@ -592,7 +598,11 @@ from cdy_agent.memory import ConversationStoreError, InvalidConversationStoreErr
 
 @pytest.mark.parametrize(
     "session_id",
-    ["not-a-uuid", "52C809C6-6E55-4FF1-9220-E4F90A4F6774", "52c809c6-6e55-4ff1-9220-e4f90a4f6774extra"],
+    [
+        "not-a-uuid",
+        "52C809C6-6E55-4FF1-9220-E4F90A4F6774",
+        "52c809c6-6e55-4ff1-9220-e4f90a4f6774extra",
+    ],
 )
 def test_rejects_noncanonical_session_ids(tmp_path: Path, session_id: str) -> None:
     with pytest.raises(ConversationStoreError, match="complete UUID"):
@@ -624,9 +634,7 @@ def test_corrupt_message_order_is_rejected_and_append_is_atomic(tmp_path: Path) 
     with pytest.raises(InvalidConversationStoreError, match="history is invalid"):
         store.load(session_id)
     with pytest.raises((InvalidConversationStoreError, ConversationStoreError)):
-        store.append_turn(
-            session_id, Message("user", "Two"), Message("assistant", "2")
-        )
+        store.append_turn(session_id, Message("user", "Two"), Message("assistant", "2"))
     with sqlite3.connect(database) as connection:
         count = connection.execute(
             "SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,)
@@ -756,9 +764,7 @@ class FakeConversationStore:
         assert self.stored is not None
         return self.stored
 
-    def append_turn(
-        self, session_id: str, user: Message, assistant: Message
-    ) -> None:
+    def append_turn(self, session_id: str, user: Message, assistant: Message) -> None:
         self.appended.append((session_id, user, assistant))
 ```
 
@@ -924,15 +930,15 @@ def test_chat_store_failure_does_not_display_reply(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     class FailingStore(FakeConversationStore):
-        def append_turn(self, session_id: str, user: Message, assistant: Message) -> None:
+        def append_turn(
+            self, session_id: str, user: Message, assistant: Message
+        ) -> None:
             raise cli.ConversationStoreError("Could not write conversation data.")
 
     monkeypatch.setattr(cli, "ConversationStore", lambda workspace: FailingStore())
     monkeypatch.setattr(cli, "_create_agent", lambda *args: FakeAgent("Unsaved reply"))
 
-    result = runner.invoke(
-        app, ["chat", "--workspace", str(tmp_path)], input="Hello\n"
-    )
+    result = runner.invoke(app, ["chat", "--workspace", str(tmp_path)], input="Hello\n")
 
     assert result.exit_code == 1
     assert "Could not write conversation data" in result.stderr
@@ -1079,9 +1085,7 @@ def test_sessions_list_shows_empty_store_without_writing(
     store.list_summaries = lambda: ()  # type: ignore[attr-defined]
     monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
 
-    result = runner.invoke(
-        app, ["sessions", "list", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["sessions", "list", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     assert result.stdout == "No saved conversations.\n"
@@ -1101,9 +1105,7 @@ def test_sessions_list_renders_ordered_summary_fields(
     )
     monkeypatch.setattr(cli, "ConversationStore", lambda workspace: store)
 
-    result = runner.invoke(
-        app, ["sessions", "list", "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["sessions", "list", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
     assert "52c809c6-6e55-4ff1-9220-e4f90a4f6774" in result.stdout
@@ -1216,9 +1218,7 @@ def delete_session(
     try:
         active_workspace = resolve_workspace(workspace or Path.cwd())
         store = ConversationStore(active_workspace)
-        approved = typer.confirm(
-            f"Delete conversation {session_id}?", default=False
-        )
+        approved = typer.confirm(f"Delete conversation {session_id}?", default=False)
         if not approved:
             typer.echo("Aborted.")
             return

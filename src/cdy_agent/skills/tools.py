@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any
 
 from cdy_agent.tools.base import ToolResult
 from cdy_agent.tools.process import (
@@ -46,9 +47,7 @@ class ListSkillsTool:
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
         if arguments:
-            return ToolResult.failure(
-                "invalid_arguments", "No arguments are accepted."
-            )
+            return ToolResult.failure("invalid_arguments", "No arguments are accepted.")
         return None
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
@@ -63,9 +62,7 @@ class ListSkillsTool:
 class SearchSkillsTool:
     manager: SkillManager
     name: str = "search_skills"
-    description: str = (
-        "Search workspace Skills by natural-language task description."
-    )
+    description: str = "Search workspace Skills by natural-language task description."
     parameters: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -109,9 +106,7 @@ class SearchSkillsTool:
         if invalid:
             return invalid
         return ToolResult.success(
-            self.manager.search_skills(
-                arguments["query"], arguments.get("limit", 5)
-            )
+            self.manager.search_skills(arguments["query"], arguments.get("limit", 5))
         )
 
 
@@ -303,13 +298,15 @@ class RunSkillScriptTool:
                 stderr = _process_output(completed, "stderr")
                 stdout, stdout_limited = limited_output(stdout)
                 stderr, stderr_limited = limited_output(stderr)
-                stdout_truncated = bool(
-                    getattr(completed, "stdout_truncated", False)
-                ) or stdout_limited
-                stderr_truncated = bool(
-                    getattr(completed, "stderr_truncated", False)
-                ) or stderr_limited
-                returncode = getattr(completed, "returncode")
+                stdout_truncated = (
+                    bool(getattr(completed, "stdout_truncated", False))
+                    or stdout_limited
+                )
+                stderr_truncated = (
+                    bool(getattr(completed, "stderr_truncated", False))
+                    or stderr_limited
+                )
+                returncode = completed.returncode
             except subprocess.TimeoutExpired:
                 return ToolResult.failure(
                     "script_timeout",
@@ -340,9 +337,7 @@ class RunSkillScriptTool:
     def cancel(self) -> None:
         self._approval_digest = None
 
-    def _prepare(
-        self, arguments: dict[str, Any]
-    ) -> _PreparedScript | ToolResult:
+    def _prepare(self, arguments: dict[str, Any]) -> _PreparedScript | ToolResult:
         validated = _validate_script_arguments(arguments)
         if isinstance(validated, ToolResult):
             return validated
@@ -350,9 +345,7 @@ class RunSkillScriptTool:
         resources = self.manager.active_resources(name, ("scripts",))
         if isinstance(resources, ToolResult):
             return resources
-        resource_by_path = {
-            resource.relative_path: resource for resource in resources
-        }
+        resource_by_path = {resource.relative_path: resource for resource in resources}
         effective_argv: list[str] = []
         resolved_matches = []
         for argument in user_argv:
@@ -439,18 +432,13 @@ def _validate_script_arguments(
         )
     name = arguments["name"]
     argv = arguments["argv"]
-    timeout = arguments.get(
-        "timeout_seconds", DEFAULT_SCRIPT_TIMEOUT_SECONDS
-    )
+    timeout = arguments.get("timeout_seconds", DEFAULT_SCRIPT_TIMEOUT_SECONDS)
     if (
         not isinstance(name, str)
         or NAME_PATTERN.fullmatch(name) is None
         or not isinstance(argv, list)
         or not argv
-        or any(
-            not isinstance(item, str) or not item or "\0" in item
-            for item in argv
-        )
+        or any(not isinstance(item, str) or not item or "\0" in item for item in argv)
     ):
         return ToolResult.failure(
             "invalid_arguments",

@@ -130,9 +130,13 @@ class PersonalStore:
     def __init__(
         self,
         workspace: Path,
-        replace: Callable[[str | bytes | os.PathLike[str] | os.PathLike[bytes],
-                           str | bytes | os.PathLike[str] | os.PathLike[bytes]], None]
-        = os.replace,
+        replace: Callable[
+            [
+                str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            ],
+            None,
+        ] = os.replace,
     ) -> None:
         self.workspace = resolve_workspace(workspace)
         self._replace = replace
@@ -158,9 +162,13 @@ class PersonalStore:
         try:
             document = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return ToolResult.failure("invalid_store", "Stored personal data is invalid.")
+            return ToolResult.failure(
+                "invalid_store", "Stored personal data is invalid."
+            )
         if not validator(document):
-            return ToolResult.failure("invalid_store", "Stored personal data is invalid.")
+            return ToolResult.failure(
+                "invalid_store", "Stored personal data is invalid."
+            )
         return ToolResult.success([dict(item) for item in document["items"]])
 
     def _save(
@@ -171,13 +179,19 @@ class PersonalStore:
     ) -> ToolResult:
         document = {"version": STORE_VERSION, "items": items}
         if not validator(document):
-            return ToolResult.failure("invalid_store", "Refusing to write invalid personal data.")
+            return ToolResult.failure(
+                "invalid_store", "Refusing to write invalid personal data."
+            )
         target = self._target(filename, create_directory=True)
         if isinstance(target, ToolResult) or target is None:
-            return target or ToolResult.failure("store_error", "Could not create data store.")
+            return target or ToolResult.failure(
+                "store_error", "Could not create data store."
+            )
         temporary: Path | None = None
         try:
-            descriptor, raw_path = tempfile.mkstemp(dir=target.parent, prefix=f".{filename}.")
+            descriptor, raw_path = tempfile.mkstemp(
+                dir=target.parent, prefix=f".{filename}."
+            )
             temporary = Path(raw_path)
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
                 json.dump(document, file, ensure_ascii=False, indent=2)
@@ -191,7 +205,9 @@ class PersonalStore:
             return ToolResult.failure("store_error", "Could not write personal data.")
         return ToolResult.success({"path": str(target), "count": len(items)})
 
-    def _target(self, filename: str, create_directory: bool) -> Path | ToolResult | None:
+    def _target(
+        self, filename: str, create_directory: bool
+    ) -> Path | ToolResult | None:
         data_directory = self.workspace / DATA_DIRECTORY
         try:
             if not data_directory.exists() and not data_directory.is_symlink():
@@ -201,17 +217,23 @@ class PersonalStore:
             resolved_directory = data_directory.resolve()
             resolved_directory.relative_to(self.workspace)
             if not resolved_directory.is_dir():
-                return ToolResult.failure("store_error", "Personal data path is not a directory.")
+                return ToolResult.failure(
+                    "store_error", "Personal data path is not a directory."
+                )
             target = resolved_directory / filename
             if target.is_symlink() or target.exists():
                 resolved_target = target.resolve()
                 resolved_target.relative_to(self.workspace)
                 if not resolved_target.is_file():
-                    return ToolResult.failure("store_error", "Personal data path is not a file.")
+                    return ToolResult.failure(
+                        "store_error", "Personal data path is not a file."
+                    )
                 return resolved_target
             return target
         except ValueError:
-            return ToolResult.failure("path_outside_workspace", "Personal data is outside the workspace.")
+            return ToolResult.failure(
+                "path_outside_workspace", "Personal data is outside the workspace."
+            )
         except OSError:
             return ToolResult.failure("store_error", "Could not access personal data.")
 
@@ -251,7 +273,12 @@ def _valid_document(
 
 
 def _valid_note(item: object) -> bool:
-    if not isinstance(item, dict) or set(item) != {"id", "title", "content", "created_at"}:
+    if not isinstance(item, dict) or set(item) != {
+        "id",
+        "title",
+        "content",
+        "created_at",
+    }:
         return False
     title = item["title"]
     content = item["content"]
@@ -268,7 +295,11 @@ def _valid_note(item: object) -> bool:
 
 def _valid_todo(item: object) -> bool:
     if not isinstance(item, dict) or set(item) != {
-        "id", "text", "completed", "created_at", "completed_at"
+        "id",
+        "text",
+        "completed",
+        "created_at",
+        "completed_at",
     }:
         return False
     text = item["text"]
@@ -340,10 +371,20 @@ import pytest
 def test_store_rejects_invalid_documents(tmp_path: Path, document: object) -> None:
     data = tmp_path / ".cdy-agent"
     data.mkdir()
-    filename = "todos.json" if isinstance(document, dict) and document.get("items") and "text" in document["items"][0] else "notes.json"
+    filename = (
+        "todos.json"
+        if isinstance(document, dict)
+        and document.get("items")
+        and "text" in document["items"][0]
+        else "notes.json"
+    )
     (data / filename).write_text(json.dumps(document), encoding="utf-8")
 
-    result = PersonalStore(tmp_path).load_todos() if filename == "todos.json" else PersonalStore(tmp_path).load_notes()
+    result = (
+        PersonalStore(tmp_path).load_todos()
+        if filename == "todos.json"
+        else PersonalStore(tmp_path).load_notes()
+    )
 
     assert result.code == "invalid_store"
 
@@ -458,7 +499,12 @@ git commit -m "Harden personal data storage"
 from pathlib import Path
 
 from cdy_agent.tools.base import ToolCall
-from cdy_agent.tools.notes import CreateNoteTool, DeleteNoteTool, GetNoteTool, ListNotesTool
+from cdy_agent.tools.notes import (
+    CreateNoteTool,
+    DeleteNoteTool,
+    GetNoteTool,
+    ListNotesTool,
+)
 from cdy_agent.tools.personal_store import PersonalStore
 from cdy_agent.tools.registry import ToolRegistry
 
@@ -481,11 +527,20 @@ def build_tools(tmp_path: Path):
 def test_note_tool_schemas_and_confirmation_flags(tmp_path: Path) -> None:
     _, create, list_notes, get, delete = build_tools(tmp_path)
     assert [tool.name for tool in (create, list_notes, get, delete)] == [
-        "create_note", "list_notes", "get_note", "delete_note"
+        "create_note",
+        "list_notes",
+        "get_note",
+        "delete_note",
     ]
-    assert [tool.requires_confirmation for tool in (create, list_notes, get, delete)] == [True, False, False, True]
+    assert [
+        tool.requires_confirmation for tool in (create, list_notes, get, delete)
+    ] == [True, False, False, True]
     assert create.parameters["additionalProperties"] is False
-    assert list_notes.parameters == {"type": "object", "properties": {}, "additionalProperties": False}
+    assert list_notes.parameters == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
 
 
 def test_note_lifecycle_and_list_omits_content(tmp_path: Path) -> None:
@@ -500,7 +555,9 @@ def test_note_lifecycle_and_list_omits_content(tmp_path: Path) -> None:
     assert created.data["id"] == NOTE_ID
     assert created.data["title"] == "Plan"
     assert "7 bytes" in confirmations[0].description
-    assert list_notes.execute({}).data == [{"id": NOTE_ID, "title": "Plan", "created_at": NOW}]
+    assert list_notes.execute({}).data == [
+        {"id": NOTE_ID, "title": "Plan", "created_at": NOW}
+    ]
     assert get.execute({"note_id": NOTE_ID}).data["content"] == "Details"
     assert delete.execute({"note_id": NOTE_ID}).ok
     assert store.load_notes().data == []
@@ -509,22 +566,46 @@ def test_note_lifecycle_and_list_omits_content(tmp_path: Path) -> None:
 - [ ] **Step 2: Write failing validation and pre-confirmation tests**
 
 ```python
-def test_note_validation_and_missing_delete_happen_before_confirmation(tmp_path: Path) -> None:
+def test_note_validation_and_missing_delete_happen_before_confirmation(
+    tmp_path: Path,
+) -> None:
     _, create, _, _, delete = build_tools(tmp_path)
     registry = ToolRegistry([create, delete])
     confirmations = []
 
     cases = [
-        (ToolCall("1", "create_note", '{"title":" ","content":"x"}'), "invalid_arguments"),
-        (ToolCall("2", "create_note", '{"title":"x","content":1}'), "invalid_arguments"),
-        (ToolCall("3", "create_note", '{"title":"x","content":"x","extra":1}'), "invalid_arguments"),
+        (
+            ToolCall("1", "create_note", '{"title":" ","content":"x"}'),
+            "invalid_arguments",
+        ),
+        (
+            ToolCall("2", "create_note", '{"title":"x","content":1}'),
+            "invalid_arguments",
+        ),
+        (
+            ToolCall("3", "create_note", '{"title":"x","content":"x","extra":1}'),
+            "invalid_arguments",
+        ),
         (ToolCall("4", "delete_note", '{"note_id":"bad"}'), "invalid_arguments"),
-        (ToolCall("5", "delete_note", '{"note_id":"00000000-0000-4000-8000-000000000099"}'), "note_not_found"),
+        (
+            ToolCall(
+                "5", "delete_note", '{"note_id":"00000000-0000-4000-8000-000000000099"}'
+            ),
+            "note_not_found",
+        ),
     ]
     for call, code in cases:
-        assert registry.execute(call, lambda request: confirmations.append(request) or True).code == code
+        assert (
+            registry.execute(
+                call, lambda request: confirmations.append(request) or True
+            ).code
+            == code
+        )
     assert confirmations == []
-    assert create.execute({"title": "x", "content": "你" * 21846}).code == "invalid_arguments"
+    assert (
+        create.execute({"title": "x", "content": "你" * 21846}).code
+        == "invalid_arguments"
+    )
 
 
 def test_declined_note_mutations_do_not_create_or_change_store(tmp_path: Path) -> None:
@@ -592,18 +673,30 @@ def _find(items: list[dict[str, Any]], note_id: str) -> dict[str, Any] | None:
 
 def _validate_create(arguments: dict[str, Any]) -> ToolResult | None:
     if set(arguments) != {"title", "content"}:
-        return ToolResult.failure("invalid_arguments", "title and content are required.")
+        return ToolResult.failure(
+            "invalid_arguments", "title and content are required."
+        )
     title, content = arguments["title"], arguments["content"]
-    if not isinstance(title, str) or not title.strip() or len(title.strip()) > MAX_TITLE_CHARACTERS:
-        return ToolResult.failure("invalid_arguments", "title must be 1 to 200 characters.")
+    if (
+        not isinstance(title, str)
+        or not title.strip()
+        or len(title.strip()) > MAX_TITLE_CHARACTERS
+    ):
+        return ToolResult.failure(
+            "invalid_arguments", "title must be 1 to 200 characters."
+        )
     if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
-        return ToolResult.failure("invalid_arguments", "content must be at most 64 KiB of UTF-8 text.")
+        return ToolResult.failure(
+            "invalid_arguments", "content must be at most 64 KiB of UTF-8 text."
+        )
     return None
 
 
 def _validate_id(arguments: dict[str, Any]) -> ToolResult | None:
     if set(arguments) != {"note_id"} or not _valid_id(arguments.get("note_id")):
-        return ToolResult.failure("invalid_arguments", "note_id must be a canonical UUID.")
+        return ToolResult.failure(
+            "invalid_arguments", "note_id must be a canonical UUID."
+        )
     return None
 
 
@@ -620,12 +713,14 @@ class CreateNoteTool:
     now_factory: Callable[[], str] = _now
     name: str = "create_note"
     description: str = "Create a persistent note in the workspace."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object",
-        "properties": {"title": {"type": "string"}, "content": {"type": "string"}},
-        "required": ["title", "content"],
-        "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["title", "content"],
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = True
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
@@ -661,9 +756,13 @@ class ListNotesTool:
     store: PersonalStore
     name: str = "list_notes"
     description: str = "List persistent note summaries from the workspace."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object", "properties": {}, "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = False
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
@@ -680,9 +779,12 @@ class ListNotesTool:
         if not loaded.ok:
             return loaded
         items = sorted(loaded.data, key=lambda item: (item["created_at"], item["id"]))
-        return ToolResult.success([
-            {key: item[key] for key in ("id", "title", "created_at")} for item in items
-        ])
+        return ToolResult.success(
+            [
+                {key: item[key] for key in ("id", "title", "created_at")}
+                for item in items
+            ]
+        )
 
 
 @dataclass
@@ -690,12 +792,14 @@ class GetNoteTool:
     store: PersonalStore
     name: str = "get_note"
     description: str = "Get one persistent note by ID."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object",
-        "properties": {"note_id": {"type": "string"}},
-        "required": ["note_id"],
-        "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"note_id": {"type": "string"}},
+            "required": ["note_id"],
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = False
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
@@ -712,7 +816,11 @@ class GetNoteTool:
         if not loaded.ok:
             return loaded
         note = _find(loaded.data, arguments["note_id"])
-        return ToolResult.success(dict(note)) if note else ToolResult.failure("note_not_found", "Note was not found.")
+        return (
+            ToolResult.success(dict(note))
+            if note
+            else ToolResult.failure("note_not_found", "Note was not found.")
+        )
 
 
 @dataclass
@@ -720,12 +828,14 @@ class DeleteNoteTool:
     store: PersonalStore
     name: str = "delete_note"
     description: str = "Delete one persistent note by ID."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object",
-        "properties": {"note_id": {"type": "string"}},
-        "required": ["note_id"],
-        "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"note_id": {"type": "string"}},
+            "required": ["note_id"],
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = True
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
@@ -742,7 +852,11 @@ class DeleteNoteTool:
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         loaded = self.store.load_notes()
         note = _find(loaded.data, arguments.get("note_id", "")) if loaded.ok else None
-        return f"Delete note {note['id']} titled '{note['title']}'." if note else "Delete note."
+        return (
+            f"Delete note {note['id']} titled '{note['title']}'."
+            if note
+            else "Delete note."
+        )
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
         invalid = _validate_id(arguments)
@@ -754,8 +868,14 @@ class DeleteNoteTool:
         note = _find(loaded.data, arguments["note_id"])
         if note is None:
             return ToolResult.failure("note_not_found", "Note was not found.")
-        saved = self.store.save_notes([item for item in loaded.data if item["id"] != note["id"]])
-        return ToolResult.success({"id": note["id"], "deleted": True}) if saved.ok else saved
+        saved = self.store.save_notes(
+            [item for item in loaded.data if item["id"] != note["id"]]
+        )
+        return (
+            ToolResult.success({"id": note["id"], "deleted": True})
+            if saved.ok
+            else saved
+        )
 ```
 
 - [ ] **Step 5: Run focused note, store, and Registry tests**
@@ -791,7 +911,12 @@ from pathlib import Path
 from cdy_agent.tools.base import ToolCall
 from cdy_agent.tools.personal_store import PersonalStore
 from cdy_agent.tools.registry import ToolRegistry
-from cdy_agent.tools.todos import CompleteTodoTool, CreateTodoTool, DeleteTodoTool, ListTodosTool
+from cdy_agent.tools.todos import (
+    CompleteTodoTool,
+    CreateTodoTool,
+    DeleteTodoTool,
+    ListTodosTool,
+)
 
 
 TODO_ID = "00000000-0000-4000-8000-000000000020"
@@ -814,47 +939,96 @@ def test_todo_lifecycle(tmp_path: Path) -> None:
     store, create, list_todos, complete, delete = build_tools(tmp_path)
     registry = ToolRegistry([create, list_todos, complete, delete])
 
-    created = registry.execute(ToolCall("1", "create_todo", '{"text":" Write tests "}'), lambda _: True)
+    created = registry.execute(
+        ToolCall("1", "create_todo", '{"text":" Write tests "}'), lambda _: True
+    )
     assert created.data == {
-        "id": TODO_ID, "text": "Write tests", "completed": False,
-        "created_at": CREATED, "completed_at": None,
+        "id": TODO_ID,
+        "text": "Write tests",
+        "completed": False,
+        "created_at": CREATED,
+        "completed_at": None,
     }
     assert list_todos.execute({}).data == [created.data]
-    finished = registry.execute(ToolCall("2", "complete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: True)
+    finished = registry.execute(
+        ToolCall("2", "complete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: True
+    )
     assert finished.data["completed"] is True
     assert finished.data["completed_at"] == COMPLETED
-    assert registry.execute(ToolCall("3", "delete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: True).ok
+    assert registry.execute(
+        ToolCall("3", "delete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: True
+    ).ok
     assert store.load_todos().data == []
 ```
 
 - [ ] **Step 2: Add failing validation, repeated completion, and confirmation tests**
 
 ```python
-def test_todo_preflight_rejects_invalid_missing_and_completed_items(tmp_path: Path) -> None:
+def test_todo_preflight_rejects_invalid_missing_and_completed_items(
+    tmp_path: Path,
+) -> None:
     _, create, _, complete, delete = build_tools(tmp_path)
     registry = ToolRegistry([create, complete, delete])
     confirmations = []
 
-    assert registry.execute(ToolCall("1", "create_todo", '{"text":" "}'), lambda request: confirmations.append(request) or True).code == "invalid_arguments"
-    assert registry.execute(ToolCall("2", "complete_todo", '{"todo_id":"bad"}'), lambda request: confirmations.append(request) or True).code == "invalid_arguments"
+    assert (
+        registry.execute(
+            ToolCall("1", "create_todo", '{"text":" "}'),
+            lambda request: confirmations.append(request) or True,
+        ).code
+        == "invalid_arguments"
+    )
+    assert (
+        registry.execute(
+            ToolCall("2", "complete_todo", '{"todo_id":"bad"}'),
+            lambda request: confirmations.append(request) or True,
+        ).code
+        == "invalid_arguments"
+    )
     missing = "00000000-0000-4000-8000-000000000099"
-    assert registry.execute(ToolCall("3", "delete_todo", f'{{"todo_id":"{missing}"}}'), lambda request: confirmations.append(request) or True).code == "todo_not_found"
+    assert (
+        registry.execute(
+            ToolCall("3", "delete_todo", f'{{"todo_id":"{missing}"}}'),
+            lambda request: confirmations.append(request) or True,
+        ).code
+        == "todo_not_found"
+    )
     assert confirmations == []
 
-    assert registry.execute(ToolCall("4", "create_todo", '{"text":"x"}'), lambda _: True).ok
-    assert registry.execute(ToolCall("5", "complete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: True).ok
+    assert registry.execute(
+        ToolCall("4", "create_todo", '{"text":"x"}'), lambda _: True
+    ).ok
+    assert registry.execute(
+        ToolCall("5", "complete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: True
+    ).ok
     assert complete.preflight({"todo_id": TODO_ID}).code == "todo_already_completed"
 
 
 def test_declined_todo_mutations_do_not_create_or_change_store(tmp_path: Path) -> None:
     store, create, _, complete, delete = build_tools(tmp_path)
     registry = ToolRegistry([create, complete, delete])
-    assert registry.execute(ToolCall("1", "create_todo", '{"text":"Write tests"}'), lambda _: False).code == "approval_denied"
+    assert (
+        registry.execute(
+            ToolCall("1", "create_todo", '{"text":"Write tests"}'), lambda _: False
+        ).code
+        == "approval_denied"
+    )
     assert not (tmp_path / ".cdy-agent").exists()
 
     assert create.execute({"text": "Write tests"}).ok
-    assert registry.execute(ToolCall("2", "complete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: False).code == "approval_denied"
-    assert registry.execute(ToolCall("3", "delete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: False).code == "approval_denied"
+    assert (
+        registry.execute(
+            ToolCall("2", "complete_todo", f'{{"todo_id":"{TODO_ID}"}}'),
+            lambda _: False,
+        ).code
+        == "approval_denied"
+    )
+    assert (
+        registry.execute(
+            ToolCall("3", "delete_todo", f'{{"todo_id":"{TODO_ID}"}}'), lambda _: False
+        ).code
+        == "approval_denied"
+    )
     assert store.load_todos().data[0]["completed"] is False
 ```
 
@@ -905,14 +1079,22 @@ def _validate_create(arguments: dict[str, Any]) -> ToolResult | None:
     if set(arguments) != {"text"}:
         return ToolResult.failure("invalid_arguments", "text is required.")
     text = arguments["text"]
-    if not isinstance(text, str) or not text.strip() or len(text.strip()) > MAX_TODO_CHARACTERS:
-        return ToolResult.failure("invalid_arguments", "text must be 1 to 1000 characters.")
+    if (
+        not isinstance(text, str)
+        or not text.strip()
+        or len(text.strip()) > MAX_TODO_CHARACTERS
+    ):
+        return ToolResult.failure(
+            "invalid_arguments", "text must be 1 to 1000 characters."
+        )
     return None
 
 
 def _validate_id(arguments: dict[str, Any]) -> ToolResult | None:
     if set(arguments) != {"todo_id"} or not _valid_id(arguments.get("todo_id")):
-        return ToolResult.failure("invalid_arguments", "todo_id must be a canonical UUID.")
+        return ToolResult.failure(
+            "invalid_arguments", "todo_id must be a canonical UUID."
+        )
     return None
 
 
@@ -929,19 +1111,25 @@ class CreateTodoTool:
     now_factory: Callable[[], str] = _now
     name: str = "create_todo"
     description: str = "Create a persistent Todo in the workspace."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object",
-        "properties": {"text": {"type": "string"}},
-        "required": ["text"],
-        "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = True
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
         return _validate_create(arguments)
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
-        return f"Create Todo: {arguments['text'].strip()}." if _validate_create(arguments) is None else "Invalid create_todo arguments."
+        return (
+            f"Create Todo: {arguments['text'].strip()}."
+            if _validate_create(arguments) is None
+            else "Invalid create_todo arguments."
+        )
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
         invalid = _validate_create(arguments)
@@ -968,9 +1156,13 @@ class ListTodosTool:
     store: PersonalStore
     name: str = "list_todos"
     description: str = "List persistent Todos from the workspace."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object", "properties": {}, "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = False
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
@@ -996,12 +1188,14 @@ class CompleteTodoTool:
     now_factory: Callable[[], str] = _now
     name: str = "complete_todo"
     description: str = "Mark one persistent Todo complete by ID."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object",
-        "properties": {"todo_id": {"type": "string"}},
-        "required": ["todo_id"],
-        "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"todo_id": {"type": "string"}},
+            "required": ["todo_id"],
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = True
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
@@ -1015,13 +1209,17 @@ class CompleteTodoTool:
         if todo is None:
             return ToolResult.failure("todo_not_found", "Todo was not found.")
         if todo["completed"]:
-            return ToolResult.failure("todo_already_completed", "Todo is already completed.")
+            return ToolResult.failure(
+                "todo_already_completed", "Todo is already completed."
+            )
         return None
 
     def confirmation_description(self, arguments: dict[str, Any]) -> str:
         loaded = self.store.load_todos()
         todo = _find(loaded.data, arguments.get("todo_id", "")) if loaded.ok else None
-        return f"Complete Todo {todo['id']}: {todo['text']}." if todo else "Complete Todo."
+        return (
+            f"Complete Todo {todo['id']}: {todo['text']}." if todo else "Complete Todo."
+        )
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
         invalid = _validate_id(arguments)
@@ -1034,7 +1232,9 @@ class CompleteTodoTool:
         if todo is None:
             return ToolResult.failure("todo_not_found", "Todo was not found.")
         if todo["completed"]:
-            return ToolResult.failure("todo_already_completed", "Todo is already completed.")
+            return ToolResult.failure(
+                "todo_already_completed", "Todo is already completed."
+            )
         todo["completed"] = True
         todo["completed_at"] = self.now_factory()
         saved = self.store.save_todos(loaded.data)
@@ -1046,12 +1246,14 @@ class DeleteTodoTool:
     store: PersonalStore
     name: str = "delete_todo"
     description: str = "Delete one persistent Todo by ID."
-    parameters: dict[str, Any] = field(default_factory=lambda: {
-        "type": "object",
-        "properties": {"todo_id": {"type": "string"}},
-        "required": ["todo_id"],
-        "additionalProperties": False,
-    })
+    parameters: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"todo_id": {"type": "string"}},
+            "required": ["todo_id"],
+            "additionalProperties": False,
+        }
+    )
     requires_confirmation: bool = True
 
     def preflight(self, arguments: dict[str, Any]) -> ToolResult | None:
@@ -1080,8 +1282,14 @@ class DeleteTodoTool:
         todo = _find(loaded.data, arguments["todo_id"])
         if todo is None:
             return ToolResult.failure("todo_not_found", "Todo was not found.")
-        saved = self.store.save_todos([item for item in loaded.data if item["id"] != todo["id"]])
-        return ToolResult.success({"id": todo["id"], "deleted": True}) if saved.ok else saved
+        saved = self.store.save_todos(
+            [item for item in loaded.data if item["id"] != todo["id"]]
+        )
+        return (
+            ToolResult.success({"id": todo["id"], "deleted": True})
+            if saved.ok
+            else saved
+        )
 ```
 
 - [ ] **Step 5: Run focused Todo, note, store, and Registry tests**
@@ -1121,9 +1329,17 @@ def test_builtin_registry_has_deterministic_order(tmp_path: Path) -> None:
         definition["name"]
         for definition in create_builtin_registry(tmp_path).definitions
     ) == (
-        "read_file", "write_file", "shell",
-        "create_note", "list_notes", "get_note", "delete_note",
-        "create_todo", "list_todos", "complete_todo", "delete_todo",
+        "read_file",
+        "write_file",
+        "shell",
+        "create_note",
+        "list_notes",
+        "get_note",
+        "delete_note",
+        "create_todo",
+        "list_todos",
+        "complete_todo",
+        "delete_todo",
     )
 ```
 
@@ -1150,19 +1366,21 @@ from .todos import CompleteTodoTool, CreateTodoTool, DeleteTodoTool, ListTodosTo
 def create_builtin_registry(workspace: Path) -> ToolRegistry:
     """Create the deterministic registry of built-in local tools."""
     store = PersonalStore(workspace)
-    return ToolRegistry([
-        ReadFileTool(workspace),
-        WriteFileTool(workspace),
-        ShellTool(workspace),
-        CreateNoteTool(store),
-        ListNotesTool(store),
-        GetNoteTool(store),
-        DeleteNoteTool(store),
-        CreateTodoTool(store),
-        ListTodosTool(store),
-        CompleteTodoTool(store),
-        DeleteTodoTool(store),
-    ])
+    return ToolRegistry(
+        [
+            ReadFileTool(workspace),
+            WriteFileTool(workspace),
+            ShellTool(workspace),
+            CreateNoteTool(store),
+            ListNotesTool(store),
+            GetNoteTool(store),
+            DeleteNoteTool(store),
+            CreateTodoTool(store),
+            ListTodosTool(store),
+            CompleteTodoTool(store),
+            DeleteTodoTool(store),
+        ]
+    )
 
 
 __all__ = ["create_builtin_registry"]

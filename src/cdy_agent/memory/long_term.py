@@ -14,7 +14,6 @@ from .database import (
     WorkspaceDatabase,
 )
 
-
 MAX_CONTENT_BYTES = 8 * 1024
 MAX_TAGS = 10
 MAX_TAG_CHARACTERS = 50
@@ -105,15 +104,11 @@ def _normalize_tags(tags: object) -> tuple[str, ...]:
         if not value:
             raise InvalidMemoryError("Each memory tag must not be empty.")
         if len(value) > MAX_TAG_CHARACTERS:
-            raise InvalidMemoryError(
-                "Each memory tag must be at most 50 characters."
-            )
+            raise InvalidMemoryError("Each memory tag must be at most 50 characters.")
         try:
             value.encode("utf-8")
         except UnicodeEncodeError as error:
-            raise InvalidMemoryError(
-                "Each memory tag must be UTF-8 text."
-            ) from error
+            raise InvalidMemoryError("Each memory tag must be UTF-8 text.") from error
         normalized.add(value)
     return tuple(sorted(normalized))
 
@@ -127,9 +122,7 @@ def _normalize_query(query: object) -> str | None:
     if not value:
         raise InvalidMemoryError("Memory search query must not be empty.")
     if len(value) > MAX_QUERY_CHARACTERS:
-        raise InvalidMemoryError(
-            "Memory search query must be at most 500 characters."
-        )
+        raise InvalidMemoryError("Memory search query must be at most 500 characters.")
     return value
 
 
@@ -165,9 +158,11 @@ def _timestamp(value: object) -> str:
         offset = value.utcoffset()
         if offset is None:
             raise ValueError("clock has no UTC offset")
-        return value.astimezone(timezone.utc).isoformat(
-            timespec="microseconds"
-        ).replace("+00:00", "Z")
+        return (
+            value.astimezone(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
     except (OSError, OverflowError, TypeError, ValueError) as error:
         raise MemoryStoreError("Memory clock is invalid.") from error
 
@@ -230,9 +225,7 @@ class MemoryStore:
         except (sqlite3.Error, InvalidConversationStoreError) as error:
             raise MemoryStoreError("Could not read memory data.") from error
 
-    def prepare_create(
-        self, content: str, tags: Sequence[str]
-    ) -> PreparedCreate:
+    def prepare_create(self, content: str, tags: Sequence[str]) -> PreparedCreate:
         draft = self.prepare(content, tags)
         memory_id = _canonical_uuid(self._id_factory())
         duplicate = self.find_duplicate(draft)
@@ -259,15 +252,11 @@ class MemoryStore:
                         ),
                     )
                 except sqlite3.IntegrityError:
-                    duplicate = self._find_duplicate(
-                        connection, prepared.draft, None
-                    )
+                    duplicate = self._find_duplicate(connection, prepared.draft, None)
                     if duplicate is not None:
                         raise DuplicateMemoryError(duplicate.id)
                     raise
-                self._insert_tags(
-                    connection, prepared.memory_id, prepared.draft.tags
-                )
+                self._insert_tags(connection, prepared.memory_id, prepared.draft.tags)
                 return StoredMemory(
                     prepared.memory_id,
                     prepared.draft.content,
@@ -300,9 +289,7 @@ class MemoryStore:
         except (sqlite3.Error, InvalidConversationStoreError) as error:
             raise MemoryStoreError("Could not read memory data.") from error
 
-    def list_memories(
-        self, tags: Sequence[str] = ()
-    ) -> tuple[StoredMemory, ...]:
+    def list_memories(self, tags: Sequence[str] = ()) -> tuple[StoredMemory, ...]:
         normalized_tags = _normalize_tags(tags)
         try:
             with self._database.read() as connection:
@@ -327,11 +314,7 @@ class MemoryStore:
         normalized_tags = _normalize_tags(tags)
         if normalized_query is None and not normalized_tags:
             raise InvalidMemoryError("Memory search requires query or tags.")
-        terms = (
-            tuple(normalized_query.casefold().split())
-            if normalized_query
-            else ()
-        )
+        terms = tuple(normalized_query.casefold().split()) if normalized_query else ()
         try:
             with self._database.read() as connection:
                 if connection is None:
@@ -357,9 +340,7 @@ class MemoryStore:
         except (sqlite3.Error, InvalidConversationStoreError) as error:
             raise MemoryStoreError("Could not read memory data.") from error
 
-    def update(
-        self, memory_id: str, content: str, tags: Sequence[str]
-    ) -> StoredMemory:
+    def update(self, memory_id: str, content: str, tags: Sequence[str]) -> StoredMemory:
         canonical_id = _canonical_uuid(memory_id)
         draft = self.prepare(content, tags)
         try:
@@ -508,9 +489,7 @@ class MemoryStore:
             _canonical_uuid(prepared.memory_id)
             cls._require_draft(prepared.draft)
         except InvalidMemoryError as error:
-            raise InvalidMemoryError(
-                "Prepared memory operation is invalid."
-            ) from error
+            raise InvalidMemoryError("Prepared memory operation is invalid.") from error
 
     @classmethod
     def _require_prepared_update(cls, prepared: object) -> None:
@@ -520,9 +499,7 @@ class MemoryStore:
         try:
             cls._require_draft(prepared.replacement)
         except InvalidMemoryError as error:
-            raise InvalidMemoryError(
-                "Prepared memory operation is invalid."
-            ) from error
+            raise InvalidMemoryError("Prepared memory operation is invalid.") from error
 
     @classmethod
     def _require_prepared_delete(cls, prepared: object) -> None:
@@ -543,9 +520,7 @@ class MemoryStore:
                 and _require_timestamp(record.updated_at) == record.updated_at
             )
         except InvalidMemoryError as error:
-            raise InvalidMemoryError(
-                "Prepared memory operation is invalid."
-            ) from error
+            raise InvalidMemoryError("Prepared memory operation is invalid.") from error
         if not valid:
             raise InvalidMemoryError("Prepared memory operation is invalid.")
 
@@ -578,9 +553,7 @@ class MemoryStore:
             return record
         return None
 
-    def _all_records(
-        self, connection: sqlite3.Connection
-    ) -> tuple[StoredMemory, ...]:
+    def _all_records(self, connection: sqlite3.Connection) -> tuple[StoredMemory, ...]:
         records = []
         for row in connection.execute("SELECT id FROM memories"):
             record = self._load(connection, row[0])
@@ -591,9 +564,7 @@ class MemoryStore:
         return tuple(records)
 
     @staticmethod
-    def _load(
-        connection: sqlite3.Connection, memory_id: str
-    ) -> StoredMemory | None:
+    def _load(connection: sqlite3.Connection, memory_id: str) -> StoredMemory | None:
         row = connection.execute(
             "SELECT id, content, identity_hash, created_at, updated_at "
             "FROM memories WHERE id = ?",

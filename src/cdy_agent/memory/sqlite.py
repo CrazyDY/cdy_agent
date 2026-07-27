@@ -8,9 +8,6 @@ from uuid import UUID
 
 from cdy_agent.conversation import Message
 from cdy_agent.memory.database import (
-    DATABASE_FILENAME,
-    DATA_DIRECTORY,
-    SCHEMA_VERSION,
     ConversationNotFoundError,
     ConversationStoreError,
     InvalidConversationStoreError,
@@ -61,9 +58,7 @@ def _canonical_uuid(value: str) -> str:
 
 def _require_timestamp(value: object) -> str:
     if not isinstance(value, str) or not value.endswith("Z"):
-        raise InvalidConversationStoreError(
-            "Stored conversation timestamp is invalid."
-        )
+        raise InvalidConversationStoreError("Stored conversation timestamp is invalid.")
     try:
         parsed = datetime.fromisoformat(value[:-1] + "+00:00")
     except ValueError as error:
@@ -71,9 +66,7 @@ def _require_timestamp(value: object) -> str:
             "Stored conversation timestamp is invalid."
         ) from error
     if parsed.tzinfo != timezone.utc:
-        raise InvalidConversationStoreError(
-            "Stored conversation timestamp is invalid."
-        )
+        raise InvalidConversationStoreError("Stored conversation timestamp is invalid.")
     return value
 
 
@@ -171,8 +164,7 @@ class ConversationStore:
             if connection is None:
                 return ()
             rows = connection.execute(
-                "SELECT id, created_at, updated_at FROM sessions "
-                "ORDER BY id ASC"
+                "SELECT id, created_at, updated_at FROM sessions ORDER BY id ASC"
             ).fetchall()
             summaries: list[tuple[datetime, ConversationSummary]] = []
             for session_id, created_at, updated_at in rows:
@@ -187,9 +179,7 @@ class ConversationStore:
                 messages = self._validated_messages(message_rows)
                 summaries.append(
                     (
-                        datetime.fromisoformat(
-                            validated_updated_at[:-1] + "+00:00"
-                        ),
+                        datetime.fromisoformat(validated_updated_at[:-1] + "+00:00"),
                         ConversationSummary(
                             id=session_id,
                             updated_at=validated_updated_at,
@@ -223,7 +213,9 @@ class ConversationStore:
         rows: list[tuple[object, object, object]],
     ) -> tuple[Message, ...]:
         if not rows or len(rows) % 2:
-            raise InvalidConversationStoreError("Stored conversation history is invalid.")
+            raise InvalidConversationStoreError(
+                "Stored conversation history is invalid."
+            )
         messages: list[Message] = []
         for expected, (sequence, role, content) in enumerate(rows):
             expected_role = "user" if expected % 2 == 0 else "assistant"

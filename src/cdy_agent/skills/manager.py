@@ -27,9 +27,7 @@ class SkillManager:
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace.resolve()
         discovery = discover_skills(self.workspace)
-        self._skills = {
-            skill.metadata.name: skill for skill in discovery.skills
-        }
+        self._skills = {skill.metadata.name: skill for skill in discovery.skills}
         self._diagnostics = discovery.diagnostics
         self._active: set[str] = set()
 
@@ -59,9 +57,7 @@ class SkillManager:
 
         matches = []
         for skill in self._skills.values():
-            score, matched_terms, reason = _score_skill(
-                skill, normalized_query, terms
-            )
+            score, matched_terms, reason = _score_skill(skill, normalized_query, terms)
             if score <= 0:
                 continue
             matches.append(
@@ -83,9 +79,7 @@ class SkillManager:
         if isinstance(skill, ToolResult):
             return skill
         if name in self._active:
-            return ToolResult.success(
-                _activation_payload(skill, "already_active")
-            )
+            return ToolResult.success(_activation_payload(skill, "already_active"))
         try:
             revalidate_skill(skill, self.workspace)
         except (InvalidSkillError, OSError):
@@ -109,9 +103,7 @@ class SkillManager:
                 "skill_not_active", f"Skill '{name}' is not active."
             )
         return tuple(
-            resource
-            for resource in skill.resources
-            if resource.category in categories
+            resource for resource in skill.resources if resource.category in categories
         )
 
     def resolve_active_resource(
@@ -128,11 +120,7 @@ class SkillManager:
                 "skill_not_active", f"Skill '{name}' is not active."
             )
         resource = next(
-            (
-                item
-                for item in skill.resources
-                if item.relative_path == path
-            ),
+            (item for item in skill.resources if item.relative_path == path),
             None,
         )
         if resource is None:
@@ -164,19 +152,13 @@ class SkillManager:
         if skill is not None:
             return skill
         if any(item.entry == name for item in self._diagnostics):
-            return ToolResult.failure(
-                "invalid_skill", f"Skill '{name}' is invalid."
-            )
-        return ToolResult.failure(
-            "unknown_skill", f"Unknown Skill: {name}."
-        )
+            return ToolResult.failure("invalid_skill", f"Skill '{name}' is invalid.")
+        return ToolResult.failure("unknown_skill", f"Unknown Skill: {name}.")
 
 
 def _resource_counts(skill: DiscoveredSkill) -> dict[str, int]:
     return {
-        category: sum(
-            resource.category == category for resource in skill.resources
-        )
+        category: sum(resource.category == category for resource in skill.resources)
         for category in RESOURCE_CATEGORIES
     }
 
@@ -200,9 +182,7 @@ def _resource_payload(resource: SkillResource) -> dict[str, object]:
     }
 
 
-def _activation_payload(
-    skill: DiscoveredSkill, status: str
-) -> dict[str, object]:
+def _activation_payload(skill: DiscoveredSkill, status: str) -> dict[str, object]:
     return {
         "name": skill.metadata.name,
         "status": status,
@@ -210,9 +190,7 @@ def _activation_payload(
         "metadata": _metadata_payload(skill.metadata),
         "directory": str(skill.directory),
         "relative_paths": "Resolve resource paths from the Skill directory.",
-        "resources": [
-            _resource_payload(resource) for resource in skill.resources
-        ],
+        "resources": [_resource_payload(resource) for resource in skill.resources],
     }
 
 
@@ -232,10 +210,7 @@ def _unique_ordered(values: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _keywords_for(skill: DiscoveredSkill) -> list[str]:
-    text = (
-        f"{skill.metadata.name.replace('-', ' ')} "
-        f"{skill.metadata.description}"
-    )
+    text = f"{skill.metadata.name.replace('-', ' ')} {skill.metadata.description}"
     return list(_unique_ordered(_tokens(text))[:MAX_KEYWORDS])
 
 

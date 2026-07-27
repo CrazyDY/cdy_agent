@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from cdy_agent.tools.base import PreparedToolExecution, ToolResult
 from cdy_agent.tools.process import (
@@ -70,7 +71,7 @@ class ShellTool:
             },
             "required": ["argv"],
             "additionalProperties": False,
-        }
+        },
     )
     requires_confirmation: bool = field(default=True, init=False)
 
@@ -80,9 +81,7 @@ class ShellTool:
             approvals = ShellApprovalStore(self.workspace)
             self.policy = ShellExecutionPolicy(self.workspace, approvals)
         elif self.policy.workspace != self.workspace:
-            raise ValueError(
-                "Shell policy workspace does not match tool workspace."
-            )
+            raise ValueError("Shell policy workspace does not match tool workspace.")
 
     def prepare_execution(
         self,
@@ -113,8 +112,7 @@ class ShellTool:
         )
         return PreparedToolExecution(
             requires_confirmation=(
-                context.decision
-                is ShellExecutionDecision.REQUIRE_CONFIRMATION
+                context.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
             ),
             confirmation_description=self._describe(context.command),
             remember_approval=context.remember,
@@ -146,14 +144,9 @@ class ShellTool:
         result = self.policy.classify(arguments)
         return result.failure
 
-    def requires_confirmation_for(
-        self, arguments: dict[str, Any]
-    ) -> bool:
+    def requires_confirmation_for(self, arguments: dict[str, Any]) -> bool:
         result = self.policy.classify(arguments)
-        return (
-            result.decision
-            is ShellExecutionDecision.REQUIRE_CONFIRMATION
-        )
+        return result.decision is ShellExecutionDecision.REQUIRE_CONFIRMATION
 
     def remember_approval(self, arguments: dict[str, Any]) -> ToolResult:
         return self.policy.remember(arguments)
@@ -183,8 +176,7 @@ def _run_prepared_shell_command(
     if prepared.executable is None:
         return ToolResult.failure(
             "execution_error",
-            f"Could not resolve executable: "
-            f"{prepared.user_argv[0]!r}.",
+            f"Could not resolve executable: {prepared.user_argv[0]!r}.",
         )
     argv = list(prepared.argv)
     try:
@@ -202,8 +194,7 @@ def _run_prepared_shell_command(
     except subprocess.TimeoutExpired:
         return ToolResult.failure(
             "command_timeout",
-            f"Command timed out after "
-            f"{prepared.timeout_seconds} seconds.",
+            f"Command timed out after {prepared.timeout_seconds} seconds.",
         )
     except OSError as error:
         return ToolResult.failure(
