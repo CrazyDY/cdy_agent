@@ -81,6 +81,89 @@ class CancellingSDKCall:
         return self.outcome
 
 
+class CloseableEvents:
+    def __init__(self, events: list[object]) -> None:
+        self.events = events
+        self.closed = False
+        self.yielded: list[object] = []
+
+    def __iter__(self):
+        for event in self.events:
+            if self.closed:
+                raise RuntimeError("stream closed")
+            self.yielded.append(event)
+            yield event
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_responses_stream_closes_when_cancelled() -> None:
+    """Removing active-stream registration leaves the SDK stream open."""
+    control = RunControl()
+    events = CloseableEvents(
+        [
+            SimpleNamespace(type="response.output_text.delta", delta="first"),
+            SimpleNamespace(type="response.output_text.delta", delta="second"),
+        ]
+    )
+    client = FakeClient()
+    client.responses.create = FakeStreamSequence(events)
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="responses", client=client
+    )
+
+    with pytest.raises(AgentRunCancelled):
+        gateway.stream(
+            [Message("user", "hello")],
+            (),
+            lambda _: control.cancel(),
+            run_control=control,
+        )
+
+    assert events.closed is True
+    assert len(events.yielded) == 1
+
+
+def test_chat_stream_closes_when_cancelled() -> None:
+    """Cancellation must take precedence over the closed stream's SDK error."""
+    control = RunControl()
+    events = CloseableEvents(
+        [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="first"), finish_reason=None
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="second"), finish_reason="stop"
+                    )
+                ]
+            ),
+        ]
+    )
+    client = FakeClient()
+    client.chat.completions.create = FakeStreamSequence(events)
+    gateway = openai_client.ModelGateway(
+        model="test-model", api_mode="chat_completions", client=client
+    )
+
+    with pytest.raises(AgentRunCancelled):
+        gateway.stream(
+            [Message("user", "hello")],
+            (),
+            lambda _: control.cancel(),
+            run_control=control,
+        )
+
+    assert events.closed is True
+    assert len(events.yielded) == 1
+
+
 @pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
 @pytest.mark.parametrize("streaming", [False, True])
 def test_gateway_checks_cancellation_before_sdk_call(

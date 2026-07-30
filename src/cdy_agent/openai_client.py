@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -113,11 +113,11 @@ class ModelGateway:
             run_control.raise_if_cancelled()
         if self.api_mode == "responses":
             outcome = self._stream_response(
-                messages, tools, on_text, continuation, tool_outputs
+                messages, tools, on_text, continuation, tool_outputs, run_control
             )
         else:
             outcome = self._stream_chat_completion(
-                messages, tools, on_text, continuation, tool_outputs
+                messages, tools, on_text, continuation, tool_outputs, run_control
             )
         if run_control is not None:
             run_control.raise_if_cancelled()
@@ -237,6 +237,7 @@ class ModelGateway:
         on_text: Callable[[str], None],
         continuation: Continuation | None,
         tool_outputs: Sequence[tuple[str, str]],
+        run_control: RunControl | None,
     ) -> ModelResponse:
         request: dict[str, Any] = {"model": self.model, "stream": True}
         if continuation is None:
@@ -261,7 +262,8 @@ class ModelGateway:
         call_indexes: dict[str, int] = {}
         completed_indexes: set[int] = set()
         terminal_event: str | None = None
-        for event in self.client.responses.create(**request):
+        stream = self.client.responses.create(**request)
+        for event in _stream_events(stream, run_control):
             event_type = getattr(event, "type", None)
             if terminal_event is not None:
                 raise _unsupported_response()
@@ -396,6 +398,7 @@ class ModelGateway:
         on_text: Callable[[str], None],
         continuation: Continuation | None,
         tool_outputs: Sequence[tuple[str, str]],
+        run_control: RunControl | None,
     ) -> ModelResponse:
         request_messages: list[dict[str, Any]] = _message_dicts(messages)
         if continuation is not None:
@@ -442,7 +445,8 @@ class ModelGateway:
         trailing_usage_seen = False
         tool_call_parts: dict[int, _StreamedToolCall] = {}
         call_indexes: dict[str, int] = {}
-        for event in self.client.chat.completions.create(**request):
+        stream = self.client.chat.completions.create(**request)
+        for event in _stream_events(stream, run_control):
             choices = _sdk_sequence(getattr(event, "choices", ()))
             event_usage = _response_usage(event, "prompt_tokens", "completion_tokens")
             if terminal_reason is not None:
@@ -517,6 +521,33 @@ class ModelGateway:
                 calls, ChatContinuation(calls, content, history), usage
             )
         return _final_response("".join(chunks), usage)
+
+
+def _stream_events(
+    stream: object, run_control: RunControl | None
+) -> Iterator[object]:
+    close = getattr(stream, "close", None)
+    unregister = (
+        run_control.add_cancel_callback(close)
+        if run_control is not None and callable(close)
+        else lambda: None
+    )
+    try:
+        iterator = iter(stream)
+        while True:
+            if run_control is not None:
+                run_control.raise_if_cancelled()
+            try:
+                event = next(iterator)
+            except StopIteration:
+                return
+            except BaseException:
+                if run_control is not None:
+                    run_control.raise_if_cancelled()
+                raise
+            yield event
+    finally:
+        unregister()
 
 
 def _message_dicts(messages: Sequence[Message]) -> list[dict[str, str]]:
