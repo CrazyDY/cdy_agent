@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from .conversation import Message
 from .observability import TraceRecorder
 from .openai_client import FinalResponse, ModelResponse
+from .run_control import RunControl
 from .tools.base import ConfirmationCallback
 
 
 class AgentLoopLimitError(RuntimeError):
     """Raised when an agent does not finish within its model-call budget."""
+
+
+class AgentEventSink(Protocol):
+    """Receive tool lifecycle status without tool arguments or results."""
+
+    def tool_started(self, name: str) -> None: ...
+
+    def tool_finished(
+        self, name: str, ok: bool, error_type: str | None
+    ) -> None: ...
 
 
 def _invalidate_recorder(recorder: TraceRecorder) -> None:
@@ -19,6 +30,11 @@ def _invalidate_recorder(recorder: TraceRecorder) -> None:
         recorder.invalidate()
     except Exception:
         pass
+
+
+def _raise_if_cancelled(control: RunControl | None) -> None:
+    if control is not None:
+        control.raise_if_cancelled()
 
 
 class Agent:
@@ -44,28 +60,55 @@ class Agent:
         self,
         messages: Sequence[Message],
         recorder: TraceRecorder | None = None,
+        *,
+        run_control: RunControl | None = None,
+        event_sink: AgentEventSink | None = None,
     ) -> str:
         def create_model_call(**kwargs: object) -> ModelResponse:
+            if run_control is not None:
+                return self._gateway.create(**kwargs, run_control=run_control)
             return self._gateway.create(**kwargs)
 
-        return self._run_loop(messages, create_model_call, recorder)
+        return self._run_loop(
+            messages,
+            create_model_call,
+            recorder,
+            run_control=run_control,
+            event_sink=event_sink,
+        )
 
     def run_stream(
         self,
         messages: Sequence[Message],
         on_text: Callable[[str], None],
         recorder: TraceRecorder | None = None,
+        *,
+        run_control: RunControl | None = None,
+        event_sink: AgentEventSink | None = None,
     ) -> str:
         def stream_model_call(**kwargs: object) -> ModelResponse:
+            if run_control is not None:
+                return self._gateway.stream(
+                    on_text=on_text, **kwargs, run_control=run_control
+                )
             return self._gateway.stream(on_text=on_text, **kwargs)
 
-        return self._run_loop(messages, stream_model_call, recorder)
+        return self._run_loop(
+            messages,
+            stream_model_call,
+            recorder,
+            run_control=run_control,
+            event_sink=event_sink,
+        )
 
     def _run_loop(
         self,
         messages: Sequence[Message],
         model_call: Callable[..., ModelResponse],
         recorder: TraceRecorder | None = None,
+        *,
+        run_control: RunControl | None = None,
+        event_sink: AgentEventSink | None = None,
     ) -> str:
         if not messages:
             raise ValueError("Conversation history must not be empty.")
@@ -74,6 +117,7 @@ class Agent:
         outputs: tuple[tuple[str, str], ...] = ()
         active_recorder = recorder
         for _ in range(self._max_model_calls):
+            _raise_if_cancelled(run_control)
             model_span = None
             if active_recorder is not None:
                 try:
@@ -96,6 +140,7 @@ class Agent:
                         _invalidate_recorder(active_recorder)
                         active_recorder = None
                 raise
+            _raise_if_cancelled(run_control)
             if active_recorder is not None and model_span is not None:
                 try:
                     active_recorder.finish_model_call(model_span, outcome.usage)
@@ -106,6 +151,7 @@ class Agent:
                 return outcome.text
             completed_outputs = []
             for call in outcome.calls:
+                _raise_if_cancelled(run_control)
                 tool_span = None
                 if active_recorder is not None:
                     try:
@@ -113,8 +159,18 @@ class Agent:
                     except Exception:
                         _invalidate_recorder(active_recorder)
                         active_recorder = None
+                if event_sink is not None:
+                    event_sink.tool_started(call.name)
+                _raise_if_cancelled(run_control)
                 try:
-                    result = self._registry.execute(call, self._confirm)
+                    if run_control is not None:
+                        result = self._registry.execute(
+                            call,
+                            self._confirm,
+                            run_control=run_control,
+                        )
+                    else:
+                        result = self._registry.execute(call, self._confirm)
                 except Exception as exc:
                     if active_recorder is not None and tool_span is not None:
                         try:
@@ -126,6 +182,12 @@ class Agent:
                         except Exception:
                             _invalidate_recorder(active_recorder)
                             active_recorder = None
+                    if event_sink is not None:
+                        event_sink.tool_finished(
+                            call.name,
+                            ok=False,
+                            error_type=type(exc).__name__,
+                        )
                     raise
                 if active_recorder is not None and tool_span is not None:
                     try:
@@ -137,6 +199,13 @@ class Agent:
                     except Exception:
                         _invalidate_recorder(active_recorder)
                         active_recorder = None
+                if event_sink is not None:
+                    event_sink.tool_finished(
+                        call.name,
+                        ok=result.ok,
+                        error_type=None if result.ok else result.code,
+                    )
+                _raise_if_cancelled(run_control)
                 completed_outputs.append((call.call_id, result.to_json()))
             outputs = tuple(completed_outputs)
             continuation = outcome.continuation

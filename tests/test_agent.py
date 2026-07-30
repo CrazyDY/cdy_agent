@@ -15,6 +15,7 @@ from cdy_agent.openai_client import (
     ToolCallResponse,
 )
 from cdy_agent.skills import SkillManager, create_skill_tools
+from cdy_agent.run_control import AgentRunCancelled, RunControl
 from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.base import ToolCall, ToolResult
 
@@ -64,7 +65,13 @@ class FakeRegistry:
         self.calls: list[ToolCall] = []
         self.result = ToolResult.success({"value": "echo"})
 
-    def execute(self, call: ToolCall, confirm: object) -> ToolResult:
+    def execute(
+        self,
+        call: ToolCall,
+        confirm: object,
+        *,
+        run_control: RunControl | None = None,
+    ) -> ToolResult:
         self.calls.append(call)
         if self.result.ok:
             return ToolResult.success({"value": call.name})
@@ -158,6 +165,113 @@ class FailingRecorder(SpyRecorder):
         if self.operation == "reject_bad_code" and error_type == "bad-code":
             raise ValueError("Tool error type must be a stable identifier.")
         super().finish_tool_call(token, ok=ok, error_type=error_type)
+
+
+class SpyEventSink:
+    def __init__(self) -> None:
+        self.events: list[tuple[object, ...]] = []
+
+    def tool_started(self, name: str) -> None:
+        self.events.append(("started", name))
+
+    def tool_finished(
+        self, name: str, ok: bool, error_type: str | None
+    ) -> None:
+        self.events.append(("finished", name, ok, error_type))
+
+
+def test_run_stream_stops_before_cancelled_model_call() -> None:
+    """Removing the pre-model cancellation check would access this gateway."""
+    gateway = FakeGateway([FinalResponse("unused")])
+    control = RunControl()
+    control.cancel()
+    agent = Agent(gateway, FakeRegistry(), lambda request: True)
+
+    with pytest.raises(AgentRunCancelled):
+        agent.run_stream(
+            [Message("user", "hello")],
+            lambda delta: None,
+            run_control=control,
+        )
+
+    assert gateway.calls == []
+
+
+def test_run_stops_after_tool_response_before_registry_execution() -> None:
+    """Removing the post-model cancellation check would execute the tool."""
+    control = RunControl()
+
+    class CancellingGateway(FakeGateway):
+        def create(self, **kwargs: object) -> object:
+            outcome = super().create(**kwargs)
+            control.cancel()
+            return outcome
+
+    registry = FakeRegistry()
+    gateway = CancellingGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
+            )
+        ]
+    )
+
+    with pytest.raises(AgentRunCancelled):
+        Agent(gateway, registry, lambda request: True).run(
+            [Message("user", "hello")], run_control=control
+        )
+
+    assert registry.calls == []
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_finished"),
+    [
+        (ToolResult.success({"value": "echo"}), ("finished", "echo", True, None)),
+        (
+            ToolResult.failure("approval_denied", "secret detail"),
+            ("finished", "echo", False, "approval_denied"),
+        ),
+    ],
+)
+def test_run_reports_tool_status_for_completed_tool(
+    result: ToolResult, expected_finished: tuple[object, ...]
+) -> None:
+    """Omitting either event leaves callers unable to report tool completion."""
+    registry = FakeRegistry()
+    registry.result = result
+    sink = SpyEventSink()
+    gateway = FakeGateway(
+        [
+            ToolCallResponse(
+                (ToolCall("1", "echo", "{}"),), ResponsesContinuation("next")
+            ),
+            FinalResponse("done"),
+        ]
+    )
+
+    assert (
+        Agent(gateway, registry, lambda request: True).run(
+            [Message("user", "hello")], event_sink=sink
+        )
+        == "done"
+    )
+
+    assert sink.events == [("started", "echo"), expected_finished]
+
+
+def test_run_without_optional_parameters_keeps_gateway_arguments_unchanged() -> None:
+    """Adding optional controls must not break gateways using the old signature."""
+    gateway = FakeGateway([FinalResponse("done")])
+
+    assert (
+        Agent(gateway, FakeRegistry(), lambda request: True).run(
+            [Message("user", "hello")]
+        )
+        == "done"
+    )
+
+    assert "run_control" not in gateway.calls[0]
 
 
 def test_agent_records_model_and_tool_spans() -> None:
