@@ -7,6 +7,7 @@ from cdy_agent import openai_client
 from cdy_agent.conversation import Message
 from cdy_agent.observability.models import TokenUsage
 from cdy_agent.openai_client import generate_reply
+from cdy_agent.run_control import AgentRunCancelled, RunControl
 from cdy_agent.tools.base import ToolCall
 
 
@@ -68,6 +69,111 @@ class FakeClient:
         self.chat = SimpleNamespace(
             completions=FakeCompletions(chat_output),
         )
+
+
+class CancellingSDKCall:
+    def __init__(self, control: RunControl, outcome: object) -> None:
+        self.control = control
+        self.outcome = outcome
+
+    def __call__(self, **kwargs: Any) -> object:
+        self.control.cancel()
+        return self.outcome
+
+
+@pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_gateway_checks_cancellation_before_sdk_call(
+    api_mode: str, streaming: bool
+) -> None:
+    """Removing the pre-call check would invoke the configured SDK boundary."""
+    client = FakeClient(responses_output="Done", chat_output="Done")
+    control = RunControl()
+    control.cancel()
+    gateway = openai_client.ModelGateway(
+        model="m", api_mode=api_mode, client=client
+    )
+
+    with pytest.raises(AgentRunCancelled):
+        if streaming:
+            gateway.stream(
+                (Message("user", "Hello"),),
+                (),
+                lambda _: None,
+                run_control=control,
+            )
+        else:
+            gateway.create(
+                (Message("user", "Hello"),),
+                (),
+                run_control=control,
+            )
+
+    assert client.responses.calls == []
+    assert client.chat.completions.calls == []
+
+
+@pytest.mark.parametrize("api_mode", ["responses", "chat_completions"])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_gateway_checks_cancellation_after_sdk_call(
+    api_mode: str, streaming: bool
+) -> None:
+    """Removing the post-call check would return a result after cancellation."""
+    client = FakeClient()
+    control = RunControl()
+    if api_mode == "responses":
+        if streaming:
+            outcome: object = (
+                SimpleNamespace(type="response.output_text.delta", delta="Done"),
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(id="response-1"),
+                ),
+            )
+        else:
+            outcome = SimpleNamespace(
+                id="response-1", output_text="Done", output=[]
+            )
+        client.responses.create = CancellingSDKCall(control, outcome)
+    else:
+        if streaming:
+            outcome = (
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content="Done"),
+                            finish_reason="stop",
+                        )
+                    ]
+                ),
+            )
+        else:
+            outcome = SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="Done", tool_calls=[])
+                    )
+                ]
+            )
+        client.chat.completions.create = CancellingSDKCall(control, outcome)
+    gateway = openai_client.ModelGateway(
+        model="m", api_mode=api_mode, client=client
+    )
+
+    with pytest.raises(AgentRunCancelled):
+        if streaming:
+            gateway.stream(
+                (Message("user", "Hello"),),
+                (),
+                lambda _: None,
+                run_control=control,
+            )
+        else:
+            gateway.create(
+                (Message("user", "Hello"),),
+                (),
+                run_control=control,
+            )
 
 
 def test_gateway_normalizes_responses_usage() -> None:

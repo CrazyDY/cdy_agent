@@ -11,6 +11,7 @@ from openai import OpenAI
 
 from .conversation import Message
 from .observability.models import TokenUsage
+from .run_control import RunControl
 from .tools.base import ToolCall
 
 
@@ -83,10 +84,20 @@ class ModelGateway:
         tools: Sequence[ToolDefinition],
         continuation: Continuation | None = None,
         tool_outputs: Sequence[tuple[str, str]] = (),
+        *,
+        run_control: RunControl | None = None,
     ) -> ModelResponse:
+        if run_control is not None:
+            run_control.raise_if_cancelled()
         if self.api_mode == "responses":
-            return self._create_response(messages, tools, continuation, tool_outputs)
-        return self._create_chat_completion(messages, tools, continuation, tool_outputs)
+            outcome = self._create_response(messages, tools, continuation, tool_outputs)
+        else:
+            outcome = self._create_chat_completion(
+                messages, tools, continuation, tool_outputs
+            )
+        if run_control is not None:
+            run_control.raise_if_cancelled()
+        return outcome
 
     def stream(
         self,
@@ -95,14 +106,22 @@ class ModelGateway:
         on_text: Callable[[str], None],
         continuation: Continuation | None = None,
         tool_outputs: Sequence[tuple[str, str]] = (),
+        *,
+        run_control: RunControl | None = None,
     ) -> ModelResponse:
+        if run_control is not None:
+            run_control.raise_if_cancelled()
         if self.api_mode == "responses":
-            return self._stream_response(
+            outcome = self._stream_response(
                 messages, tools, on_text, continuation, tool_outputs
             )
-        return self._stream_chat_completion(
-            messages, tools, on_text, continuation, tool_outputs
-        )
+        else:
+            outcome = self._stream_chat_completion(
+                messages, tools, on_text, continuation, tool_outputs
+            )
+        if run_control is not None:
+            run_control.raise_if_cancelled()
+        return outcome
 
     def _create_response(
         self,

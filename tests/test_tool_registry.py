@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from cdy_agent.run_control import AgentRunCancelled, RunControl
 from cdy_agent.tools import create_builtin_registry
 from cdy_agent.tools.base import (
     ConfirmationDecision,
@@ -109,6 +110,43 @@ class PreparingEchoTool(EchoTool):
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
         raise AssertionError("legacy execute must not run")
+
+
+def test_registry_checks_cancellation_before_parsing_or_execution() -> None:
+    """Removing the pre-execution check would execute a cancelled tool call."""
+    control = RunControl()
+    control.cancel()
+    registry = ToolRegistry([EchoTool()])
+
+    with pytest.raises(AgentRunCancelled):
+        registry.execute(
+            ToolCall("call-1", "echo", '{"text":"hello"}'),
+            confirm=lambda request: True,
+            run_control=control,
+        )
+
+
+def test_registry_checks_cancellation_after_tool_execution() -> None:
+    """Removing the post-execution check would return after cancellation."""
+    control = RunControl()
+    tool = EchoTool()
+    executions: list[dict[str, Any]] = []
+
+    def cancel_during_execution(arguments: dict[str, Any]) -> ToolResult:
+        executions.append(dict(arguments))
+        control.cancel()
+        return ToolResult.success({"text": arguments["text"]})
+
+    tool.execute = cancel_during_execution  # type: ignore[method-assign]
+
+    with pytest.raises(AgentRunCancelled):
+        ToolRegistry([tool]).execute(
+            ToolCall("call-1", "echo", '{"text":"hello"}'),
+            confirm=lambda request: True,
+            run_control=control,
+        )
+
+    assert executions == [{"text": "hello"}]
 
 
 def test_registry_exposes_function_definition_and_executes() -> None:

@@ -5,6 +5,7 @@ import re
 from collections.abc import Iterable
 from copy import deepcopy
 
+from ..run_control import RunControl
 from .base import (
     ConfirmationCallback,
     ConfirmationDecision,
@@ -62,7 +63,11 @@ class ToolRegistry:
         self,
         call: ToolCall,
         confirm: ConfirmationCallback,
+        *,
+        run_control: RunControl | None = None,
     ) -> ToolResult:
+        if run_control is not None:
+            run_control.raise_if_cancelled()
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult.failure(
@@ -91,12 +96,15 @@ class ToolRegistry:
                     "invalid_tool_execution",
                     "Tool returned an invalid prepared execution.",
                 )
-            return _execute_prepared(
+            result = _execute_prepared(
                 tool,
                 arguments,
                 prepared,
                 confirm,
             )
+            if run_control is not None:
+                run_control.raise_if_cancelled()
+            return result
         invalid = tool.preflight(arguments)
         if invalid is not None:
             return invalid
@@ -133,7 +141,10 @@ class ToolRegistry:
                 if not remembered.ok:
                     _cancel_tool(tool)
                     return remembered
-        return tool.execute(arguments)
+        result = tool.execute(arguments)
+        if run_control is not None:
+            run_control.raise_if_cancelled()
+        return result
 
 
 def _execute_prepared(
