@@ -4,5 +4,6 @@ __pycache__/
 .venv/
 .worktrees/
 .superpowers/sdd/
+.superpowers/brainstorm/
 .env
 .cdy-agent/
