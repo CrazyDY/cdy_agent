@@ -141,7 +141,7 @@ src/cdy_agent/
 
 本阶段已经完成，并由独立批准的 Web UI 设计约束。项目已交付 `cdy-agent web --workspace <path>`：单个 FastAPI/Uvicorn 进程只监听 `127.0.0.1`，提供带进程级本地能力认证的 Vue 两栏 Chat UI，并复用原有 Agent Tool Loop、工具、Skills、SQLite 会话和可观测性边界。workspace 在启动时固定，浏览器不能切换；进程同一时间只接受一个 Agent 回合。
 
-Web UI 支持新建、列出、恢复和确认删除会话、流式助手文本、通用工具状态、完整工具确认选择、Stop 与 Retry。Shell 的持久允许继续严格绑定准备后的完整可执行文件和精确 argv。Stop、页面刷新、断开和服务器关闭会协作取消模型流、确认等待与可取消子进程；失败或取消的轮次不持久化，已经完成的副作用不自动回滚。生产 Vue 资产随 Python wheel 和源码包交付，安装后运行不依赖 Node.js。
+Web UI 支持新建、列出、恢复和确认删除会话、流式助手文本、通用工具状态、完整工具确认选择、Stop 与 Retry。Shell 的持久允许继续严格绑定准备后的完整可执行文件和精确 argv。Stop、页面刷新、断开和服务器关闭会协作取消模型流、确认等待与可取消子进程；失败或取消的轮次不持久化，已经完成的副作用不自动回滚。从源码树运行 `cdy-agent web` 时会先执行 Vue 生产构建，构建失败则不启动服务；`src/cdy_agent/web/static/` 是 Git 忽略的生成目录。发布流程在构建 wheel 前生成资产，已安装的 wheel 可直接使用其打包资产。
 
 ## 错误处理
 

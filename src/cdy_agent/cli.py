@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import socket
+import subprocess
 import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
@@ -68,6 +70,9 @@ app.add_typer(memories_app, name="memories")
 app.add_typer(traces_app, name="traces")
 app.add_typer(config_app, name="config")
 app.add_typer(evals_app, name="evals")
+
+_FRONTEND_DIRECTORY = Path(__file__).resolve().parents[2] / "frontend"
+_WEB_STATIC_DIRECTORY = Path(__file__).with_name("web") / "static"
 
 REQUEST_ERRORS = (
     MissingAPIKeyError,
@@ -651,6 +656,30 @@ def main() -> None:
         _fail_for_exception(exc)
 
 
+def _build_web_frontend() -> None:
+    """Build the Vue production assets required by the local Web server."""
+    if not (_FRONTEND_DIRECTORY / "package.json").is_file():
+        if (_WEB_STATIC_DIRECTORY / "index.html").is_file():
+            return
+        raise RuntimeError("Frontend sources and built Web assets are unavailable.")
+    npm = shutil.which("npm")
+    if npm is None:
+        raise RuntimeError("npm is required to build the Web interface.")
+    try:
+        result = subprocess.run(
+            [npm, "run", "build"],
+            cwd=_FRONTEND_DIRECTORY,
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError("Unable to run the Web interface build.") from exc
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Web interface build failed. Install frontend dependencies with "
+            "npm --prefix frontend install."
+        )
+
+
 @app.command()
 def web(
     workspace: Annotated[
@@ -681,6 +710,8 @@ def web(
             raise RuntimeError(
                 f"Unable to start local Web server on 127.0.0.1:{port}."
             ) from exc
+
+        _build_web_frontend()
 
         active_workspace, workspace_config = _load_configured_workspace(workspace)
         _configure_logging_for_workspace(workspace_config)

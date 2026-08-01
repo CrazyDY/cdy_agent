@@ -2000,6 +2000,9 @@ def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
             calls.append((self.config, sockets))
 
     monkeypatch.setattr(cli, "BrowserCapability", FakeCapability, raising=False)
+    monkeypatch.setattr(
+        cli, "_build_web_frontend", lambda: order.append("build"), raising=False
+    )
     monkeypatch.setattr(cli, "ConfirmationBroker", FakeBroker, raising=False)
     monkeypatch.setattr(cli, "create_agent_runtime", lambda **kwargs: order.append("agent") or object())
     monkeypatch.setattr(cli, "TurnCoordinator", FakeCoordinator, raising=False)
@@ -2036,6 +2039,7 @@ def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
     assert order == [
         "socket",
         "bind",
+        "build",
         "auth",
         "broker",
         "agent",
@@ -2049,6 +2053,84 @@ def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
     assert listener.closed is True
     assert opened == []
     assert result.output == "http://127.0.0.1:8000/?access_token=brief-secret\n"
+
+
+def test_web_frontend_build_uses_npm_in_the_frontend_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text("{}", encoding="utf-8")
+    calls: list[tuple[list[str], Path, bool]] = []
+
+    def run(command: list[str], *, cwd: Path, check: bool) -> SimpleNamespace:
+        calls.append((command, cwd, check))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli.shutil, "which", lambda executable: "C:/bin/npm.cmd")
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    cli._build_web_frontend()
+
+    assert calls == [(["C:/bin/npm.cmd", "run", "build"], frontend, False)]
+
+
+def test_web_frontend_build_uses_packaged_assets_without_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", tmp_path / "missing")
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("built", encoding="utf-8")
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", static)
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda executable: pytest.fail("npm lookup should not run"),
+    )
+
+    cli._build_web_frontend()
+
+
+def test_web_frontend_build_requires_sources_or_packaged_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", tmp_path / "missing-frontend")
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", tmp_path / "missing-static")
+    with pytest.raises(RuntimeError, match="sources and built Web assets"):
+        cli._build_web_frontend()
+
+
+def test_web_frontend_build_requires_npm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli.shutil, "which", lambda executable: None)
+    with pytest.raises(RuntimeError, match="npm is required"):
+        cli._build_web_frontend()
+
+
+def test_web_frontend_build_failure_stops_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli.shutil, "which", lambda executable: "npm")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1),
+    )
+
+    with pytest.raises(RuntimeError, match="Web interface build failed"):
+        cli._build_web_frontend()
 
 
 def test_web_command_maps_occupied_port_without_disclosing_or_opening_url(

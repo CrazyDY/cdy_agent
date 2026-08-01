@@ -8,3 +8,4 @@ __pycache__/
 .env
 .cdy-agent/
 frontend/node_modules/
+src/cdy_agent/web/static/

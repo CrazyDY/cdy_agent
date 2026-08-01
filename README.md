@@ -89,6 +89,8 @@ uv run cdy-agent sessions delete 52c809c6-6e55-4ff1-9220-e4f90a4f6774 --workspac
 uv run cdy-agent web --workspace .
 ```
 
+从源码树运行时，该命令会先执行前端生产构建，再启动服务器；因此需先安装 Node.js/npm，并至少执行一次 `npm --prefix frontend install` 安装锁定依赖。构建失败时服务器不会启动。
+
 服务只绑定 `127.0.0.1`，默认端口为 `8000`，且不提供 `--host`。`--port` 可以选择另一个明确端口；`--no-open` 会只在终端打印初始 URL，不自动打开浏览器：
 
 ```powershell
@@ -107,7 +109,8 @@ Stop、刷新、关闭页面或 WebSocket 断开都会协作取消模型流、�
 
 - 缺少 `OPENAI_API_KEY` 或 provider 配置无效：先在当前终端设置环境变量，再重新启动；凭证不会进入浏览器或 workspace 配置。
 - 端口已占用：使用 `--port <空闲端口>`；服务不会自动改绑其他地址或端口。
-- 显示 `Web assets are unavailable`：从源码运行时按下方开发步骤重新构建已提交的前端资产；正式 wheel 已包含这些文件。
+- 提示缺少 npm 或前端构建失败：确认 Node.js/npm 可用，并执行 `npm --prefix frontend install` 后重试。
+- 显示 `Web assets are unavailable`：当前安装包不含有效的预构建资产；从源码树安装依赖后重新运行 `cdy-agent web`。
 - 显示 busy：等待当前标签页的回合结束，或在发起回合的页面点击 Stop；请求不会在后台排队。
 
 ### 持久化会话
@@ -295,7 +298,7 @@ cases:
 
 ## 开发
 
-运行已构建的 Python 包只需要 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/)；Node.js 只用于修改、测试或重建 Vue 前端。前端开发使用 `frontend/package-lock.json` 锁定依赖，生产构建产物必须提交到 `src/cdy_agent/web/static/`，且不得包含 source map。
+非 Web 命令只需要 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/)。从源码运行 Web UI 还需要 Node.js/npm；前端使用 `frontend/package-lock.json` 锁定依赖。生产构建写入 `src/cdy_agent/web/static/`，该目录是被 Git 忽略的生成物，不提交 source map 或其他构建产物。
 
 ```powershell
 uv sync --extra dev --default-index https://pypi.org/simple
@@ -314,11 +317,11 @@ npm --prefix frontend install
 npm --prefix frontend run dev
 ```
 
-Vite 开发服务器用于独立迭代界面；真实的认证 HTTP/WebSocket API 由 `cdy-agent web` 与生产静态资产从同一 origin 提供。需要端到端本地检查时，先完成生产构建，再启动 `cdy-agent web`。交付前运行完整前端测试并重建提交的生产资产：
+Vite 开发服务器用于独立迭代界面；真实的认证 HTTP/WebSocket API 由 `cdy-agent web` 与生产静态资产从同一 origin 提供。`cdy-agent web` 每次从源码树启动时都会先运行同一个生产构建。交付前仍应运行完整前端测试；发布 wheel 前应显式生成一次用于打包的生产资产：
 
 ```powershell
 npm --prefix frontend test
 npm --prefix frontend run build
 ```
 
-构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。重新构建后应提交新的哈希化 `index.html`、CSS 和 JavaScript，并确认该目录中没有 `.map` 文件。Python wheel 在运行时直接提供这些资产，因此安装 wheel 的用户不需要 Node.js。
+构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。哈希化的 `index.html`、CSS 和 JavaScript 都是本地生成物，不由 Git 管理。发布流程必须先执行前端构建再执行 `uv build`，以便 wheel 携带生成的静态资产；安装后的 wheel 可以直接使用这些已打包资产，不要求保留前端源码。

@@ -448,16 +448,16 @@ Frontend runtime dependencies are intentionally small:
 Development dependencies include Vite, TypeScript, Vitest, Vue Test Utils, and
 the Vue Vite plugin. The Node lockfile is committed.
 
-`frontend/` contains source code. Production assets are built into
-`src/cdy_agent/web/static/`, included as Python package data, and shipped in both
-wheel and source distribution. Built application assets are committed so Python
-installation and wheel consumption do not require Node. Source maps are not
-committed or packaged.
+`frontend/` contains source code. Production assets are built into the
+Git-ignored `src/cdy_agent/web/static/` directory and source maps are disabled.
+When the CLI is running from a source tree, `cdy-agent web` runs the locked
+production build before composing or starting the server and fails closed if npm
+is unavailable or the build fails. An installed wheel without frontend sources
+uses the static assets already packaged in that wheel.
 
-Frontend changes must run the reproducible locked build and update the packaged
-assets. `uv build` verifies that required static assets exist and includes them;
-it does not download Node dependencies or run an implicit networked frontend
-install.
+Frontend changes must pass the reproducible locked tests. Release packaging must
+run the frontend build before `uv build` so the generated assets are included as
+Python package data; `uv build` itself does not download Node dependencies.
 
 ## Testing
 

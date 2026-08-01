@@ -21,6 +21,14 @@ function submit(): void {
   emit("send", prompt.value)
   prompt.value = ""
 }
+
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    return
+  }
+  event.preventDefault()
+  submit()
+}
 </script>
 
 <template>
@@ -36,6 +44,7 @@ function submit(): void {
         v-model="prompt"
         :disabled="inputDisabled || active || canRetry"
         rows="2"
+        @keydown="handleKeydown"
         placeholder="Ask CDY Agent…"
       ></textarea>
       <button
@@ -51,6 +60,6 @@ function submit(): void {
         Send
       </button>
     </form>
-    <p class="composer-hint">Enter a message. Tool actions may ask for confirmation.</p>
+    <p class="composer-hint">Press Enter to send · Shift+Enter for a new line. Tool actions may ask for confirmation.</p>
   </div>
 </template>
