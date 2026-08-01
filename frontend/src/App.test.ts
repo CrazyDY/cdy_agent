@@ -226,6 +226,48 @@ describe("App", () => {
     await flushPromises()
   })
 
+  it("prevents sending while a session selection is pending", async () => {
+    const pendingSelection = deferred<StoredConversation>()
+    const { wrapper, socket, chat } = mountApp({
+      sessionLoader: () => pendingSelection.promise,
+    })
+    await flushPromises()
+    await wrapper.get("textarea").setValue("Do not race this selection")
+
+    await wrapper.get(`[data-session-id="${sessionId}"]`).trigger("click")
+    const composerWasDisabled = wrapper.get("textarea").attributes("disabled") !== undefined
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+    pendingSelection.resolve(storedSession)
+    await flushPromises()
+
+    expect(composerWasDisabled).toBe(true)
+    expect(socket.sent).toEqual([])
+    expect(chat.sessionId.value).toBe(sessionId)
+    expect(wrapper.find("[data-test=app-error]").exists()).toBe(false)
+  })
+
+  it("prevents sending while session deletion is pending", async () => {
+    const pendingDelete = deferred<void>()
+    const { wrapper, socket, chat } = mountApp({
+      sessionDeleter: () => pendingDelete.promise,
+    })
+    await flushPromises()
+    chat.setSession(storedSession)
+    await nextTick()
+    await wrapper.get("textarea").setValue("Do not race this deletion")
+
+    await wrapper.get(`[data-delete-session="${sessionId}"]`).trigger("click")
+    const composerWasDisabled = wrapper.get("textarea").attributes("disabled") !== undefined
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+    pendingDelete.resolve()
+    await flushPromises()
+
+    expect(composerWasDisabled).toBe(true)
+    expect(socket.sent).toEqual([])
+    expect(chat.state.value).toBe("idle")
+    expect(chat.sessionId.value).toBeNull()
+  })
+
   it("disables the composer and exposes Stop while running", async () => {
     const { wrapper, socket } = mountApp()
     await flushPromises()
@@ -380,6 +422,29 @@ describe("App", () => {
     await flushPromises()
     expect(document.activeElement).toBe(
       wrapper.get<HTMLButtonElement>("[data-test=new-conversation]").element,
+    )
+
+    await wrapper.get("#conversation-sidebar").trigger("keydown", { key: "Escape" })
+    await flushPromises()
+    expect(toggle.attributes("aria-expanded")).toBe("false")
+    expect(document.activeElement).toBe(toggle.element)
+    wrapper.unmount()
+  })
+
+  it("focuses an enabled drawer control while a turn is active", async () => {
+    const { wrapper } = mountApp({ attachToDocument: true })
+    await flushPromises()
+    await wrapper.get("textarea").setValue("Keep running")
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+    const toggle = wrapper.get<HTMLButtonElement>("[data-test=sidebar-toggle]")
+    toggle.element.focus()
+
+    await toggle.trigger("click")
+    await flushPromises()
+
+    expect(wrapper.get("[data-test=new-conversation]").attributes("disabled")).toBeDefined()
+    expect(document.activeElement).toBe(
+      wrapper.get<HTMLButtonElement>(".sidebar-close").element,
     )
 
     await wrapper.get("#conversation-sidebar").trigger("keydown", { key: "Escape" })

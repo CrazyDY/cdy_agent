@@ -45,10 +45,11 @@ let disposed = false
 async function openSidebar(): Promise<void> {
   sidebarOpen.value = true
   await nextTick()
-  document
-    .getElementById("conversation-sidebar")
-    ?.querySelector<HTMLButtonElement>("[data-test='new-conversation']:not([disabled])")
-    ?.focus()
+  const sidebar = document.getElementById("conversation-sidebar")
+  const nextFocus =
+    sidebar?.querySelector<HTMLButtonElement>("[data-test='new-conversation']:not([disabled])") ??
+    sidebar?.querySelector<HTMLButtonElement>("button:not([disabled])")
+  nextFocus?.focus()
 }
 
 async function closeSidebar(): Promise<void> {
@@ -76,7 +77,13 @@ const failure = chat.failure
 const protocolError = chat.protocolError
 
 const active = computed(() => state.value === "running" || state.value === "awaiting_approval")
-const composerDisabled = computed(() => loading.value || state.value !== "idle")
+const composerDisabled = computed(
+  () =>
+    loading.value ||
+    state.value !== "idle" ||
+    selectingSessionIds.value.size > 0 ||
+    deletingSessionIds.value.size > 0,
+)
 const canRetry = computed(
   () => state.value === "cancelled" || (state.value === "failed" && failure.value?.retryable === true),
 )
