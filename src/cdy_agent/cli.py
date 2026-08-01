@@ -46,9 +46,8 @@ from .observability import (
     resolve_pricing,
 )
 from .observability.logging import configure_structured_logging, resolve_log_level
-from .openai_client import MissingAPIKeyError, ModelGateway
-from .skills import SkillManager, create_skill_tools
-from .tools import create_builtin_registry
+from .openai_client import MissingAPIKeyError
+from .runtime import create_agent_runtime
 from .tools.base import ConfirmationDecision, ConfirmationRequest
 from .tools.filesystem import resolve_workspace
 
@@ -121,46 +120,12 @@ def _confirm_tool(request: ConfirmationRequest) -> ConfirmationDecision:
 
 def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
     """Construct the CLI's shared model-and-local-tools boundary."""
-    gateway = ModelGateway(model=model, api_mode=api_mode)
-    registry = create_builtin_registry(workspace)
-    manager = SkillManager(workspace)
-    system_prompt = _system_prompt_with_skills(
-        resolve_system_prompt(load_workspace_config(workspace)),
-        manager.list_skills(),
-    )
-    registered = registry.register_many(create_skill_tools(manager))
-    if not registered.ok:
-        raise RuntimeError(registered.message or "Could not register Skill tools.")
-    return Agent(gateway, registry, _confirm_tool, system_prompt=system_prompt)
-
-
-def _system_prompt_with_skills(base_prompt: str, catalog: dict[str, object]) -> str:
-    """Append a concise workspace Skill catalog when Skills are available."""
-    raw_skills = catalog.get("skills")
-    if not isinstance(raw_skills, list):
-        return base_prompt
-
-    entries = []
-    for raw_skill in raw_skills:
-        if not isinstance(raw_skill, dict):
-            continue
-        name = raw_skill.get("name")
-        description = raw_skill.get("description")
-        if not isinstance(name, str) or not isinstance(description, str):
-            continue
-        if not name.strip() or not description.strip():
-            continue
-        entries.append(f"- *{name.strip()}*: {description.strip()}")
-    if not entries:
-        return base_prompt
-
-    skill_catalog = "\n".join(entries)
-    return (
-        f"{base_prompt.rstrip()}\n\n"
-        "**Available workspace Skills**:\n"
-        f"{skill_catalog}\n\n"
-        "When a Skill matches the task, activate it with activate_skill and "
-        "follow its instructions."
+    return create_agent_runtime(
+        model=model,
+        api_mode=api_mode,
+        workspace=workspace,
+        confirm=_confirm_tool,
+        system_prompt=resolve_system_prompt(load_workspace_config(workspace)),
     )
 
 

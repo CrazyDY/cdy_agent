@@ -15,7 +15,7 @@ from openai import (
 )
 from typer.testing import CliRunner
 
-from cdy_agent import cli, openai_client
+from cdy_agent import cli, openai_client, runtime
 from cdy_agent.agent import Agent, AgentLoopLimitError
 from cdy_agent.cli import app
 from cdy_agent.conversation import Message
@@ -971,60 +971,30 @@ def test_chat_keyboard_interrupt_exits_cleanly(
     assert result.exit_code == 0
 
 
-def test_create_agent_wires_standard_skill_tools_and_confirmation(
+def test_create_agent_delegates_runtime_and_keeps_cli_configuration(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    gateway = object()
-    skill_tools = object()
-    manager_calls: list[tuple[object, ...]] = []
-    registered: list[object] = []
-
-    class FakeManager:
-        def list_skills(self) -> dict[str, object]:
-            return {"skills": []}
-
-    manager = FakeManager()
-
-    class FakeRegistry:
-        def register_many(self, tools: object) -> ToolResult:
-            registered.append(tools)
-            return ToolResult.success({})
-
-    registry = FakeRegistry()
-    seen: list[tuple[object, object, object, dict[str, object]]] = []
-    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: gateway)
-    monkeypatch.setattr(cli, "create_builtin_registry", lambda workspace: registry)
+    seen: list[dict[str, object]] = []
     monkeypatch.setattr(
         cli,
-        "SkillManager",
-        lambda *args: manager_calls.append(args) or manager,
-    )
-    monkeypatch.setattr(cli, "create_skill_tools", lambda built_manager: skill_tools)
-    monkeypatch.setattr(
-        cli,
-        "Agent",
-        lambda built_gateway, built_registry, confirm, **kwargs: (
-            seen.append((built_gateway, built_registry, confirm, kwargs)) or "agent"
-        ),
+        "create_agent_runtime",
+        lambda **kwargs: seen.append(kwargs) or "agent",
     )
 
     result = cli._create_agent("model", "responses", tmp_path)
 
     assert result == "agent"
-    assert manager_calls == [(tmp_path,)]
-    assert registered == [skill_tools]
-    assert seen == [
-        (
-            gateway,
-            registry,
-            cli._confirm_tool,
-            {"system_prompt": cli.resolve_system_prompt(cli.WorkspaceConfig())},
-        )
-    ]
+    assert seen == [{
+        "model": "model",
+        "api_mode": "responses",
+        "workspace": tmp_path,
+        "confirm": cli._confirm_tool,
+        "system_prompt": cli.resolve_system_prompt(cli.WorkspaceConfig()),
+    }]
 
 
 def test_system_prompt_appends_only_valid_available_skills() -> None:
-    prompt = cli._system_prompt_with_skills(
+    prompt = runtime._system_prompt_with_skills(
         "Workspace instructions.",
         {
             "skills": [
@@ -1046,7 +1016,7 @@ def test_system_prompt_appends_only_valid_available_skills() -> None:
 
 def test_system_prompt_is_unchanged_without_available_skills() -> None:
     assert (
-        cli._system_prompt_with_skills(
+        runtime._system_prompt_with_skills(
             "Workspace instructions.",
             {"skills": []},
         )
@@ -1375,7 +1345,7 @@ def test_ask_reports_missing_api_key(
 def test_create_agent_registers_five_standard_skill_tools(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: object())
+    monkeypatch.setattr(runtime, "ModelGateway", lambda **kwargs: object())
 
     agent = cli._create_agent("model", "responses", tmp_path)
 
@@ -1392,7 +1362,7 @@ def test_create_agent_registers_five_standard_skill_tools(
 def test_create_agent_loads_system_prompt_from_workspace_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: object())
+    monkeypatch.setattr(runtime, "ModelGateway", lambda **kwargs: object())
     (tmp_path / ".cdy-agent").mkdir()
     (tmp_path / ".cdy-agent" / "config.yaml").write_text(
         "system_prompt: Workspace instructions.\n",
@@ -1413,15 +1383,15 @@ def test_ask_reports_management_tool_registration_failure_without_model_executio
                 "invalid_tools", "Could not register Skill management tools."
             )
 
-    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: object())
+    monkeypatch.setattr(runtime, "ModelGateway", lambda **kwargs: object())
     monkeypatch.setattr(
-        cli, "create_builtin_registry", lambda workspace: RejectingRegistry()
+        runtime, "create_builtin_registry", lambda workspace: RejectingRegistry()
     )
 
     def fail_if_agent_is_created(*args: object, **kwargs: object) -> object:
         raise AssertionError("model execution boundary must not be constructed")
 
-    monkeypatch.setattr(cli, "Agent", fail_if_agent_is_created)
+    monkeypatch.setattr(runtime, "Agent", fail_if_agent_is_created)
 
     result = runner.invoke(app, ["ask", "Hello", "--workspace", str(tmp_path)])
 
@@ -1946,7 +1916,7 @@ def test_ask_and_chat_offer_memory_tools_without_automatic_injection(
     gateway = FakeGateway()
     searches: list[tuple[object, ...]] = []
     monkeypatch.setenv("CDY_AGENT_API_MODE", api_mode)
-    monkeypatch.setattr(cli, "ModelGateway", lambda **kwargs: gateway)
+    monkeypatch.setattr(runtime, "ModelGateway", lambda **kwargs: gateway)
     monkeypatch.setattr(
         MemoryStore,
         "search",
