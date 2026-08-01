@@ -324,4 +324,23 @@ npm --prefix frontend test
 npm --prefix frontend run build
 ```
 
-构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。哈希化的 `index.html`、CSS 和 JavaScript 都是本地生成物，不由 Git 管理。发布流程必须先执行前端构建再执行 `uv build`，以便 wheel 携带生成的静态资产；安装后的 wheel 可以直接使用这些已打包资产，不要求保留前端源码。
+构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。哈希化的 `index.html`、CSS 和 JavaScript 都是本地生成物，不由 Git 管理，也不进入 wheel 或 sdist。发布流程运行前端构建作为质量检查，并在执行 `uv build` 前删除生成目录。
+
+## 发布
+
+`.github/workflows/ci.yml` 在 `main` 推送和 Pull Request 上运行 Python 3.10–3.14 测试以及前端测试和生产构建。`.github/workflows/release.yml` 在推送 `v*` 标签时验证标签与 `pyproject.toml` 版本一致，重新运行测试和前端生产构建，删除生成的静态目录，再构建并冒烟测试 wheel 和 sdist。工作流会验证分发包不包含生成的前端资源；验证通过后，通过 PyPI Trusted Publishing 发布 `cdy-agent`，随后创建带有两个分发文件的 GitHub Release。
+
+首次发布前，在 GitHub 仓库中创建名为 `pypi` 的 Environment，并在 PyPI 项目的 Publishing 设置中添加 GitHub Trusted Publisher：Owner 为 `CrazyDY`，Repository 为 `cdy_agent`，Workflow 为 `release.yml`，Environment 为 `pypi`。该流程使用 OIDC 短期凭证，不需要保存 `PYPI_TOKEN`。
+
+发布新版本时，先更新并提交项目版本，然后创建同版本标签：
+
+```powershell
+uv version 0.1.0
+git add pyproject.toml uv.lock
+git commit -m "Prepare release 0.1.0"
+git tag -a v0.1.0 -m "Release 0.1.0"
+git push origin main
+git push origin v0.1.0
+```
+
+不要在版本提交进入 `main` 前推送标签；标签中的 `v` 会被发布工作流去除后与项目版本比较。

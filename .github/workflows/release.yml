@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Verify tag version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(uv version --short)"
+          if [[ "$tag_version" != "$package_version" ]]; then
+            echo "Tag version $tag_version does not match package version $package_version."
+            exit 1
+          fi
+
+      - name: Install Python dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Run Python tests
+        run: uv run --frozen pytest -p no:cacheprovider
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Run frontend tests
+        run: npm --prefix frontend test
+
+      - name: Build frontend assets
+        run: npm --prefix frontend run build
+
+      - name: Remove generated frontend assets from distributions
+        run: rm -rf src/cdy_agent/web/static
+
+      - name: Build Python distributions
+        run: uv build --no-sources
+
+      - name: Verify distributions exclude generated frontend assets
+        run: |
+          uv run --frozen python - <<'PY'
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          wheel = next(Path("dist").glob("*.whl"))
+          sdist = next(Path("dist").glob("*.tar.gz"))
+          wheel_files = zipfile.ZipFile(wheel).namelist()
+          sdist_files = tarfile.open(sdist).getnames()
+          generated_path = "cdy_agent/web/static/"
+          assert not any(generated_path in name for name in wheel_files)
+          assert not any(generated_path in name for name in sdist_files)
+          PY
+
+      - name: Smoke test wheel
+        shell: bash
+        run: |
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          uv run --isolated --no-project --with "$wheel" cdy-agent --help
+
+      - name: Smoke test source distribution
+        shell: bash
+        run: |
+          sdist="$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          test -n "$sdist"
+          uv run --isolated --no-project --with "$sdist" cdy-agent --help
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cdy-agent/
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub release
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --verify-tag
+          --generate-notes
+          --title "$GITHUB_REF_NAME"
