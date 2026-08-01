@@ -324,11 +324,11 @@ npm --prefix frontend test
 npm --prefix frontend run build
 ```
 
-构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。哈希化的 `index.html`、CSS 和 JavaScript 都是本地生成物，不由 Git 管理，也不进入 wheel 或 sdist。发布流程运行前端构建作为质量检查，并在执行 `uv build` 前删除生成目录。
+构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。哈希化的 `index.html`、CSS 和 JavaScript 都是本地生成物，不由 Git 管理，也不进入 wheel 或 sdist。wheel 会在 `cdy_agent/frontend/` 中携带前端源码、锁文件和构建配置，但不包含 `node_modules`；从 wheel 安装后首次启动 Web 服务会先执行 `npm ci` 安装锁定依赖，再把生产资源构建到已安装包的 `cdy_agent/web/static/`。发布流程运行前端构建作为质量检查，并在执行 `uv build` 前删除生成目录。
 
 ## 发布
 
-`.github/workflows/ci.yml` 在 `main` 推送和 Pull Request 上运行 Python 3.10–3.14 测试以及前端测试和生产构建。`.github/workflows/release.yml` 在推送 `v*` 标签时验证标签与 `pyproject.toml` 版本一致，重新运行测试和前端生产构建，删除生成的静态目录，再构建并冒烟测试 wheel 和 sdist。工作流会验证分发包不包含生成的前端资源；验证通过后，通过 PyPI Trusted Publishing 发布 `cdy-agent`，随后创建带有两个分发文件的 GitHub Release。
+`.github/workflows/ci.yml` 在 `main` 推送和 Pull Request 上运行 Python 3.10–3.14 测试以及前端测试和生产构建。`.github/workflows/release.yml` 在推送 `v*` 标签时验证标签与 `pyproject.toml` 版本一致，重新运行测试和前端生产构建，删除生成的静态目录，再构建并冒烟测试 wheel 和 sdist。工作流会验证分发包不包含生成的前端资源、wheel 和 sdist 均包含前端源码；验证通过后，通过 PyPI Trusted Publishing 发布 `cdy-agent`，随后创建带有两个分发文件的 GitHub Release。
 
 首次发布前，在 GitHub 仓库中创建名为 `pypi` 的 Environment，并在 PyPI 项目的 Publishing 设置中添加 GitHub Trusted Publisher：Owner 为 `CrazyDY`，Repository 为 `cdy_agent`，Workflow 为 `release.yml`，Environment 为 `pypi`。该流程使用 OIDC 短期凭证，不需要保存 `PYPI_TOKEN`。
 

@@ -87,6 +87,9 @@ jobs:
           generated_path = "cdy_agent/web/static/"
           assert not any(generated_path in name for name in wheel_files)
           assert not any(generated_path in name for name in sdist_files)
+          assert "cdy_agent/frontend/package.json" in wheel_files
+          assert "cdy_agent/frontend/package-lock.json" in wheel_files
+          assert any(name.endswith("/frontend/package.json") for name in sdist_files)
           PY
 
       - name: Smoke test wheel

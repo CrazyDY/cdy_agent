@@ -71,7 +71,13 @@ app.add_typer(traces_app, name="traces")
 app.add_typer(config_app, name="config")
 app.add_typer(evals_app, name="evals")
 
-_FRONTEND_DIRECTORY = Path(__file__).resolve().parents[2] / "frontend"
+_SOURCE_FRONTEND_DIRECTORY = Path(__file__).resolve().parents[2] / "frontend"
+_PACKAGED_FRONTEND_DIRECTORY = Path(__file__).with_name("frontend")
+_FRONTEND_DIRECTORY = (
+    _SOURCE_FRONTEND_DIRECTORY
+    if (_SOURCE_FRONTEND_DIRECTORY / "package.json").is_file()
+    else _PACKAGED_FRONTEND_DIRECTORY
+)
 _WEB_STATIC_DIRECTORY = Path(__file__).with_name("web") / "static"
 
 REQUEST_ERRORS = (
@@ -665,19 +671,40 @@ def _build_web_frontend() -> None:
     npm = shutil.which("npm")
     if npm is None:
         raise RuntimeError("npm is required to build the Web interface.")
+    environment = os.environ.copy()
+    environment["CDY_AGENT_WEB_STATIC_DIRECTORY"] = str(_WEB_STATIC_DIRECTORY)
+    if not (_FRONTEND_DIRECTORY / "node_modules").is_dir():
+        _run_frontend_npm(
+            npm,
+            ["ci"],
+            environment,
+            "Web interface dependency installation failed.",
+        )
+    _run_frontend_npm(
+        npm,
+        ["run", "build"],
+        environment,
+        "Web interface build failed.",
+    )
+
+
+def _run_frontend_npm(
+    npm: str,
+    arguments: list[str],
+    environment: dict[str, str],
+    failure_message: str,
+) -> None:
     try:
         result = subprocess.run(
-            [npm, "run", "build"],
+            [npm, *arguments],
             cwd=_FRONTEND_DIRECTORY,
             check=False,
+            env=environment,
         )
     except OSError as exc:
         raise RuntimeError("Unable to run the Web interface build.") from exc
     if result.returncode != 0:
-        raise RuntimeError(
-            "Web interface build failed. Install frontend dependencies with "
-            "npm --prefix frontend install."
-        )
+        raise RuntimeError(failure_message)
 
 
 @app.command()

@@ -141,7 +141,7 @@ src/cdy_agent/
 
 本阶段已经完成，并由独立批准的 Web UI 设计约束。项目已交付 `cdy-agent web --workspace <path>`：单个 FastAPI/Uvicorn 进程只监听 `127.0.0.1`，提供带进程级本地能力认证的 Vue 两栏 Chat UI，并复用原有 Agent Tool Loop、工具、Skills、SQLite 会话和可观测性边界。workspace 在启动时固定，浏览器不能切换；进程同一时间只接受一个 Agent 回合。
 
-Web UI 支持新建、列出、恢复和确认删除会话、流式助手文本、通用工具状态、完整工具确认选择、Stop 与 Retry。Shell 的持久允许继续严格绑定准备后的完整可执行文件和精确 argv。Stop、页面刷新、断开和服务器关闭会协作取消模型流、确认等待与可取消子进程；失败或取消的轮次不持久化，已经完成的副作用不自动回滚。从源码树运行 `cdy-agent web` 时会先执行 Vue 生产构建，构建失败则不启动服务；`src/cdy_agent/web/static/` 是 Git 忽略的生成目录，不进入 wheel 或 sdist。GitHub Actions 验证 Python 与前端、构建并检查分发包，再通过 PyPI Trusted Publishing 发布标签版本。
+Web UI 支持新建、列出、恢复和确认删除会话、流式助手文本、通用工具状态、完整工具确认选择、Stop 与 Retry。Shell 的持久允许继续严格绑定准备后的完整可执行文件和精确 argv。Stop、页面刷新、断开和服务器关闭会协作取消模型流、确认等待与可取消子进程；失败或取消的轮次不持久化，已经完成的副作用不自动回滚。从源码树运行 `cdy-agent web` 时会先执行 Vue 生产构建，构建失败则不启动服务；`src/cdy_agent/web/static/` 是 Git 忽略的生成目录，不进入 wheel 或 sdist。wheel 携带前端源码、锁文件与构建配置但不携带 `node_modules`，安装后的首次 Web 启动会安装锁定依赖并在包内生成静态资源。GitHub Actions 验证 Python 与前端、构建并检查分发包，再通过 PyPI Trusted Publishing 发布标签版本。
 
 ## 错误处理
 

@@ -2061,19 +2061,56 @@ def test_web_frontend_build_uses_npm_in_the_frontend_directory(
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "package.json").write_text("{}", encoding="utf-8")
-    calls: list[tuple[list[str], Path, bool]] = []
+    (frontend / "node_modules").mkdir()
+    static = tmp_path / "static"
+    calls: list[tuple[list[str], Path, bool, dict[str, str]]] = []
 
-    def run(command: list[str], *, cwd: Path, check: bool) -> SimpleNamespace:
-        calls.append((command, cwd, check))
+    def run(
+        command: list[str], *, cwd: Path, check: bool, env: dict[str, str]
+    ) -> SimpleNamespace:
+        calls.append((command, cwd, check, env))
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", static)
     monkeypatch.setattr(cli.shutil, "which", lambda executable: "C:/bin/npm.cmd")
     monkeypatch.setattr(cli.subprocess, "run", run)
 
     cli._build_web_frontend()
 
-    assert calls == [(["C:/bin/npm.cmd", "run", "build"], frontend, False)]
+    assert len(calls) == 1
+    command, cwd, check, environment = calls[0]
+    assert (command, cwd, check) == (
+        ["C:/bin/npm.cmd", "run", "build"],
+        frontend,
+        False,
+    )
+    assert environment["CDY_AGENT_WEB_STATIC_DIRECTORY"] == str(static)
+
+
+def test_web_frontend_build_installs_locked_dependencies_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text("{}", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def run(
+        command: list[str], *, cwd: Path, check: bool, env: dict[str, str]
+    ) -> SimpleNamespace:
+        assert cwd == frontend
+        assert check is False
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli.shutil, "which", lambda executable: "npm")
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    cli._build_web_frontend()
+
+    assert calls == [["npm", "ci"], ["npm", "run", "build"]]
 
 
 def test_web_frontend_build_uses_packaged_assets_without_sources(
@@ -2121,6 +2158,7 @@ def test_web_frontend_build_failure_stops_startup(
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "package.json").write_text("{}", encoding="utf-8")
+    (frontend / "node_modules").mkdir()
     monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
     monkeypatch.setattr(cli.shutil, "which", lambda executable: "npm")
     monkeypatch.setattr(
@@ -2130,6 +2168,24 @@ def test_web_frontend_build_failure_stops_startup(
     )
 
     with pytest.raises(RuntimeError, match="Web interface build failed"):
+        cli._build_web_frontend()
+
+
+def test_web_frontend_dependency_installation_failure_stops_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli.shutil, "which", lambda executable: "npm")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1),
+    )
+
+    with pytest.raises(RuntimeError, match="dependency installation failed"):
         cli._build_web_frontend()
 
 
