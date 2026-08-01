@@ -77,6 +77,7 @@ export function useChat(options: UseChatOptions = {}) {
   const protocolError = ref<string | null>(null)
   let socket: ChatSocket | null = null
   let sessionRequestGeneration = 0
+  let disposed = false
 
   const messages = computed<ChatMessage[]>(() => {
     const saved = persistedMessages.value
@@ -97,19 +98,22 @@ export function useChat(options: UseChatOptions = {}) {
   })
 
   function connect(): void {
+    if (disposed) {
+      return
+    }
     if (socket !== null && socket.readyState !== 3) {
       return
     }
     const candidate = (options.socketFactory ?? defaultSocketFactory)(socketUrl())
     socket = candidate
     candidate.onopen = () => {
-      if (socket !== candidate) {
+      if (disposed || socket !== candidate) {
         return
       }
       sendStartIfReady()
     }
     candidate.onmessage = (event) => {
-      if (socket !== candidate) {
+      if (disposed || socket !== candidate) {
         return
       }
       const serverEvent = parseServerEvent(event.data)
@@ -127,7 +131,7 @@ export function useChat(options: UseChatOptions = {}) {
   }
 
   function startTurn(prompt: string): boolean {
-    if (state.value !== "idle" || !prompt.trim()) {
+    if (disposed || state.value !== "idle" || !prompt.trim()) {
       return false
     }
     sessionRequestGeneration += 1
@@ -209,6 +213,16 @@ export function useChat(options: UseChatOptions = {}) {
     socket?.close()
   }
 
+  function dispose(): void {
+    if (disposed) {
+      return
+    }
+    disposed = true
+    window.removeEventListener("beforeunload", disconnect)
+    invalidateSessionLoads()
+    disconnect()
+  }
+
   function setBootstrap(value: BootstrapResponse): void {
     bootstrap.value = value
     summaries.value = [...value.conversations]
@@ -219,14 +233,19 @@ export function useChat(options: UseChatOptions = {}) {
     applySession(value)
   }
 
+  function invalidateSessionLoads(): void {
+    sessionRequestGeneration += 1
+  }
+
   async function selectSession(id: string): Promise<boolean> {
-    if (isTurnActive()) {
+    if (disposed || isTurnActive()) {
       return false
     }
     const generation = ++sessionRequestGeneration
     try {
       const session = await (options.sessionLoader ?? loadSession)(id)
       if (
+        disposed ||
         generation !== sessionRequestGeneration ||
         isTurnActive()
       ) {
@@ -407,8 +426,10 @@ export function useChat(options: UseChatOptions = {}) {
     resolveApproval,
     retry,
     disconnect,
+    dispose,
     setBootstrap,
     setSession,
+    invalidateSessionLoads,
     selectSession,
     setSummaries,
   }

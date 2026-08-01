@@ -11,7 +11,7 @@ export interface AppServices {
 </script>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 
 import { ApiError, deleteSession as deleteSavedSession, loadBootstrap as fetchBootstrap } from "./api/http"
 import type { ApprovalDecision } from "./api/protocol"
@@ -35,6 +35,35 @@ const loading = ref(true)
 const bootstrapError = ref<string | null>(null)
 const appError = ref<string | null>(null)
 const sidebarOpen = ref(false)
+const sidebarToggle = ref<HTMLButtonElement | null>(null)
+const selectingSessionIds = ref<ReadonlySet<string>>(new Set())
+const deletingSessionIds = ref<ReadonlySet<string>>(new Set())
+let selectionRequestGeneration = 0
+let bootstrapRequestGeneration = 0
+let disposed = false
+
+async function openSidebar(): Promise<void> {
+  sidebarOpen.value = true
+  await nextTick()
+  document
+    .getElementById("conversation-sidebar")
+    ?.querySelector<HTMLButtonElement>("[data-test='new-conversation']:not([disabled])")
+    ?.focus()
+}
+
+async function closeSidebar(): Promise<void> {
+  sidebarOpen.value = false
+  await nextTick()
+  sidebarToggle.value?.focus()
+}
+
+function toggleSidebar(): void {
+  if (sidebarOpen.value) {
+    void closeSidebar()
+    return
+  }
+  void openSidebar()
+}
 
 const state = chat.state
 const sessionId = chat.sessionId
@@ -62,17 +91,33 @@ const apiModeLabel = computed(() =>
 )
 
 onMounted(refreshBootstrap)
-onBeforeUnmount(chat.disconnect)
+onBeforeUnmount(() => {
+  disposed = true
+  bootstrapRequestGeneration += 1
+  selectionRequestGeneration += 1
+  chat.invalidateSessionLoads()
+  chat.dispose()
+})
 
 async function refreshBootstrap(): Promise<void> {
+  const generation = ++bootstrapRequestGeneration
   loading.value = true
   bootstrapError.value = null
   try {
-    chat.setBootstrap(await services.loadBootstrap())
+    const value = await services.loadBootstrap()
+    if (disposed || generation !== bootstrapRequestGeneration) {
+      return
+    }
+    chat.setBootstrap(value)
   } catch (error) {
+    if (disposed || generation !== bootstrapRequestGeneration) {
+      return
+    }
     bootstrapError.value = safeMessage(error, "CDY Agent could not load this workspace.")
   } finally {
-    loading.value = false
+    if (!disposed && generation === bootstrapRequestGeneration) {
+      loading.value = false
+    }
   }
 }
 
@@ -80,33 +125,75 @@ function newConversation(): void {
   if (active.value) {
     return
   }
+  selectionRequestGeneration += 1
+  chat.invalidateSessionLoads()
   chat.setSession(null)
   appError.value = null
-  sidebarOpen.value = false
+  if (sidebarOpen.value) {
+    void closeSidebar()
+  }
 }
 
 async function selectConversation(id: string): Promise<void> {
+  if (
+    active.value ||
+    selectingSessionIds.value.has(id) ||
+    deletingSessionIds.value.has(id)
+  ) {
+    return
+  }
+  const generation = ++selectionRequestGeneration
+  updatePendingId(selectingSessionIds, id, true)
   appError.value = null
-  if (await chat.selectSession(id)) {
-    sidebarOpen.value = false
-  } else {
-    appError.value = "The conversation could not be loaded."
+  try {
+    const selected = await chat.selectSession(id)
+    if (disposed || generation !== selectionRequestGeneration) {
+      return
+    }
+    if (selected) {
+      if (sidebarOpen.value) {
+        void closeSidebar()
+      }
+    } else {
+      appError.value = "The conversation could not be loaded."
+    }
+  } finally {
+    if (!disposed) {
+      updatePendingId(selectingSessionIds, id, false)
+    }
   }
 }
 
 async function removeConversation(id: string): Promise<void> {
-  if (active.value || !services.confirm("Delete this saved conversation? This cannot be undone.")) {
+  if (
+    active.value ||
+    deletingSessionIds.value.has(id) ||
+    !services.confirm("Delete this saved conversation? This cannot be undone.")
+  ) {
     return
   }
+  selectionRequestGeneration += 1
+  chat.invalidateSessionLoads()
+  updatePendingId(deletingSessionIds, id, true)
   appError.value = null
   try {
     await services.deleteSession(id)
+    if (disposed) {
+      return
+    }
     chat.setSummaries(summaries.value.filter((summary) => summary.id !== id))
     if (sessionId.value === id) {
       chat.setSession(null)
     }
   } catch (error) {
+    if (disposed) {
+      return
+    }
     appError.value = safeMessage(error, "The conversation could not be deleted.")
+  } finally {
+    if (!disposed) {
+      updatePendingId(deletingSessionIds, id, false)
+    }
   }
 }
 
@@ -116,6 +203,20 @@ function resolveApproval(decision: ApprovalDecision): void {
 
 function safeMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback
+}
+
+function updatePendingId(
+  target: typeof selectingSessionIds,
+  id: string,
+  pending: boolean,
+): void {
+  const next = new Set(target.value)
+  if (pending) {
+    next.add(id)
+  } else {
+    next.delete(id)
+  }
+  target.value = next
 }
 </script>
 
@@ -127,7 +228,7 @@ function safeMessage(error: unknown, fallback: string): string {
       data-test="sidebar-backdrop"
       type="button"
       aria-label="Close conversations"
-      @click="sidebarOpen = false"
+      @click="closeSidebar"
     ></button>
     <ConversationSidebar
       :conversations="summaries"
@@ -136,22 +237,25 @@ function safeMessage(error: unknown, fallback: string): string {
       :workspace-path="bootstrap?.workspace_path ?? ''"
       :disabled="active"
       :open="sidebarOpen"
+      :selecting-ids="selectingSessionIds"
+      :deleting-ids="deletingSessionIds"
       @new="newConversation"
       @select="selectConversation"
       @delete="removeConversation"
-      @close="sidebarOpen = false"
+      @close="closeSidebar"
     />
 
     <main class="main-panel">
       <header class="main-header">
         <button
+          ref="sidebarToggle"
           class="icon-button sidebar-toggle"
           data-test="sidebar-toggle"
           type="button"
           aria-label="Open conversations"
           aria-controls="conversation-sidebar"
           :aria-expanded="sidebarOpen"
-          @click="sidebarOpen = !sidebarOpen"
+          @click="toggleSidebar"
         >
           ☰
         </button>
@@ -198,6 +302,11 @@ function safeMessage(error: unknown, fallback: string): string {
       </section>
     </main>
 
-    <ConfirmationDialog v-if="approval" :request="approval" @resolve="resolveApproval" />
+    <ConfirmationDialog
+      v-if="approval"
+      :request="approval"
+      @resolve="resolveApproval"
+      @cancel="chat.cancelTurn"
+    />
   </div>
 </template>

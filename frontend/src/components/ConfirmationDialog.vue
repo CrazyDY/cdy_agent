@@ -4,7 +4,10 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 import type { ApprovalDecision, ApprovalRequired } from "../api/protocol"
 
 defineProps<{ request: ApprovalRequired }>()
-const emit = defineEmits<{ resolve: [decision: ApprovalDecision] }>()
+const emit = defineEmits<{
+  resolve: [decision: ApprovalDecision]
+  cancel: []
+}>()
 
 const dialog = ref<HTMLElement | null>(null)
 let previousFocus: HTMLElement | null = null
@@ -21,7 +24,12 @@ function focusableElements(): HTMLButtonElement[] {
   return Array.from(dialog.value?.querySelectorAll<HTMLButtonElement>("button") ?? [])
 }
 
-function trapFocus(event: KeyboardEvent): void {
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    event.preventDefault()
+    emit("cancel")
+    return
+  }
   if (event.key !== "Tab") {
     return
   }
@@ -50,7 +58,7 @@ function trapFocus(event: KeyboardEvent): void {
       aria-modal="true"
       aria-labelledby="confirmation-title"
       aria-describedby="confirmation-description"
-      @keydown="trapFocus"
+      @keydown="handleKeydown"
     >
       <p class="eyebrow">Action required</p>
       <h2 id="confirmation-title">Confirm tool action</h2>
@@ -61,6 +69,9 @@ function trapFocus(event: KeyboardEvent): void {
         Always allow applies only to this exact prepared command.
       </p>
       <div class="dialog-actions">
+        <button class="button button-stop" data-test="stop-turn" type="button" @click="emit('cancel')">
+          Stop turn
+        </button>
         <button class="button button-quiet" data-test="deny" type="button" @click="emit('resolve', 'deny')">
           Deny
         </button>

@@ -10,6 +10,8 @@ const props = defineProps<{
   workspacePath: string
   disabled: boolean
   open: boolean
+  selectingIds: ReadonlySet<string>
+  deletingIds: ReadonlySet<string>
 }>()
 const emit = defineEmits<{
   new: []
@@ -37,6 +39,7 @@ const groupedConversations = computed(() => {
     class="sidebar"
     :class="{ 'is-open': open }"
     aria-label="Saved conversations"
+    @keydown.esc.stop.prevent="emit('close')"
   >
     <div class="brand-row">
       <div class="brand-mark" aria-hidden="true">C</div>
@@ -62,22 +65,24 @@ const groupedConversations = computed(() => {
               class="conversation-select"
               type="button"
               :data-session-id="conversation.id"
-              :disabled="disabled"
+              :disabled="disabled || selectingIds.has(conversation.id) || deletingIds.has(conversation.id)"
+              :aria-busy="selectingIds.has(conversation.id)"
               :aria-current="activeId === conversation.id ? 'page' : undefined"
               @click="emit('select', conversation.id)"
             >
-              <span>{{ conversation.preview }}</span>
+              <span>{{ selectingIds.has(conversation.id) ? "Loading…" : conversation.preview }}</span>
               <small>{{ conversation.message_count }} messages</small>
             </button>
             <button
               class="conversation-delete"
               type="button"
               :data-delete-session="conversation.id"
-              :disabled="disabled"
+              :disabled="disabled || deletingIds.has(conversation.id)"
+              :aria-busy="deletingIds.has(conversation.id)"
               :aria-label="`Delete ${conversation.preview}`"
               @click="emit('delete', conversation.id)"
             >
-              ×
+              {{ deletingIds.has(conversation.id) ? "…" : "×" }}
             </button>
           </li>
         </ul>

@@ -31,7 +31,11 @@ onUpdated(async () => {
         :class="[`message-${message.role}`, message.status ? `message-${message.status}` : '']"
         data-test="message"
       >
-        <article class="message-card">
+        <article
+          class="message-card"
+          :aria-live="message.role === 'assistant' && message.status === 'running' ? 'polite' : undefined"
+          :aria-relevant="message.role === 'assistant' && message.status === 'running' ? 'text' : undefined"
+        >
           <p class="message-label">{{ message.role === "user" ? "You" : "CDY Agent" }}</p>
           <p v-if="message.role === 'user'" class="user-content">{{ message.content }}</p>
           <MessageContent v-else-if="message.content" :content="message.content" />

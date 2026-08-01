@@ -43,6 +43,9 @@ describe("ConfirmationDialog", () => {
   })
 
   it("keeps keyboard focus inside the blocking dialog", async () => {
+    const previous = document.createElement("button")
+    document.body.append(previous)
+    previous.focus()
     const wrapper = mount(ConfirmationDialog, {
       attachTo: document.body,
       props: { request: approvalRequired(true) },
@@ -64,5 +67,35 @@ describe("ConfirmationDialog", () => {
     })
     expect(document.activeElement).toBe(buttons.at(-1)!.element)
     wrapper.unmount()
+    expect(document.activeElement).toBe(previous)
+    previous.remove()
+  })
+
+  it("emits whole-turn cancellation from Stop", async () => {
+    const wrapper = mount(ConfirmationDialog, {
+      props: { request: approvalRequired(true) },
+    })
+
+    await wrapper.get('[data-test="stop-turn"]').trigger("click")
+
+    expect(wrapper.emitted("cancel")).toEqual([[]])
+    expect(wrapper.emitted("resolve")).toBeUndefined()
+  })
+
+  it("prevents Escape and emits whole-turn cancellation", () => {
+    const wrapper = mount(ConfirmationDialog, {
+      props: { request: approvalRequired(true) },
+    })
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    })
+
+    wrapper.get('[role="alertdialog"]').element.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(wrapper.emitted("cancel")).toEqual([[]])
+    expect(wrapper.emitted("resolve")).toBeUndefined()
   })
 })

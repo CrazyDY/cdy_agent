@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import type { ServerEvent } from "../api/protocol"
 import { useChat, type ChatSocket } from "./useChat"
@@ -59,6 +59,32 @@ function sentEvents(socket: FakeWebSocket): unknown[] {
 }
 
 describe("useChat", () => {
+  it("removes its unload listener before disconnecting on dispose", () => {
+    const addEventListener = vi.spyOn(window, "addEventListener")
+    const removeEventListener = vi.spyOn(window, "removeEventListener")
+    const socket = new FakeWebSocket()
+    const close = vi.spyOn(socket, "close")
+
+    try {
+      const chat = useChat({ socketFactory: () => socket })
+      const unloadHandler = addEventListener.mock.calls.find(
+        ([type]) => type === "beforeunload",
+      )?.[1]
+      expect(unloadHandler).toBeDefined()
+
+      chat.startTurn("hello")
+      socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: firstSessionId })
+      chat.dispose()
+
+      expect(removeEventListener).toHaveBeenCalledWith("beforeunload", unloadHandler)
+      expect(sentEvents(socket)).toContainEqual({ type: "turn.cancel", turn_id: turnId })
+      expect(close).toHaveBeenCalledOnce()
+    } finally {
+      addEventListener.mockRestore()
+      removeEventListener.mockRestore()
+    }
+  })
+
   it("applies assistant deltas in protocol order without completing the turn", () => {
     const socket = new FakeWebSocket()
     const chat = useChat({ socketFactory: () => socket })
@@ -266,6 +292,37 @@ describe("useChat", () => {
 
     expect(chat.sessionId.value).toBe(secondSessionId)
     expect(chat.messages.value).toEqual([{ role: "user", content: "B", persisted: true }])
+  })
+
+  it("invalidates a pending session load without changing the current session", async () => {
+    const pending = deferred<{
+      id: string
+      created_at: string
+      updated_at: string
+      messages: { role: "user"; content: string }[]
+    }>()
+    const chat = useChat({ sessionLoader: () => pending.promise })
+    chat.setSession({
+      id: firstSessionId,
+      created_at: "a",
+      updated_at: "a",
+      messages: [{ role: "user", content: "current" }],
+    })
+
+    const selection = chat.selectSession("74e94a48-5a15-426f-9cb1-638acd5c7b99")
+    chat.invalidateSessionLoads()
+    pending.resolve({
+      id: "74e94a48-5a15-426f-9cb1-638acd5c7b99",
+      created_at: "b",
+      updated_at: "b",
+      messages: [{ role: "user", content: "stale" }],
+    })
+
+    await expect(selection).resolves.toBe(false)
+    expect(chat.sessionId.value).toBe(firstSessionId)
+    expect(chat.messages.value).toEqual([
+      { role: "user", content: "current", persisted: true },
+    ])
   })
 
   it("ignores late close events from a replaced socket", () => {

@@ -7,6 +7,7 @@ import App, { type AppServices } from "./App.vue"
 import { useChat, type ChatSocket } from "./composables/useChat"
 
 const sessionId = "8d7af6dc-32c8-4b2b-9890-c3caa938390c"
+const secondSessionId = "74e94a48-5a15-426f-9cb1-638acd5c7b99"
 const turnId = "7b4c48ea-ddba-4c41-a755-b5222e4d122a"
 
 const bootstrap: BootstrapResponse = {
@@ -60,6 +61,7 @@ function mountApp(options: {
   sessionLoader?: (id: string) => Promise<StoredConversation>
   sessionDeleter?: AppServices["deleteSession"]
   confirm?: AppServices["confirm"]
+  attachToDocument?: boolean
 } = {}) {
   const socket = new FakeWebSocket()
   const chat = useChat({
@@ -72,7 +74,14 @@ function mountApp(options: {
     deleteSession: options.sessionDeleter ?? (async () => undefined),
     confirm: options.confirm ?? (() => true),
   }
-  return { wrapper: mount(App, { props: { services } }), socket, chat }
+  return {
+    wrapper: mount(App, {
+      props: { services },
+      attachTo: options.attachToDocument ? document.body : undefined,
+    }),
+    socket,
+    chat,
+  }
 }
 
 function deferred<T>() {
@@ -84,6 +93,46 @@ function deferred<T>() {
 }
 
 describe("App", () => {
+  it("disposes the chat lifecycle and ignores a late bootstrap after unmount", async () => {
+    const pending = deferred<BootstrapResponse>()
+    const removeEventListener = vi.spyOn(window, "removeEventListener")
+    const { wrapper, chat } = mountApp({ bootstrapLoader: () => pending.promise })
+
+    wrapper.unmount()
+    expect(removeEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function))
+    pending.resolve(bootstrap)
+    await flushPromises()
+
+    expect(chat.bootstrap.value).toBeNull()
+    removeEventListener.mockRestore()
+  })
+
+  it("ignores a late session selection after unmount", async () => {
+    const pending = deferred<StoredConversation>()
+    const { wrapper, chat } = mountApp({ sessionLoader: () => pending.promise })
+    await flushPromises()
+
+    await wrapper.get(`[data-session-id="${sessionId}"]`).trigger("click")
+    wrapper.unmount()
+    pending.resolve(storedSession)
+    await flushPromises()
+
+    expect(chat.sessionId.value).toBeNull()
+  })
+
+  it("ignores a late deletion after unmount", async () => {
+    const pending = deferred<void>()
+    const { wrapper, chat } = mountApp({ sessionDeleter: () => pending.promise })
+    await flushPromises()
+
+    await wrapper.get(`[data-delete-session="${sessionId}"]`).trigger("click")
+    wrapper.unmount()
+    pending.resolve()
+    await flushPromises()
+
+    expect(chat.summaries.value).toContainEqual(bootstrap.conversations[0])
+  })
+
   it("loads bootstrap metadata and starts a new conversation", async () => {
     const pending = deferred<BootstrapResponse>()
     const { wrapper, chat } = mountApp({ bootstrapLoader: () => pending.promise })
@@ -118,6 +167,65 @@ describe("App", () => {
     ])
   })
 
+  it("keeps a fast newer selection without showing a stale-load error", async () => {
+    const pendingA = deferred<StoredConversation>()
+    const pendingB = deferred<StoredConversation>()
+    const loadBootstrap = async (): Promise<BootstrapResponse> => ({
+      ...bootstrap,
+      conversations: [
+        bootstrap.conversations[0],
+        { ...bootstrap.conversations[0], id: secondSessionId, preview: "Second" },
+      ],
+    })
+    const { wrapper, chat } = mountApp({
+      bootstrapLoader: loadBootstrap,
+      sessionLoader: (id) => id === sessionId ? pendingA.promise : pendingB.promise,
+    })
+    await flushPromises()
+
+    await wrapper.get(`[data-session-id="${sessionId}"]`).trigger("click")
+    await wrapper.get(`[data-session-id="${secondSessionId}"]`).trigger("click")
+    pendingB.resolve({ ...storedSession, id: secondSessionId, messages: [{ role: "user", content: "B" }] })
+    await flushPromises()
+    pendingA.resolve({ ...storedSession, messages: [{ role: "user", content: "A" }] })
+    await flushPromises()
+
+    expect(chat.sessionId.value).toBe(secondSessionId)
+    expect(wrapper.find("[data-test=app-error]").exists()).toBe(false)
+  })
+
+  it("ignores a deleted session load that resolves late", async () => {
+    const pending = deferred<StoredConversation>()
+    const { wrapper, chat } = mountApp({ sessionLoader: () => pending.promise })
+    await flushPromises()
+
+    await wrapper.get(`[data-session-id="${sessionId}"]`).trigger("click")
+    await wrapper.get(`[data-delete-session="${sessionId}"]`).trigger("click")
+    await flushPromises()
+    pending.resolve(storedSession)
+    await flushPromises()
+
+    expect(chat.sessionId.value).toBeNull()
+    expect(wrapper.find(`[data-session-id="${sessionId}"]`).exists()).toBe(false)
+    expect(wrapper.find("[data-test=app-error]").exists()).toBe(false)
+  })
+
+  it("deduplicates deletion while the same session request is pending", async () => {
+    const pendingDelete = deferred<void>()
+    const deleteSession = vi.fn(() => pendingDelete.promise)
+    const { wrapper } = mountApp({ sessionDeleter: deleteSession })
+    await flushPromises()
+    const deleteButton = wrapper.get(`[data-delete-session="${sessionId}"]`)
+
+    await deleteButton.trigger("click")
+    await deleteButton.trigger("click")
+
+    expect(deleteSession).toHaveBeenCalledTimes(1)
+    expect(deleteButton.attributes("disabled")).toBeDefined()
+    pendingDelete.resolve()
+    await flushPromises()
+  })
+
   it("disables the composer and exposes Stop while running", async () => {
     const { wrapper, socket } = mountApp()
     await flushPromises()
@@ -136,6 +244,25 @@ describe("App", () => {
     socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: sessionId })
     await wrapper.get('[data-test="stop"]').trigger("click")
     expect(JSON.parse(socket.sent[1])).toEqual({ type: "turn.cancel", turn_id: turnId })
+  })
+
+  it("announces streamed assistant text as polite relevant updates", async () => {
+    const { wrapper, socket } = mountApp()
+    await flushPromises()
+    await wrapper.get("textarea").setValue("Stream this")
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: sessionId })
+    socket.receive({ type: "assistant.delta", turn_id: turnId, delta: "First" })
+    await nextTick()
+
+    const assistant = wrapper.get(".message-running .message-card")
+    expect(assistant.attributes("aria-live")).toBe("polite")
+    expect(assistant.attributes("aria-relevant")).toBe("text")
+    expect(assistant.text()).toContain("First")
+
+    socket.receive({ type: "assistant.delta", turn_id: turnId, delta: " update" })
+    await nextTick()
+    expect(assistant.text()).toContain("First update")
   })
 
   it("shows generic tool status and Retry for a failed turn", async () => {
@@ -183,6 +310,27 @@ describe("App", () => {
     expect(wrapper.get("[data-test=retry]").text()).toBe("Retry")
   })
 
+  it("stops the whole turn from a pending confirmation", async () => {
+    const { wrapper, socket } = mountApp()
+    await flushPromises()
+    await wrapper.get("textarea").setValue("Run a tool")
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: sessionId })
+    socket.receive({
+      type: "approval.required",
+      turn_id: turnId,
+      approval_id: "3e1a2ebb-95e2-4b9a-86de-849555043088",
+      description: "Run the exact tool?",
+      allow_always: false,
+    })
+    await nextTick()
+
+    await wrapper.get('[data-test="stop-turn"]').trigger("click")
+
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "turn.cancel", turn_id: turnId })
+    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false)
+  })
+
   it("confirms deletion, refreshes the sidebar, and reports safe failures", async () => {
     const deleteSession = vi
       .fn<AppServices["deleteSession"]>()
@@ -220,6 +368,25 @@ describe("App", () => {
     expect(wrapper.get("#conversation-sidebar").classes()).toContain("is-open")
     await wrapper.get("[data-test=sidebar-backdrop]").trigger("click")
     expect(toggle.attributes("aria-expanded")).toBe("false")
+  })
+
+  it("moves focus into the mobile drawer and restores it after Escape", async () => {
+    const { wrapper } = mountApp({ attachToDocument: true })
+    await flushPromises()
+    const toggle = wrapper.get<HTMLButtonElement>("[data-test=sidebar-toggle]")
+    toggle.element.focus()
+
+    await toggle.trigger("click")
+    await flushPromises()
+    expect(document.activeElement).toBe(
+      wrapper.get<HTMLButtonElement>("[data-test=new-conversation]").element,
+    )
+
+    await wrapper.get("#conversation-sidebar").trigger("keydown", { key: "Escape" })
+    await flushPromises()
+    expect(toggle.attributes("aria-expanded")).toBe("false")
+    expect(document.activeElement).toBe(toggle.element)
+    wrapper.unmount()
   })
 
   it("offers a safe retry when bootstrap fails", async () => {
