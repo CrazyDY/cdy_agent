@@ -191,7 +191,10 @@ export function useChat(options: UseChatOptions = {}) {
 
   function retry(): boolean {
     const failed = transientTurn.value
-    if (state.value !== "failed" || failed === null || !failure.value?.retryable) {
+    const canRetry =
+      state.value === "cancelled" ||
+      (state.value === "failed" && failure.value?.retryable === true)
+    if (!canRetry || failed === null) {
       return false
     }
     transientTurn.value = null

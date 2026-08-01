@@ -30,6 +30,22 @@ cdy-agent = "cdy_agent.cli:app"
 pythonpath = ["src"]
 testpaths = ["tests"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/cdy_agent"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/frontend",
+  "/README.md",
+  "/pyproject.toml",
+  "/uv.lock",
+]
+exclude = [
+  "/frontend/node_modules",
+  "/frontend/node_modules/**",
+]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.0",

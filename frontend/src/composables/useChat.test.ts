@@ -347,6 +347,33 @@ describe("useChat", () => {
     ])
   })
 
+  it("retries a cancelled prompt without adding cancelled content to saved history", () => {
+    const socket = new FakeWebSocket()
+    const chat = useChat({ socketFactory: () => socket })
+
+    chat.setSession({
+      id: firstSessionId,
+      created_at: "2026-08-01T11:00:00+00:00",
+      updated_at: "2026-08-01T12:00:00+00:00",
+      messages: [{ role: "user", content: "saved" }],
+    })
+    chat.startTurn("cancelled prompt")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: firstSessionId })
+    socket.receive({ type: "assistant.delta", turn_id: turnId, delta: "partial" })
+    socket.receive({ type: "turn.cancelled", turn_id: turnId })
+
+    expect(chat.retry()).toBe(true)
+    expect(sentEvents(socket)).toEqual([
+      { type: "turn.start", prompt: "cancelled prompt", session_id: firstSessionId },
+      { type: "turn.start", prompt: "cancelled prompt", session_id: firstSessionId },
+    ])
+    expect(chat.messages.value).toEqual([
+      { role: "user", content: "saved", persisted: true },
+      { role: "user", content: "cancelled prompt", persisted: false },
+      { role: "assistant", content: "", persisted: false, status: "running" },
+    ])
+  })
+
   it("refreshes the sidebar summary only after persistence completes", () => {
     const socket = new FakeWebSocket()
     const chat = useChat({ socketFactory: () => socket })

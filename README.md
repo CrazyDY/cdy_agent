@@ -4,7 +4,7 @@ CDY Agent 是一个本地个人 AI 助理项目，通过渐进式开发学习实
 
 ## 当前阶段
 
-项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具和流式工具调用。模型还可以从工作区渐进式发现和激活 Skills：激活只返回说明与资源清单，不读取资源内容或运行代码；每一次脚本执行都需要用户单独确认。`chat` 会话和用户显式保存的长期记忆按 workspace 持久化，并提供调用轨迹、Token/费用统计和基于 YAML/JSON 的评估运行器。
+项目支持通过 Responses API 或 Chat Completions API 进行单轮问答和多轮会话，两种 API 模式均可通过同一个 Agent Tool Loop 使用受限的本地工具和流式工具调用。模型还可以从工作区渐进式发现和激活 Skills：激活只返回说明与资源清单，不读取资源内容或运行代码；每一次脚本执行都需要用户单独确认。`chat` 会话和用户显式保存的长期记忆按 workspace 持久化，并提供调用轨迹、Token/费用统计和基于 YAML/JSON 的评估运行器。项目还交付了只监听本机回环地址的 Vue Chat Web UI；它复用相同的 Agent、工具确认、取消和会话持久化边界。
 
 ## 配置
 
@@ -80,6 +80,35 @@ uv run cdy-agent sessions list --workspace .
 uv run cdy-agent chat --resume 52c809c6-6e55-4ff1-9220-e4f90a4f6774 --workspace .
 uv run cdy-agent sessions delete 52c809c6-6e55-4ff1-9220-e4f90a4f6774 --workspace .
 ```
+
+### 本地 Chat Web UI
+
+在配置好 provider 环境变量后，启动固定 workspace 的本地界面：
+
+```powershell
+uv run cdy-agent web --workspace .
+```
+
+服务只绑定 `127.0.0.1`，默认端口为 `8000`，且不提供 `--host`。`--port` 可以选择另一个明确端口；`--no-open` 会只在终端打印初始 URL，不自动打开浏览器：
+
+```powershell
+uv run cdy-agent web --workspace . --port 8765 --no-open
+```
+
+初始地址形如 `http://127.0.0.1:8000/?access_token=<process-local-capability>`。该地址是当前进程的本地访问能力，不应分享或保存。浏览器首次访问后会把它交换为 `HttpOnly`、`SameSite=Strict` Cookie，并立即重定向到不含 token 的干净 `/`；若浏览器留下了旧 Cookie 或打开了旧进程的地址，关闭该页面并使用本次启动新打印的能力 URL。进程退出后旧 token 和 Cookie 不能用于新进程。
+
+workspace 在服务器启动时解析并固定，浏览器不能切换或提交另一个根目录。整个进程同一时间只运行一个 Agent 回合；第二个标签页或客户端不会排队，而会收到 busy 错误。只读会话请求仍可工作，但活动回合期间不能删除会话。
+
+界面支持新建、恢复和删除已保存会话、增量显示助手回复、普通工具状态、Stop 与 Retry。删除会话前浏览器会再次确认。需要确认的工具会显示服务器生成的完整操作说明，并提供 Deny 和 Allow once；只有工具明确支持时才显示 Always allow。Shell 的 Always allow 仍只保存已经准备好的完整可执行文件和精确 argv，参数内容与顺序必须完全匹配，不会扩大成前缀或通配符。
+
+Stop、刷新、关闭页面或 WebSocket 断开都会协作取消模型流、待确认操作和可取消的子进程；服务器会等 worker 确实停止后才释放活动回合。失败或取消的回合只保留在当前页面供 Retry，不写入 SQLite，也不进入后续模型上下文。取消不会回滚此前已经完成的文件、进程、记忆或其他副作用。
+
+常见启动问题：
+
+- 缺少 `OPENAI_API_KEY` 或 provider 配置无效：先在当前终端设置环境变量，再重新启动；凭证不会进入浏览器或 workspace 配置。
+- 端口已占用：使用 `--port <空闲端口>`；服务不会自动改绑其他地址或端口。
+- 显示 `Web assets are unavailable`：从源码运行时按下方开发步骤重新构建已提交的前端资产；正式 wheel 已包含这些文件。
+- 显示 busy：等待当前标签页的回合结束，或在发起回合的页面点击 Stop；请求不会在后台排队。
 
 ### 持久化会话
 
@@ -266,13 +295,30 @@ cases:
 
 ## 开发
 
-需要 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/)。
+运行已构建的 Python 包只需要 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/)；Node.js 只用于修改、测试或重建 Vue 前端。前端开发使用 `frontend/package-lock.json` 锁定依赖，生产构建产物必须提交到 `src/cdy_agent/web/static/`，且不得包含 source map。
 
 ```powershell
-uv sync --extra dev
-uv run pytest
+uv sync --extra dev --default-index https://pypi.org/simple
+uv run pytest -p no:cacheprovider
 uv run cdy-agent --help
 uv run cdy-agent ask --help
 uv run cdy-agent chat --help
+uv run cdy-agent web --help
 uv build
 ```
+
+首次进行前端开发时安装锁定依赖，然后启动 Vite 开发服务器：
+
+```powershell
+npm --prefix frontend install
+npm --prefix frontend run dev
+```
+
+Vite 开发服务器用于独立迭代界面；真实的认证 HTTP/WebSocket API 由 `cdy-agent web` 与生产静态资产从同一 origin 提供。需要端到端本地检查时，先完成生产构建，再启动 `cdy-agent web`。交付前运行完整前端测试并重建提交的生产资产：
+
+```powershell
+npm --prefix frontend test
+npm --prefix frontend run build
+```
+
+构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。重新构建后应提交新的哈希化 `index.html`、CSS 和 JavaScript，并确认该目录中没有 `.map` 文件。Python wheel 在运行时直接提供这些资产，因此安装 wheel 的用户不需要 Node.js。

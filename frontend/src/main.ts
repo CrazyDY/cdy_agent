@@ -1,5 +1,6 @@
-const mount = document.querySelector<HTMLDivElement>("#app")
+import { createApp } from "vue"
 
-if (mount) {
-  mount.textContent = "CDY Agent"
-}
+import App from "./App.vue"
+import "./styles.css"
+
+createApp(App).mount("#app")

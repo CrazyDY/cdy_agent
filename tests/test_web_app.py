@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import cdy_agent.web.app as web_app
 from cdy_agent.memory import ConversationStore
 from cdy_agent.web.app import WebDependencies, WebSettings, create_web_app
 from cdy_agent.web.auth import BrowserCapability
@@ -54,8 +55,11 @@ def test_app_registers_the_authenticated_turn_socket(app_client: TestClient) -> 
 
 def test_root_requires_cookie_and_returns_safe_missing_asset_error(
     app_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """A backend-only package must not serve the root without browser authentication."""
+    monkeypatch.setattr(web_app, "_STATIC_DIRECTORY", tmp_path / "missing-static")
     forbidden = app_client.get("/", headers={"host": "127.0.0.1:8000"})
     app_client.cookies.set("cdy_agent_web", "fixed-secret")
     missing = app_client.get("/", headers={"host": "127.0.0.1:8000"})
