@@ -4,9 +4,18 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish on GitHub
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -16,6 +25,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install uv and Python
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -34,7 +45,7 @@ jobs:
       - name: Verify tag version
         shell: bash
         run: |
-          tag_version="${GITHUB_REF_NAME#v}"
+          tag_version="${RELEASE_TAG#v}"
           package_version="$(uv version --short)"
           if [[ "$tag_version" != "$package_version" ]]; then
             echo "Tag version $tag_version does not match package version $package_version."
@@ -102,6 +113,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -121,7 +133,14 @@ jobs:
 
   github-release:
     name: Create GitHub release
-    needs: publish-pypi
+    needs:
+      - build
+      - publish-pypi
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' ||
+      needs.publish-pypi.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -137,7 +156,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "$GITHUB_REF_NAME" dist/*
+          gh release create "$RELEASE_TAG" dist/*
+          --repo "$GITHUB_REPOSITORY"
           --verify-tag
           --generate-notes
-          --title "$GITHUB_REF_NAME"
+          --title "$RELEASE_TAG"

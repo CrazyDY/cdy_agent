@@ -344,3 +344,9 @@ git push origin v0.1.0
 ```
 
 不要在版本提交进入 `main` 前推送标签；标签中的 `v` 会被发布工作流去除后与项目版本比较。
+
+如果 PyPI 已发布成功、但 GitHub Release 创建失败，可以从 `main` 手动补建现有标签的 Release，而不会再次上传 PyPI：
+
+```powershell
+gh workflow run release.yml --ref main -f tag=v0.1.0
+```
