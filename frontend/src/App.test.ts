@@ -268,6 +268,57 @@ describe("App", () => {
     expect(chat.sessionId.value).toBeNull()
   })
 
+  it("prevents Retry from racing a pending session selection", async () => {
+    const pendingSelection = deferred<StoredConversation>()
+    const { wrapper, socket, chat } = mountApp({
+      sessionLoader: () => pendingSelection.promise,
+    })
+    await flushPromises()
+    await wrapper.get("textarea").setValue("Retry after cancellation")
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: sessionId })
+    socket.receive({ type: "turn.cancelled", turn_id: turnId })
+    await nextTick()
+
+    await wrapper.get(`[data-session-id="${sessionId}"]`).trigger("click")
+    const retryWasDisabled = wrapper.get("[data-test=retry]").attributes("disabled") !== undefined
+    await wrapper.get("[data-test=retry]").trigger("click")
+    pendingSelection.resolve(storedSession)
+    await flushPromises()
+
+    expect(retryWasDisabled).toBe(true)
+    expect(socket.sent).toHaveLength(1)
+    expect(chat.sessionId.value).toBe(sessionId)
+    expect(chat.state.value).toBe("idle")
+    expect(wrapper.find("[data-test=app-error]").exists()).toBe(false)
+  })
+
+  it("prevents Retry from racing a pending session deletion", async () => {
+    const pendingDelete = deferred<void>()
+    const { wrapper, socket, chat } = mountApp({
+      sessionDeleter: () => pendingDelete.promise,
+    })
+    await flushPromises()
+    chat.setSession(storedSession)
+    await nextTick()
+    await wrapper.get("textarea").setValue("Retry after cancellation")
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: sessionId })
+    socket.receive({ type: "turn.cancelled", turn_id: turnId })
+    await nextTick()
+
+    await wrapper.get(`[data-delete-session="${sessionId}"]`).trigger("click")
+    const retryWasDisabled = wrapper.get("[data-test=retry]").attributes("disabled") !== undefined
+    await wrapper.get("[data-test=retry]").trigger("click")
+    pendingDelete.resolve()
+    await flushPromises()
+
+    expect(retryWasDisabled).toBe(true)
+    expect(socket.sent).toHaveLength(1)
+    expect(chat.state.value).toBe("idle")
+    expect(chat.sessionId.value).toBeNull()
+  })
+
   it("disables the composer and exposes Stop while running", async () => {
     const { wrapper, socket } = mountApp()
     await flushPromises()

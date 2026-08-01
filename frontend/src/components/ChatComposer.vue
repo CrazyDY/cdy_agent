@@ -14,7 +14,7 @@ const emit = defineEmits<{
 const prompt = ref("")
 
 function submit(): void {
-  if (props.disabled || !prompt.value.trim()) {
+  if (props.disabled || props.active || props.canRetry || !prompt.value.trim()) {
     return
   }
   emit("send", prompt.value)
@@ -26,14 +26,14 @@ function submit(): void {
   <div class="composer-wrap">
     <div v-if="canRetry" class="retry-row">
       <span>The last response was not saved.</span>
-      <button class="text-button" data-test="retry" type="button" @click="emit('retry')">Retry</button>
+      <button class="text-button" data-test="retry" type="button" :disabled="disabled" @click="emit('retry')">Retry</button>
     </div>
     <form class="composer" data-test="composer-form" @submit.prevent="submit">
       <label class="sr-only" for="chat-prompt">Message CDY Agent</label>
       <textarea
         id="chat-prompt"
         v-model="prompt"
-        :disabled="disabled"
+        :disabled="disabled || active || canRetry"
         rows="2"
         placeholder="Ask CDY Agent…"
       ></textarea>
@@ -46,7 +46,7 @@ function submit(): void {
       >
         Stop
       </button>
-      <button v-else class="button button-primary send-button" type="submit" :disabled="disabled || !prompt.trim()">
+      <button v-else class="button button-primary send-button" type="submit" :disabled="disabled || canRetry || !prompt.trim()">
         Send
       </button>
     </form>

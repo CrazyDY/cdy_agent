@@ -80,7 +80,7 @@ const active = computed(() => state.value === "running" || state.value === "awai
 const composerDisabled = computed(
   () =>
     loading.value ||
-    state.value !== "idle" ||
+    active.value ||
     selectingSessionIds.value.size > 0 ||
     deletingSessionIds.value.size > 0,
 )
