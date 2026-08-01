@@ -11,6 +11,7 @@ from cdy_agent.config import (
     load_workspace_config,
     resolve_api_mode,
     resolve_model,
+    resolve_rebuild_frontend,
     resolve_streaming,
     resolve_system_prompt,
 )
@@ -205,6 +206,96 @@ def test_workspace_config_rejects_non_boolean_stream(tmp_path: Path) -> None:
     (config_dir / "config.yaml").write_text("stream: maybe\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="stream"):
+        load_workspace_config(tmp_path)
+
+
+def test_rebuild_frontend_defaults_to_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_REBUILD_FRONTEND", raising=False)
+
+    assert resolve_rebuild_frontend() is False
+
+
+def test_workspace_config_supplies_rebuild_frontend(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_REBUILD_FRONTEND", raising=False)
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        "rebuild_frontend: true\n", encoding="utf-8"
+    )
+
+    config = load_workspace_config(tmp_path)
+
+    assert config.rebuild_frontend is True
+    assert resolve_rebuild_frontend(workspace_config=config) is True
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (" true ", True),
+        ("YES", True),
+        ("1", True),
+        ("on", True),
+        (" false ", False),
+        ("NO", False),
+        ("0", False),
+        ("off", False),
+    ],
+)
+def test_rebuild_frontend_environment_is_trimmed_and_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+    expected: bool,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_REBUILD_FRONTEND", configured)
+
+    assert resolve_rebuild_frontend() is expected
+
+
+def test_rebuild_frontend_override_wins_over_environment_and_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_REBUILD_FRONTEND", "true")
+    config = WorkspaceConfig(rebuild_frontend=True)
+
+    assert resolve_rebuild_frontend(False, config) is False
+
+
+def test_rebuild_frontend_environment_wins_over_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_REBUILD_FRONTEND", "false")
+    config = WorkspaceConfig(rebuild_frontend=True)
+
+    assert resolve_rebuild_frontend(workspace_config=config) is False
+
+
+@pytest.mark.parametrize("configured", ["sometimes", ""])
+def test_invalid_rebuild_frontend_environment_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_REBUILD_FRONTEND", configured)
+
+    with pytest.raises(ValueError, match="CDY_AGENT_REBUILD_FRONTEND"):
+        resolve_rebuild_frontend()
+
+
+def test_workspace_config_rejects_non_boolean_rebuild_frontend(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        "rebuild_frontend: maybe\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="rebuild_frontend"):
         load_workspace_config(tmp_path)
 
 

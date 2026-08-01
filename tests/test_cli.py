@@ -2001,7 +2001,7 @@ def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
 
     monkeypatch.setattr(cli, "BrowserCapability", FakeCapability, raising=False)
     monkeypatch.setattr(
-        cli, "_build_web_frontend", lambda: order.append("build"), raising=False
+        cli, "_build_web_frontend", lambda **kwargs: order.append("build"), raising=False
     )
     monkeypatch.setattr(cli, "ConfirmationBroker", FakeBroker, raising=False)
     monkeypatch.setattr(cli, "create_agent_runtime", lambda **kwargs: order.append("agent") or object())
@@ -2094,6 +2094,8 @@ def test_web_frontend_build_installs_locked_dependencies_when_missing(
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "package.json").write_text("{}", encoding="utf-8")
+    static = tmp_path / "static"
+    static.mkdir()
     calls: list[list[str]] = []
 
     def run(
@@ -2105,6 +2107,7 @@ def test_web_frontend_build_installs_locked_dependencies_when_missing(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", static)
     monkeypatch.setattr(cli.shutil, "which", lambda executable: "npm")
     monkeypatch.setattr(cli.subprocess, "run", run)
 
@@ -2145,8 +2148,11 @@ def test_web_frontend_build_requires_npm(
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "package.json").write_text("{}", encoding="utf-8")
+    static = tmp_path / "static"
+    static.mkdir()
 
     monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", static)
     monkeypatch.setattr(cli.shutil, "which", lambda executable: None)
     with pytest.raises(RuntimeError, match="npm is required"):
         cli._build_web_frontend()
@@ -2159,7 +2165,10 @@ def test_web_frontend_build_failure_stops_startup(
     frontend.mkdir()
     (frontend / "package.json").write_text("{}", encoding="utf-8")
     (frontend / "node_modules").mkdir()
+    static = tmp_path / "static"
+    static.mkdir()
     monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", static)
     monkeypatch.setattr(cli.shutil, "which", lambda executable: "npm")
     monkeypatch.setattr(
         cli.subprocess,
@@ -2177,7 +2186,10 @@ def test_web_frontend_dependency_installation_failure_stops_startup(
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "package.json").write_text("{}", encoding="utf-8")
+    static = tmp_path / "static"
+    static.mkdir()
     monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", static)
     monkeypatch.setattr(cli.shutil, "which", lambda executable: "npm")
     monkeypatch.setattr(
         cli.subprocess,
@@ -2187,6 +2199,133 @@ def test_web_frontend_dependency_installation_failure_stops_startup(
 
     with pytest.raises(RuntimeError, match="dependency installation failed"):
         cli._build_web_frontend()
+
+
+def test_web_frontend_build_skips_when_static_assets_already_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default (rebuild=False) reuses a previously built static bundle."""
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text("{}", encoding="utf-8")
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("built", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", static)
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda executable: pytest.fail("npm lookup should not run"),
+    )
+
+    cli._build_web_frontend()
+
+
+def test_web_frontend_build_is_forced_when_rebuild_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A True rebuild value rebuilds even when static assets already exist."""
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text("{}", encoding="utf-8")
+    (frontend / "node_modules").mkdir()
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("built", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def run(
+        command: list[str], *, cwd: Path, check: bool, env: dict[str, str]
+    ) -> SimpleNamespace:
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli, "_FRONTEND_DIRECTORY", frontend)
+    monkeypatch.setattr(cli, "_WEB_STATIC_DIRECTORY", static)
+    monkeypatch.setattr(cli.shutil, "which", lambda executable: "npm")
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    cli._build_web_frontend(rebuild=True)
+
+    assert calls == [["npm", "run", "build"]]
+
+
+def test_web_command_forces_rebuild_when_flag_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--rebuild-frontend resolves to True and reaches the build function."""
+    captured: list[bool] = []
+
+    def fake_build(*, rebuild: bool) -> None:
+        captured.append(rebuild)
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def bind(self, address: tuple[str, int]) -> None:
+            pass
+
+        def close(self) -> None:
+            self.closed = True
+
+    listener = FakeSocket()
+
+    monkeypatch.setattr(
+        cli,
+        "socket",
+        SimpleNamespace(
+            AF_INET=socket.AF_INET,
+            SOCK_STREAM=socket.SOCK_STREAM,
+            socket=lambda family, kind: listener,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_build_web_frontend", fake_build, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "BrowserCapability",
+        SimpleNamespace(
+            create=lambda *args: SimpleNamespace(
+                launch_url="http://127.0.0.1:8000/?access_token=brief-secret"
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli, "ConfirmationBroker", lambda: SimpleNamespace(confirm=object()), raising=False
+    )
+    monkeypatch.setattr(cli, "create_agent_runtime", lambda **kwargs: object(), raising=False)
+    monkeypatch.setattr(cli, "TurnCoordinator", lambda dependencies: None, raising=False)
+    monkeypatch.setattr(cli, "TurnDependencies", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(cli, "WebSettings", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(cli, "WebDependencies", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(
+        cli, "create_web_app", lambda settings, dependencies: object(), raising=False
+    )
+    monkeypatch.setattr(
+        cli,
+        "uvicorn",
+        SimpleNamespace(
+            Config=lambda app, **kwargs: app,
+            Server=lambda config: SimpleNamespace(run=lambda *, sockets: None),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli, "webbrowser", SimpleNamespace(open=lambda url: None), raising=False
+    )
+    monkeypatch.delenv("CDY_AGENT_REBUILD_FRONTEND", raising=False)
+
+    result = runner.invoke(
+        app,
+        ["web", "--workspace", str(tmp_path), "--no-open", "--rebuild-frontend"],
+    )
+
+    assert result.exit_code == 0
+    assert captured == [True]
 
 
 def test_web_command_maps_occupied_port_without_disclosing_or_opening_url(

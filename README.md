@@ -89,7 +89,13 @@ uv run cdy-agent sessions delete 52c809c6-6e55-4ff1-9220-e4f90a4f6774 --workspac
 uv run cdy-agent web --workspace .
 ```
 
-从源码树运行时，该命令会先执行前端生产构建，再启动服务器；因此需先安装 Node.js/npm，并至少执行一次 `npm --prefix frontend install` 安装锁定依赖。构建失败时服务器不会启动。
+从源码树运行时，该命令会在前端生产资产缺失时执行一次构建，再启动服务器；已存在构建产物时默认跳过构建以加快重复启动。因此需先安装 Node.js/npm，并至少执行一次 `npm --prefix frontend install` 安装锁定依赖。构建失败时服务器不会启动。
+
+默认（不强制重建）行为：`src/cdy_agent/web/static/index.html` 已存在则跳过 npm 构建，缺失时仍执行一次首次构建。需要每次启动都重新构建时，用 `--rebuild-frontend` 强制；也可通过环境变量 `CDY_AGENT_REBUILD_FRONTEND=true` 或工作区配置 `rebuild_frontend: true` 开启。配置按四层优先级解析：命令行选项 > 环境变量 > 工作区配置 > 默认值。
+
+```powershell
+uv run cdy-agent web --workspace . --rebuild-frontend
+```
 
 服务只绑定 `127.0.0.1`，默认端口为 `8000`，且不提供 `--host`。`--port` 可以选择另一个明确端口；`--no-open` 会只在终端打印初始 URL，不自动打开浏览器：
 
@@ -317,7 +323,7 @@ npm --prefix frontend install
 npm --prefix frontend run dev
 ```
 
-Vite 开发服务器用于独立迭代界面；真实的认证 HTTP/WebSocket API 由 `cdy-agent web` 与生产静态资产从同一 origin 提供。`cdy-agent web` 每次从源码树启动时都会先运行同一个生产构建。交付前仍应运行完整前端测试；发布 wheel 前应显式生成一次用于打包的生产资产：
+Vite 开发服务器用于独立迭代界面；真实的认证 HTTP/WebSocket API 由 `cdy-agent web` 与生产静态资产从同一 origin 提供。`cdy-agent web` 在前端生产资产缺失时执行一次生产构建；已存在构建产物时默认跳过，需要时用 `--rebuild-frontend` 强制重建。交付前仍应运行完整前端测试；发布 wheel 前应显式生成一次用于打包的生产资产：
 
 ```powershell
 npm --prefix frontend test

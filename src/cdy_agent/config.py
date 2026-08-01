@@ -28,6 +28,7 @@ class WorkspaceConfig:
     system_prompt: str | None = None
     stream: bool | None = None
     log_level: str | None = None
+    rebuild_frontend: bool | None = None
     input_cost_per_million: str | None = None
     output_cost_per_million: str | None = None
 
@@ -52,6 +53,7 @@ def load_workspace_config(workspace: Path) -> WorkspaceConfig:
         "system_prompt",
         "stream",
         "log_level",
+        "rebuild_frontend",
         "observability",
     }
     unknown = set(raw_config) - allowed_top_level
@@ -81,6 +83,9 @@ def load_workspace_config(workspace: Path) -> WorkspaceConfig:
         ),
         stream=_optional_bool(raw_config.get("stream"), "stream"),
         log_level=_optional_string(raw_config.get("log_level"), "log_level"),
+        rebuild_frontend=_optional_bool(
+            raw_config.get("rebuild_frontend"), "rebuild_frontend"
+        ),
         input_cost_per_million=_optional_string(
             observability.get("input_cost_per_million"),
             "observability.input_cost_per_million",
@@ -153,6 +158,28 @@ def resolve_streaming(
 
     if workspace_config and workspace_config.stream is not None:
         return workspace_config.stream
+
+    return False
+
+
+def resolve_rebuild_frontend(
+    rebuild_override: bool | None = None,
+    workspace_config: WorkspaceConfig | None = None,
+) -> bool:
+    """Resolve whether to rebuild the Web frontend from CLI, environment, config, or default.
+
+    Defaults to False: when built assets already exist the build is skipped, and it
+    only runs once when assets are missing. A True value forces a fresh build.
+    """
+    if rebuild_override is not None:
+        return rebuild_override
+
+    environment_rebuild = os.getenv("CDY_AGENT_REBUILD_FRONTEND")
+    if environment_rebuild is not None:
+        return _parse_bool(environment_rebuild, "CDY_AGENT_REBUILD_FRONTEND")
+
+    if workspace_config and workspace_config.rebuild_frontend is not None:
+        return workspace_config.rebuild_frontend
 
     return False
 

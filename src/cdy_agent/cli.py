@@ -29,6 +29,7 @@ from .config import (
     load_workspace_config,
     resolve_api_mode,
     resolve_model,
+    resolve_rebuild_frontend,
     resolve_streaming,
     resolve_system_prompt,
 )
@@ -662,12 +663,19 @@ def main() -> None:
         _fail_for_exception(exc)
 
 
-def _build_web_frontend() -> None:
-    """Build the Vue production assets required by the local Web server."""
+def _build_web_frontend(*, rebuild: bool = False) -> None:
+    """Build the Vue production assets required by the local Web server.
+
+    When ``rebuild`` is False (the default), a previously built static bundle is
+    reused and the npm build is skipped. Assets are only built when missing, so
+    repeated starts do not rebuild. A True value forces a fresh build.
+    """
     if not (_FRONTEND_DIRECTORY / "package.json").is_file():
         if (_WEB_STATIC_DIRECTORY / "index.html").is_file():
             return
         raise RuntimeError("Frontend sources and built Web assets are unavailable.")
+    if not rebuild and (_WEB_STATIC_DIRECTORY / "index.html").is_file():
+        return
     npm = shutil.which("npm")
     if npm is None:
         raise RuntimeError("npm is required to build the Web interface.")
@@ -721,6 +729,14 @@ def web(
         bool,
         typer.Option("--open/--no-open", help="Open the local UI in a browser."),
     ] = True,
+    rebuild_frontend: Annotated[
+        bool | None,
+        typer.Option(
+            "--rebuild-frontend/--no-rebuild-frontend",
+            help="Force rebuild the Vue production assets before starting the server. "
+            "By default built assets are reused and the build only runs when missing.",
+        ),
+    ] = None,
 ) -> None:
     """Start the authenticated local Web interface on IPv4 loopback."""
     listener: socket.socket | None = None
@@ -738,9 +754,9 @@ def web(
                 f"Unable to start local Web server on 127.0.0.1:{port}."
             ) from exc
 
-        _build_web_frontend()
-
         active_workspace, workspace_config = _load_configured_workspace(workspace)
+        rebuild = resolve_rebuild_frontend(rebuild_frontend, workspace_config)
+        _build_web_frontend(rebuild=rebuild)
         _configure_logging_for_workspace(workspace_config)
         active_model = resolve_model(workspace_config=workspace_config)
         api_mode = resolve_api_mode(workspace_config)

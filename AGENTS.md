@@ -86,7 +86,7 @@ committed, overwritten casually, or used by tests outside a temporary workspace.
 Configuration precedence is CLI override, environment variable, workspace
 configuration, then built-in default where that setting supports all four layers.
 The workspace file accepts only `model`, `api_mode`, `system_prompt`, `stream`,
-`log_level`, and an `observability` mapping containing
+`log_level`, `rebuild_frontend`, and an `observability` mapping containing
 `input_cost_per_million`/`output_cost_per_million`.
 
 Supported environment variables are:
@@ -98,6 +98,9 @@ Supported environment variables are:
   `responses`.
 - `CDY_AGENT_STREAM` — boolean streaming default.
 - `CDY_AGENT_LOG_LEVEL` — `DEBUG`, `INFO`, `WARNING`, or `ERROR`.
+- `CDY_AGENT_REBUILD_FRONTEND` — boolean; when true the `web` command rebuilds the
+  Vue production assets on every start. Defaults to false, which reuses an existing
+  build and only runs the build when `web` static assets are missing.
 - `CDY_AGENT_INPUT_COST_PER_MILLION` and
   `CDY_AGENT_OUTPUT_COST_PER_MILLION` — optional non-negative prices that must be
   configured as a pair.
