@@ -32,6 +32,7 @@ def register_turn_socket(
 
         active_turn: ActiveTurn | None = None
         sender: asyncio.Task[None] | None = None
+        send_lock = asyncio.Lock()
         receiver = asyncio.create_task(websocket.receive_json())
         try:
             while True:
@@ -54,8 +55,8 @@ def register_turn_socket(
                     payload = receiver.result()
                 except WebSocketDisconnect:
                     return
-                except (JSONDecodeError, TypeError, ValueError):
-                    if not await _send_protocol_error(websocket):
+                except (JSONDecodeError, KeyError, TypeError, ValueError):
+                    if not await _send_protocol_error(websocket, send_lock):
                         return
                     receiver = asyncio.create_task(websocket.receive_json())
                     continue
@@ -64,24 +65,32 @@ def register_turn_socket(
                 try:
                     event = parse_client_event(payload)
                 except ValidationError:
-                    if not await _send_protocol_error(websocket):
+                    if not await _send_protocol_error(websocket, send_lock):
                         return
                     continue
 
                 if isinstance(event, TurnStart):
+                    if sender is not None:
+                        if not await _send_event(
+                            websocket, ServerBusy(type="server.busy"), send_lock
+                        ):
+                            return
+                        continue
                     try:
                         active_turn = await coordinator.start(event)
                     except ServerBusyError:
                         if not await _send_event(
-                            websocket, ServerBusy(type="server.busy")
+                            websocket, ServerBusy(type="server.busy"), send_lock
                         ):
                             return
                         continue
-                    sender = asyncio.create_task(_send_turn_events(websocket, active_turn))
+                    sender = asyncio.create_task(
+                        _send_turn_events(websocket, active_turn, send_lock)
+                    )
                     continue
 
                 if active_turn is None or event.turn_id != active_turn.turn_id:
-                    if not await _send_protocol_error(websocket):
+                    if not await _send_protocol_error(websocket, send_lock):
                         return
                     continue
 
@@ -93,25 +102,27 @@ def register_turn_socket(
                     try:
                         active_turn.resolve_approval(event)
                     except ValueError:
-                        if not await _send_protocol_error(websocket):
+                        if not await _send_protocol_error(websocket, send_lock):
                             return
         finally:
             receiver.cancel()
-            await _await_cancelled(receiver)
+            await _await_cleanup(receiver)
             if active_turn is not None:
                 active_turn.cancel()
                 await active_turn.wait_stopped()
             if sender is not None:
                 sender.cancel()
-                await _await_cancelled(sender)
+                await _await_cleanup(sender)
 
 
-async def _send_turn_events(websocket: WebSocket, turn: ActiveTurn) -> None:
+async def _send_turn_events(
+    websocket: WebSocket, turn: ActiveTurn, send_lock: asyncio.Lock | None = None
+) -> None:
     """Forward one turn's ordered event queue until its terminal event."""
     try:
         while True:
             event = await turn.next_event()
-            await websocket.send_json(event.model_dump(mode="json"))
+            await _send_json(websocket, event, send_lock)
             if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
                 return
     except Exception:
@@ -120,24 +131,41 @@ async def _send_turn_events(websocket: WebSocket, turn: ActiveTurn) -> None:
         raise
 
 
-async def _send_event(websocket: WebSocket, event: object) -> bool:
+async def _send_event(
+    websocket: WebSocket, event: object, send_lock: asyncio.Lock | None = None
+) -> bool:
     try:
-        websocket_event = event
-        await websocket.send_json(websocket_event.model_dump(mode="json"))  # type: ignore[union-attr]
+        await _send_json(websocket, event, send_lock)
     except Exception:  # noqa: BLE001 - socket send failures are transport failures
         return False
     return True
 
 
-async def _send_protocol_error(websocket: WebSocket) -> bool:
+async def _send_protocol_error(
+    websocket: WebSocket, send_lock: asyncio.Lock | None = None
+) -> bool:
     return await _send_event(
         websocket,
         ProtocolError(type="protocol.error", message="Invalid WebSocket event."),
+        send_lock,
     )
 
 
-async def _await_cancelled(task: asyncio.Task[object]) -> None:
+async def _send_json(
+    websocket: WebSocket, event: object, send_lock: asyncio.Lock | None
+) -> None:
+    async def send() -> None:
+        await websocket.send_json(event.model_dump(mode="json"))  # type: ignore[union-attr]
+
+    if send_lock is None:
+        await send()
+    else:
+        async with send_lock:
+            await send()
+
+
+async def _await_cleanup(task: asyncio.Task[object]) -> None:
     try:
         await task
-    except (asyncio.CancelledError, WebSocketDisconnect):
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001 - cleanup must finish
         return

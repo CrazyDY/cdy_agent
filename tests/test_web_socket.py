@@ -303,3 +303,112 @@ def test_send_failure_cancels_and_waits_for_the_worker() -> None:
         assert turn.wait_stopped_calls == 1
 
     asyncio.run(scenario())
+
+
+def test_binary_frame_protocol_error_keeps_the_socket_alive_and_cleans_up() -> None:
+    """A binary-frame KeyError must not bypass cancellation of the active worker."""
+    turn = _WaitingTurn()
+    coordinator = _SingleTurnCoordinator(turn)
+    websocket = _FakeWebSocket(
+        [
+            {"type": "turn.start", "prompt": "hello"},
+            KeyError("text"),
+            {"type": "turn.cancel", "turn_id": turn.turn_id},
+            WebSocketDisconnect(),
+        ]
+    )
+
+    async def scenario() -> None:
+        await asyncio.wait_for(_run_socket_handler(websocket, coordinator), timeout=0.5)
+
+    asyncio.run(scenario())
+
+    assert [event["type"] for event in websocket.sent] == [
+        "turn.accepted",
+        "protocol.error",
+        "turn.cancelled",
+    ]
+    assert turn.cancel_calls == 1
+
+
+def test_unexpected_receive_failure_cleans_up_the_active_worker() -> None:
+    """A receive failure must not prevent finally from stopping active work."""
+    turn = _WaitingTurn()
+    coordinator = _SingleTurnCoordinator(turn)
+    websocket = _FakeWebSocket(
+        [{"type": "turn.start", "prompt": "hello"}, RuntimeError("receive failed")]
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError, match="receive failed"):
+            await asyncio.wait_for(_run_socket_handler(websocket, coordinator), timeout=0.5)
+
+    asyncio.run(scenario())
+
+    assert turn.cancel_calls == 1
+    assert turn.wait_stopped_calls == 1
+
+
+def test_new_start_waits_for_the_previous_sender_to_finish() -> None:
+    """Replacing a live sender could make two tasks write one WebSocket at once."""
+    old_turn = _WaitingTurn()
+    replacement_turn = _WaitingTurn()
+
+    class ClearedCoordinator:
+        def __init__(self) -> None:
+            self.started: list[object] = []
+
+        async def start(self, request: object) -> _WaitingTurn:
+            self.started.append(request)
+            return old_turn if len(self.started) == 1 else replacement_turn
+
+    class OwnershipWebSocket(_FakeWebSocket):
+        def __init__(self) -> None:
+            super().__init__([{"type": "turn.start", "prompt": "first"}])
+
+        async def send_json(self, payload: dict[str, object]) -> None:
+            await super().send_json(payload)
+            event_type = payload["type"]
+            if event_type == "turn.accepted" and payload["turn_id"] == old_turn.turn_id:
+                self._messages.put_nowait({"type": "turn.start", "prompt": "too soon"})
+            elif event_type == "server.busy":
+                old_turn._events.put_nowait(
+                    TurnCompleted(
+                        type="turn.completed",
+                        turn_id=old_turn.turn_id,
+                        assistant_message="old reply",
+                        conversation={
+                            "id": old_turn.session_id,
+                            "updated_at": "2026-08-01T00:00:00+00:00",
+                            "message_count": 2,
+                            "preview": "old reply",
+                        },
+                    )
+                )
+            elif event_type == "turn.completed" and payload["turn_id"] == old_turn.turn_id:
+                self._messages.put_nowait({"type": "turn.start", "prompt": "after terminal"})
+            elif (
+                event_type == "turn.accepted"
+                and payload["turn_id"] == replacement_turn.turn_id
+            ):
+                self._messages.put_nowait(
+                    {"type": "turn.cancel", "turn_id": replacement_turn.turn_id}
+                )
+                self._messages.put_nowait(WebSocketDisconnect())
+
+    coordinator = ClearedCoordinator()
+    websocket = OwnershipWebSocket()
+
+    async def scenario() -> None:
+        await asyncio.wait_for(_run_socket_handler(websocket, coordinator), timeout=0.5)
+
+    asyncio.run(scenario())
+
+    assert [request.prompt for request in coordinator.started] == ["first", "after terminal"]
+    assert [event["type"] for event in websocket.sent] == [
+        "turn.accepted",
+        "server.busy",
+        "turn.completed",
+        "turn.accepted",
+        "turn.cancelled",
+    ]
