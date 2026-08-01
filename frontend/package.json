@@ -1,0 +1,27 @@
+{
+  "name": "cdy-agent-web-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "test": "vitest run",
+    "build": "vue-tsc -b && vite build"
+  },
+  "dependencies": {
+    "@vue/test-utils": "^2.4.6",
+    "dompurify": "^3.2.6",
+    "markdown-it": "^14.1.0",
+    "vue": "^3.5.18"
+  },
+  "devDependencies": {
+    "@types/dompurify": "^3.0.5",
+    "@types/jsdom": "^21.1.7",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.6",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^2.2.12"
+  }
+}

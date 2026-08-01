@@ -7,3 +7,4 @@ __pycache__/
 .superpowers/brainstorm/
 .env
 .cdy-agent/
+frontend/node_modules/
