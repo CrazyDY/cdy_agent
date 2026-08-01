@@ -13,6 +13,7 @@ from typing import BinaryIO
 from cdy_agent.run_control import RunControl
 
 MAX_OUTPUT_BYTES = 64 * 1024
+CLEANUP_TIMEOUT_SECONDS = 1
 
 
 @dataclass(frozen=True)
@@ -94,10 +95,13 @@ def run_bounded_process(
         else lambda: None
     )
     if process.stdout is None or process.stderr is None:
+        cleanup_deadline = _cleanup_deadline()
         _terminate_process_tree(process, windows_job)
-        _reap_process(process, deadline)
+        _reap_process(process, cleanup_deadline)
         unregister_cancel()
         _close_windows_job(windows_job)
+        if run_control is not None:
+            run_control.raise_if_cancelled()
         raise OSError("Could not capture process output.")
 
     stdout_state = _DrainState()
@@ -125,11 +129,12 @@ def run_bounded_process(
                 stderr=bytes(stderr_state.retained),
             )
     except BaseException:
+        cleanup_deadline = _cleanup_deadline()
         for cleanup in (
             lambda: _terminate_process_tree(process, windows_job),
             lambda: _request_pipe_closes(process),
-            lambda: _join_threads(threads, deadline),
-            lambda: _reap_process(process, deadline),
+            lambda: _join_threads(threads, cleanup_deadline),
+            lambda: _reap_process(process, cleanup_deadline),
         ):
             try:
                 cleanup()
@@ -138,22 +143,26 @@ def run_bounded_process(
         if run_control is not None:
             run_control.raise_if_cancelled()
         raise
+    else:
+        if run_control is not None:
+            run_control.raise_if_cancelled()
+        for state in (stdout_state, stderr_state):
+            if state.error is not None:
+                raise OSError("Could not read process output.") from state.error
+        if process.returncode is None:
+            raise OSError("Process did not report a return code.")
+        if run_control is not None:
+            run_control.raise_if_cancelled()
+        return BoundedProcessResult(
+            returncode=process.returncode,
+            stdout=bytes(stdout_state.retained).decode("utf-8", errors="replace"),
+            stderr=bytes(stderr_state.retained).decode("utf-8", errors="replace"),
+            stdout_truncated=stdout_state.truncated,
+            stderr_truncated=stderr_state.truncated,
+        )
     finally:
         unregister_cancel()
         _close_windows_job(windows_job)
-
-    for state in (stdout_state, stderr_state):
-        if state.error is not None:
-            raise OSError("Could not read process output.") from state.error
-    if process.returncode is None:
-        raise OSError("Process did not report a return code.")
-    return BoundedProcessResult(
-        returncode=process.returncode,
-        stdout=bytes(stdout_state.retained).decode("utf-8", errors="replace"),
-        stderr=bytes(stderr_state.retained).decode("utf-8", errors="replace"),
-        stdout_truncated=stdout_state.truncated,
-        stderr_truncated=stderr_state.truncated,
-    )
 
 
 def _drain_stream(stream: BinaryIO, state: _DrainState) -> None:
@@ -206,6 +215,10 @@ def _join_threads(threads: tuple[threading.Thread, ...], deadline: float) -> boo
             return False
         thread.join(remaining)
     return all(not thread.is_alive() for thread in threads)
+
+
+def _cleanup_deadline() -> float:
+    return time.monotonic() + CLEANUP_TIMEOUT_SECONDS
 
 
 def _terminate_process_tree(
