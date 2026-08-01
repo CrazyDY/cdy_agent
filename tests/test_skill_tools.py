@@ -12,6 +12,7 @@ import pytest
 
 import cdy_agent.skills as skills_package
 import cdy_agent.skills.loader as skill_loader
+from cdy_agent.run_control import RunControl
 from cdy_agent.skills import SkillManager
 from cdy_agent.skills.models import SkillResource
 from cdy_agent.skills.tools import (
@@ -945,6 +946,62 @@ def test_run_skill_script_revalidates_after_confirmation(
         ),
         replace_script,
     )
+
+    assert not result.ok
+    assert result.code == "invalid_resource"
+    assert called is False
+
+
+def test_skill_script_passes_exact_run_control_to_runner(tmp_path: Path) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("", encoding="utf-8")
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    seen: list[RunControl | None] = []
+
+    def runner(
+        argv: list[str],
+        *,
+        run_control: RunControl | None = None,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        seen.append(run_control)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    control = RunControl()
+    result = RunSkillScriptTool(manager, runner=runner).execute_with_control(
+        {"name": "runtime-skill", "argv": ["python", "scripts/run.py"]},
+        control,
+    )
+
+    assert result.ok
+    assert seen == [control]
+
+
+def test_controlled_skill_script_revalidates_confirmation_digest(
+    tmp_path: Path,
+) -> None:
+    _, directory = write_runtime_skill(tmp_path)
+    script = directory / "scripts" / "run.py"
+    script.parent.mkdir()
+    script.write_text("print('approved')", encoding="utf-8")
+    manager = SkillManager(tmp_path)
+    manager.activate("runtime-skill")
+    called = False
+    arguments = {"name": "runtime-skill", "argv": ["python", "scripts/run.py"]}
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    tool = RunSkillScriptTool(manager, runner=runner)
+    tool.confirmation_description(arguments)
+    script.write_text("print('modified')", encoding="utf-8")
+
+    result = tool.execute_with_control(arguments, RunControl())
 
     assert not result.ok
     assert result.code == "invalid_resource"

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from cdy_agent.run_control import RunControl
 from cdy_agent.tools.shell import MAX_OUTPUT_BYTES, ShellTool
 from cdy_agent.tools.shell_approvals import ShellApprovalStore
 from cdy_agent.tools.shell_policy import ShellExecutionPolicy
@@ -166,11 +167,35 @@ def test_shell_invokes_runner_without_shell(
             "shell": False,
             "capture_output": True,
             "text": True,
-            "stdin": subprocess.DEVNULL,
             "timeout": 4,
             "check": False,
         }
     ]
+
+
+def test_shell_prepared_execution_passes_exact_run_control_to_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git = _bind_executable(monkeypatch, tmp_path, "git")
+    seen: list[RunControl | None] = []
+
+    def runner(
+        argv: list[str],
+        *,
+        run_control: RunControl | None = None,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        seen.append(run_control)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    control = RunControl()
+    result = ShellTool(tmp_path, runner=runner).execute_with_control(
+        {"argv": ["git", "status", "--short"]}, control
+    )
+
+    assert result.ok
+    assert seen == [control]
+    assert git.exists()
 
 
 def test_shell_metacharacters_are_plain_arguments(

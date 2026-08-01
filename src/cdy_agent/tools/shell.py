@@ -6,10 +6,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from cdy_agent.run_control import RunControl
 from cdy_agent.tools.base import PreparedToolExecution, ToolResult
 from cdy_agent.tools.process import (
     MAX_OUTPUT_BYTES,
     limited_output,
+    run_bounded_process,
 )
 from cdy_agent.tools.shell_approvals import ShellApprovalStore
 from cdy_agent.tools.shell_policy import (
@@ -22,7 +24,7 @@ from cdy_agent.tools.shell_policy import (
 # Backwards-compatible name for callers that imported the original constant.
 MAX_OUTPUT_CHARS = MAX_OUTPUT_BYTES
 
-Runner = Callable[..., subprocess.CompletedProcess[str]]
+Runner = Callable[..., object]
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class _ShellAuthorizationContext:
     workspace: Path
     runner: Runner = field(repr=False, compare=False)
     policy: ShellExecutionPolicy = field(repr=False, compare=False)
+    run_control: RunControl | None = field(repr=False, compare=False)
 
     def remember(self) -> ToolResult:
         return self.policy.remember_prepared(self.command)
@@ -41,13 +44,14 @@ class _ShellAuthorizationContext:
             self.command,
             self.workspace,
             self.runner,
+            self.run_control,
         )
 
 
 @dataclass
 class ShellTool:
     workspace: Path
-    runner: Runner = subprocess.run
+    runner: Runner = run_bounded_process
     policy: ShellExecutionPolicy | None = None
     name: str = field(default="shell", init=False)
     description: str = field(
@@ -87,6 +91,21 @@ class ShellTool:
         self,
         arguments: dict[str, Any],
     ) -> PreparedToolExecution | ToolResult:
+        return self._prepare_execution(arguments, run_control=None)
+
+    def prepare_execution_with_control(
+        self,
+        arguments: dict[str, Any],
+        run_control: RunControl,
+    ) -> PreparedToolExecution | ToolResult:
+        return self._prepare_execution(arguments, run_control=run_control)
+
+    def _prepare_execution(
+        self,
+        arguments: dict[str, Any],
+        *,
+        run_control: RunControl | None,
+    ) -> PreparedToolExecution | ToolResult:
         policy = self.policy
         workspace = self.workspace
         runner = self.runner
@@ -109,6 +128,7 @@ class ShellTool:
             workspace,
             runner,
             policy,
+            run_control,
         )
         return PreparedToolExecution(
             requires_confirmation=(
@@ -152,19 +172,37 @@ class ShellTool:
         return self.policy.remember(arguments)
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
+        return self._execute(arguments, run_control=None)
+
+    def execute_with_control(
+        self,
+        arguments: dict[str, Any],
+        run_control: RunControl,
+    ) -> ToolResult:
+        return self._execute(arguments, run_control=run_control)
+
+    def _execute(
+        self,
+        arguments: dict[str, Any],
+        *,
+        run_control: RunControl | None,
+    ) -> ToolResult:
         prepared = self.policy.prepare(arguments)
         if isinstance(prepared, ToolResult):
             return prepared
-        return self._execute_prepared(prepared)
+        return self._execute_prepared(prepared, run_control=run_control)
 
     def _execute_prepared(
         self,
         prepared: PreparedShellCommand,
+        *,
+        run_control: RunControl | None = None,
     ) -> ToolResult:
         return _run_prepared_shell_command(
             prepared,
             self.workspace,
             self.runner,
+            run_control,
         )
 
 
@@ -172,6 +210,7 @@ def _run_prepared_shell_command(
     prepared: PreparedShellCommand,
     workspace: Path,
     runner: Runner,
+    run_control: RunControl | None = None,
 ) -> ToolResult:
     if prepared.executable is None:
         return ToolResult.failure(
@@ -180,17 +219,18 @@ def _run_prepared_shell_command(
         )
     argv = list(prepared.argv)
     try:
-        completed = runner(
-            argv,
-            cwd=workspace,
-            shell=False,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            env=dict(prepared.environment),
-            timeout=prepared.timeout_seconds,
-            check=False,
-        )
+        runner_kwargs: dict[str, object] = {
+            "cwd": workspace,
+            "shell": False,
+            "capture_output": True,
+            "text": True,
+            "env": dict(prepared.environment),
+            "timeout": prepared.timeout_seconds,
+            "check": False,
+        }
+        if run_control is not None:
+            runner_kwargs["run_control"] = run_control
+        completed = runner(argv, **runner_kwargs)
     except subprocess.TimeoutExpired:
         return ToolResult.failure(
             "command_timeout",

@@ -112,6 +112,90 @@ class PreparingEchoTool(EchoTool):
         raise AssertionError("legacy execute must not run")
 
 
+@dataclass
+class ControlledEchoTool(EchoTool):
+    seen_control: RunControl | None = None
+
+    def execute_with_control(
+        self,
+        arguments: dict[str, Any],
+        run_control: RunControl,
+    ) -> ToolResult:
+        self.seen_control = run_control
+        return ToolResult.success({"text": arguments["text"]})
+
+    def execute(self, arguments: dict[str, Any]) -> ToolResult:
+        raise AssertionError("ordinary execute must not run with a control")
+
+
+@dataclass
+class ControlledPreparingEchoTool(EchoTool):
+    seen_control: RunControl | None = None
+
+    def prepare_execution_with_control(
+        self,
+        arguments: dict[str, Any],
+        run_control: RunControl,
+    ) -> PreparedToolExecution:
+        self.seen_control = run_control
+        return PreparedToolExecution(
+            requires_confirmation=False,
+            confirmation_description="Echo text.",
+            execute=lambda: ToolResult.success({"text": arguments["text"]}),
+        )
+
+
+@dataclass
+class InvalidPreparingEchoTool(EchoTool):
+    def prepare_execution(self, arguments: dict[str, Any]) -> object:
+        return None
+
+
+def test_registry_rejects_invalid_prepared_execution_result() -> None:
+    result = ToolRegistry([InvalidPreparingEchoTool()]).execute(
+        ToolCall("call-1", "echo", '{"text":"hello"}'),
+        lambda request: True,
+    )
+
+    assert result.code == "invalid_tool_execution"
+
+
+def test_registry_uses_controlled_execution_hook_and_keeps_ordinary_dispatch() -> None:
+    control = RunControl()
+    controlled = ControlledEchoTool(name="controlled")
+    ordinary = EchoTool(name="ordinary")
+    registry = ToolRegistry([controlled, ordinary])
+
+    controlled_result = registry.execute(
+        ToolCall("call-1", "controlled", '{"text":"controlled"}'),
+        lambda request: True,
+        run_control=control,
+    )
+    ordinary_result = registry.execute(
+        ToolCall("call-2", "ordinary", '{"text":"ordinary"}'),
+        lambda request: True,
+        run_control=control,
+    )
+
+    assert controlled_result == ToolResult.success({"text": "controlled"})
+    assert controlled.seen_control is control
+    assert ordinary_result == ToolResult.success({"text": "ordinary"})
+
+
+def test_registry_uses_controlled_preparation_hook() -> None:
+    control = RunControl()
+    tool = ControlledPreparingEchoTool()
+
+    result = ToolRegistry([tool]).execute(
+        ToolCall("call-1", "echo", '{"text":"prepared"}'),
+        lambda request: True,
+        run_control=control,
+    )
+
+    assert result == ToolResult.success({"text": "prepared"})
+    assert tool.seen_control is control
+
+
 def test_registry_checks_cancellation_before_parsing_or_execution() -> None:
     """Removing the pre-execution check would execute a cancelled tool call."""
     control = RunControl()
@@ -147,6 +231,55 @@ def test_registry_checks_cancellation_after_tool_execution() -> None:
         )
 
     assert executions == [{"text": "hello"}]
+
+
+def test_registry_checks_cancellation_after_confirmation_before_execution() -> None:
+    control = RunControl()
+    tool = EchoTool(requires_confirmation=True)
+    executions: list[dict[str, Any]] = []
+    cancellations = 0
+
+    def execute(arguments: dict[str, Any]) -> ToolResult:
+        executions.append(dict(arguments))
+        return ToolResult.success({"text": arguments["text"]})
+
+    def cancel() -> None:
+        nonlocal cancellations
+        cancellations += 1
+
+    tool.execute = execute  # type: ignore[method-assign]
+    tool.cancel = cancel  # type: ignore[attr-defined]
+
+    with pytest.raises(AgentRunCancelled):
+        ToolRegistry([tool]).execute(
+            ToolCall("call-1", "echo", '{"text":"hello"}'),
+            lambda request: control.cancel() or True,
+            run_control=control,
+        )
+
+    assert executions == []
+    assert cancellations == 1
+
+
+def test_registry_cleans_up_and_reraises_confirmation_cancellation() -> None:
+    control = RunControl()
+    tool = EchoTool(requires_confirmation=True)
+    cancellations = 0
+
+    def cancel() -> None:
+        nonlocal cancellations
+        cancellations += 1
+
+    tool.cancel = cancel  # type: ignore[attr-defined]
+
+    with pytest.raises(AgentRunCancelled):
+        ToolRegistry([tool]).execute(
+            ToolCall("call-1", "echo", '{"text":"hello"}'),
+            lambda request: (_ for _ in ()).throw(AgentRunCancelled("cancelled")),
+            run_control=control,
+        )
+
+    assert cancellations == 1
 
 
 def test_registry_exposes_function_definition_and_executes() -> None:

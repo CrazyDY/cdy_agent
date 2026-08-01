@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 from copy import deepcopy
 
-from ..run_control import RunControl
+from ..run_control import AgentRunCancelled, RunControl
 from .base import (
     ConfirmationCallback,
     ConfirmationDecision,
@@ -86,12 +86,23 @@ class ToolRegistry:
                 "invalid_arguments",
                 "Arguments must be a JSON object.",
             )
+        prepare_with_control = getattr(tool, "prepare_execution_with_control", None)
         prepare_execution = getattr(tool, "prepare_execution", None)
-        if callable(prepare_execution):
+        if run_control is not None and callable(prepare_with_control):
+            prepared = prepare_with_control(arguments, run_control)
+            has_prepared_execution = True
+        elif callable(prepare_execution):
             prepared = prepare_execution(arguments)
+            has_prepared_execution = True
+        else:
+            prepared = None
+            has_prepared_execution = False
+        if has_prepared_execution:
             if isinstance(prepared, ToolResult):
+                _raise_if_cancelled(run_control)
                 return prepared
             if not isinstance(prepared, PreparedToolExecution):
+                _raise_if_cancelled(run_control)
                 return ToolResult.failure(
                     "invalid_tool_execution",
                     "Tool returned an invalid prepared execution.",
@@ -101,13 +112,15 @@ class ToolRegistry:
                 arguments,
                 prepared,
                 confirm,
+                run_control,
             )
-            if run_control is not None:
-                run_control.raise_if_cancelled()
+            _raise_if_cancelled(run_control)
             return result
         invalid = tool.preflight(arguments)
         if invalid is not None:
+            _raise_if_cancelled(run_control)
             return invalid
+        _raise_if_cancelled(run_control)
         if _confirmation_required(tool, arguments):
             remember = getattr(tool, "remember_approval", None)
             try:
@@ -117,15 +130,18 @@ class ToolRegistry:
                     tool.confirmation_description(arguments),
                     allow_always=callable(remember),
                 )
+                _raise_if_cancelled(run_control)
                 decision = _normalize_decision(confirm(request))
+                _raise_if_cancelled(run_control)
+            except AgentRunCancelled:
+                _cancel_after_confirmation_exception(tool)
+                raise
             except BaseException:
-                try:
-                    _cancel_tool(tool)
-                except BaseException:
-                    pass
+                _cancel_after_confirmation_exception(tool)
                 raise
             if decision is ConfirmationDecision.DENY:
                 _cancel_tool(tool)
+                _raise_if_cancelled(run_control)
                 return ToolResult.failure(
                     "approval_denied",
                     "User declined this tool call.",
@@ -133,6 +149,7 @@ class ToolRegistry:
             if decision is ConfirmationDecision.ALLOW_ALWAYS:
                 if not callable(remember):
                     _cancel_tool(tool)
+                    _raise_if_cancelled(run_control)
                     return ToolResult.failure(
                         "persistent_approval_not_supported",
                         "This tool does not support persistent approval.",
@@ -140,10 +157,15 @@ class ToolRegistry:
                 remembered = remember(arguments)
                 if not remembered.ok:
                     _cancel_tool(tool)
+                    _raise_if_cancelled(run_control)
                     return remembered
-        result = tool.execute(arguments)
-        if run_control is not None:
-            run_control.raise_if_cancelled()
+        _raise_if_cancelled(run_control)
+        execute_with_control = getattr(tool, "execute_with_control", None)
+        if run_control is not None and callable(execute_with_control):
+            result = execute_with_control(arguments, run_control)
+        else:
+            result = tool.execute(arguments)
+        _raise_if_cancelled(run_control)
         return result
 
 
@@ -152,7 +174,9 @@ def _execute_prepared(
     arguments: dict[str, object],
     prepared: PreparedToolExecution,
     confirm: ConfirmationCallback,
+    run_control: RunControl | None,
 ) -> ToolResult:
+    _raise_if_cancelled(run_control)
     if prepared.requires_confirmation:
         try:
             request = ConfirmationRequest(
@@ -161,15 +185,18 @@ def _execute_prepared(
                 prepared.confirmation_description,
                 allow_always=prepared.remember_approval is not None,
             )
+            _raise_if_cancelled(run_control)
             decision = _normalize_decision(confirm(request))
+            _raise_if_cancelled(run_control)
+        except AgentRunCancelled:
+            _cancel_after_confirmation_exception(tool)
+            raise
         except BaseException:
-            try:
-                _cancel_tool(tool)
-            except BaseException:
-                pass
+            _cancel_after_confirmation_exception(tool)
             raise
         if decision is ConfirmationDecision.DENY:
             _cancel_tool(tool)
+            _raise_if_cancelled(run_control)
             return ToolResult.failure(
                 "approval_denied",
                 "User declined this tool call.",
@@ -177,6 +204,7 @@ def _execute_prepared(
         if decision is ConfirmationDecision.ALLOW_ALWAYS:
             if prepared.remember_approval is None:
                 _cancel_tool(tool)
+                _raise_if_cancelled(run_control)
                 return ToolResult.failure(
                     "persistent_approval_not_supported",
                     "This tool does not support persistent approval.",
@@ -184,7 +212,9 @@ def _execute_prepared(
             remembered = prepared.remember_approval()
             if not remembered.ok:
                 _cancel_tool(tool)
+                _raise_if_cancelled(run_control)
                 return remembered
+    _raise_if_cancelled(run_control)
     return prepared.execute()
 
 
@@ -221,3 +251,15 @@ def _cancel_tool(tool: object) -> None:
     cancel = getattr(tool, "cancel", None)
     if callable(cancel):
         cancel()
+
+
+def _cancel_after_confirmation_exception(tool: object) -> None:
+    try:
+        _cancel_tool(tool)
+    except BaseException:
+        pass
+
+
+def _raise_if_cancelled(run_control: RunControl | None) -> None:
+    if run_control is not None:
+        run_control.raise_if_cancelled()

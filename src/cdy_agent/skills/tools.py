@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from cdy_agent.run_control import RunControl
 from cdy_agent.tools.base import ToolResult
 from cdy_agent.tools.process import (
     limited_output,
@@ -271,6 +272,21 @@ class RunSkillScriptTool:
         )
 
     def execute(self, arguments: dict[str, Any]) -> ToolResult:
+        return self._execute(arguments, run_control=None)
+
+    def execute_with_control(
+        self,
+        arguments: dict[str, Any],
+        run_control: RunControl,
+    ) -> ToolResult:
+        return self._execute(arguments, run_control=run_control)
+
+    def _execute(
+        self,
+        arguments: dict[str, Any],
+        *,
+        run_control: RunControl | None,
+    ) -> ToolResult:
         try:
             prepared = self._prepare(arguments)
             if isinstance(prepared, ToolResult):
@@ -284,16 +300,18 @@ class RunSkillScriptTool:
                     return _invalid_confirmed_script()
             argv = list(prepared.argv)
             try:
-                completed = self.runner(
-                    argv,
-                    cwd=prepared.directory,
-                    shell=False,
-                    capture_output=True,
-                    text=True,
-                    env=sanitized_environment(),
-                    timeout=prepared.timeout,
-                    check=False,
-                )
+                runner_kwargs: dict[str, object] = {
+                    "cwd": prepared.directory,
+                    "shell": False,
+                    "capture_output": True,
+                    "text": True,
+                    "env": sanitized_environment(),
+                    "timeout": prepared.timeout,
+                    "check": False,
+                }
+                if run_control is not None:
+                    runner_kwargs["run_control"] = run_control
+                completed = self.runner(argv, **runner_kwargs)
                 stdout = _process_output(completed, "stdout")
                 stderr = _process_output(completed, "stderr")
                 stdout, stdout_limited = limited_output(stdout)
