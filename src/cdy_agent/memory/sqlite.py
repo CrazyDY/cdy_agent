@@ -91,7 +91,7 @@ class ConversationStore:
         session_id: str,
         user: Message,
         assistant: Message,
-    ) -> None:
+    ) -> ConversationSummary:
         session_id = _canonical_uuid(session_id)
         if user.role != "user" or assistant.role != "assistant":
             raise ConversationStoreError(
@@ -120,11 +120,13 @@ class ConversationStore:
                     (session_id, timestamp, timestamp),
                 )
                 sequence = 0
+                preview = _preview(user.content)
             else:
                 _require_timestamp(existing_session[0])
                 _require_timestamp(existing_session[1])
                 existing_messages = self._validated_messages(message_rows)
                 sequence = len(existing_messages)
+                preview = _preview(existing_messages[0].content)
                 connection.execute(
                     "UPDATE sessions SET updated_at = ? WHERE id = ?",
                     (timestamp, session_id),
@@ -137,6 +139,13 @@ class ConversationStore:
                     (session_id, sequence + 1, assistant.role, assistant.content),
                 ],
             )
+            summary = ConversationSummary(
+                id=session_id,
+                updated_at=timestamp,
+                message_count=sequence + 2,
+                preview=preview,
+            )
+        return summary
 
     def load(self, session_id: str) -> StoredConversation:
         session_id = _canonical_uuid(session_id)

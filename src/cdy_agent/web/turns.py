@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from cdy_agent.agent import AgentEventSink
 from cdy_agent.conversation import Conversation, Message
-from cdy_agent.memory import ConversationStore
+from cdy_agent.memory import ConversationStore, ConversationSummary
 from cdy_agent.observability import Pricing, TraceRecorder, TraceStore
 from cdy_agent.run_control import AgentRunCancelled, RunControl
 from cdy_agent.tools.base import ConfirmationDecision, ConfirmationRequest
@@ -215,25 +215,56 @@ class ActiveTurn:
     async def _run_and_stop(
         self, on_stopped: Callable[[ActiveTurn], Awaitable[None]]
     ) -> None:
+        worker = asyncio.create_task(asyncio.to_thread(self._run_worker))
         try:
-            await asyncio.to_thread(self._run_worker)
+            terminal = await self._wait_for_worker(worker)
+        except Exception as error:  # noqa: BLE001 - boundary emits a safe error only
+            mapped = map_web_error(error)
+            terminal = TurnFailed(
+                type="turn.failed",
+                turn_id=self.turn_id,
+                code=mapped.code,
+                message=mapped.message,
+                retryable=mapped.retryable,
+            )
         finally:
             self._clear_pending_approval()
-            await on_stopped(self)
+            await self._wait_for_cleanup(on_stopped)
+        self._emit_terminal(terminal)
 
-    def _run_worker(self) -> None:
+    async def _wait_for_worker(
+        self,
+        worker: asyncio.Task[TurnCompleted | TurnFailed | TurnCancelled],
+    ) -> TurnCompleted | TurnFailed | TurnCancelled:
+        while True:
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                self.cancel()
+
+    async def _wait_for_cleanup(
+        self, on_stopped: Callable[[ActiveTurn], Awaitable[None]]
+    ) -> None:
+        cleanup = asyncio.create_task(on_stopped(self))
+        while True:
+            try:
+                await asyncio.shield(cleanup)
+                return
+            except asyncio.CancelledError:
+                self.cancel()
+
+    def _run_worker(self) -> TurnCompleted | TurnFailed | TurnCancelled:
         recorder = self._new_recorder()
-        worker_error: Exception | None = None
         try:
             self._run_control.raise_if_cancelled()
-            conversation = Conversation()
+            history: tuple[Message, ...] = ()
             if self._request.session_id is not None:
                 stored = self._dependencies.conversations.load(self.session_id)
-                for message in stored.messages:
-                    conversation.append(message.role, message.content)
+                history = stored.messages
+            conversation = Conversation()
             user = conversation.append("user", self._request.prompt)
             reply = self._dependencies.agent.run_stream(
-                conversation.history,
+                (*history, user),
                 self._on_text,
                 recorder,
                 run_control=self._run_control,
@@ -242,42 +273,31 @@ class ActiveTurn:
             self._run_control.raise_if_cancelled()
             assistant = conversation.append("assistant", reply)
             self._run_control.raise_if_cancelled()
-            self._dependencies.conversations.append_turn(self.session_id, user, assistant)
+            summary = self._dependencies.conversations.append_turn(
+                self.session_id, user, assistant
+            )
             self._finish_trace(recorder)
-            summary = self._updated_summary()
-            self._emit_terminal(
-                TurnCompleted(
-                    type="turn.completed",
-                    turn_id=self.turn_id,
-                    assistant_message=assistant.content,
-                    conversation=summary,
-                )
+            return TurnCompleted(
+                type="turn.completed",
+                turn_id=self.turn_id,
+                assistant_message=assistant.content,
+                conversation=self._summary_response(summary),
             )
         except AgentRunCancelled as error:
-            worker_error = error
             self._finish_trace(recorder, error)
-            self._emit_terminal(TurnCancelled(type="turn.cancelled", turn_id=self.turn_id))
+            return TurnCancelled(type="turn.cancelled", turn_id=self.turn_id)
         except Exception as error:  # noqa: BLE001 - boundary emits a safe error only
-            worker_error = error
             self._finish_trace(recorder, error)
             mapped = map_web_error(error)
             if self._run_control.cancelled:
-                self._emit_terminal(
-                    TurnCancelled(type="turn.cancelled", turn_id=self.turn_id)
-                )
-            else:
-                self._emit_terminal(
-                    TurnFailed(
-                        type="turn.failed",
-                        turn_id=self.turn_id,
-                        code=mapped.code,
-                        message=mapped.message,
-                        retryable=mapped.retryable,
-                    )
-                )
-        finally:
-            if worker_error is not None:
-                self._clear_pending_approval()
+                return TurnCancelled(type="turn.cancelled", turn_id=self.turn_id)
+            return TurnFailed(
+                type="turn.failed",
+                turn_id=self.turn_id,
+                code=mapped.code,
+                message=mapped.message,
+                retryable=mapped.retryable,
+            )
 
     def _new_recorder(self) -> TraceRecorder | None:
         try:
@@ -302,12 +322,9 @@ class ActiveTurn:
         except Exception:  # noqa: BLE001 - tracing is strictly best effort
             return
 
-    def _updated_summary(self) -> ConversationSummaryResponse:
-        summaries = self._dependencies.conversations.list_summaries()
-        for summary in summaries:
-            if summary.id == self.session_id:
-                return summary_response(summary)
-        raise RuntimeError("Saved conversation summary is unavailable.")
+    @staticmethod
+    def _summary_response(summary: ConversationSummary) -> ConversationSummaryResponse:
+        return summary_response(summary)
 
     def _on_text(self, delta: str) -> None:
         if delta:

@@ -72,7 +72,7 @@ def test_append_turn_creates_and_loads_conversation(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     session_id = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
 
-    store.append_turn(
+    summary = store.append_turn(
         session_id,
         Message("user", "Hello"),
         Message("assistant", "Hi there"),
@@ -86,6 +86,10 @@ def test_append_turn_creates_and_loads_conversation(tmp_path: Path) -> None:
         Message("user", "Hello"),
         Message("assistant", "Hi there"),
     )
+    assert summary.id == session_id
+    assert summary.updated_at == "2026-07-18T08:30:00.000000Z"
+    assert summary.message_count == 2
+    assert summary.preview == "Hello"
     assert (tmp_path / ".cdy-agent" / "cdy-agent.sqlite3").is_file()
 
 

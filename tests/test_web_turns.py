@@ -100,9 +100,10 @@ class RecordingConversationStore(ConversationStore):
         super().__init__(workspace)
         self.actions: list[str] = []
 
-    def append_turn(self, session_id: str, user: Message, assistant: Message) -> None:
-        super().append_turn(session_id, user, assistant)
+    def append_turn(self, session_id: str, user: Message, assistant: Message) -> object:
+        summary = super().append_turn(session_id, user, assistant)
         self.actions.append("append_turn")
+        return summary
 
 
 class FailingConversationStore:
@@ -216,6 +217,60 @@ def test_resumed_turn_uses_exact_stored_history_before_the_new_message(tmp_path:
             "new",
             "new reply",
         ]
+
+    asyncio.run(scenario())
+
+
+def test_resumed_turn_preserves_stored_message_whitespace(tmp_path: Path) -> None:
+    """Re-normalizing persisted history would silently alter the model context."""
+
+    async def scenario() -> None:
+        store = RecordingConversationStore(tmp_path)
+        session_id = str(uuid4())
+        store.append_turn(
+            session_id,
+            Message("user", " leading and trailing "),
+            Message("assistant", " reply with spaces "),
+        )
+        agent = FakeStreamingAgent(reply="next")
+        coordinator = make_coordinator(agent=agent, conversations=store)
+
+        await collect_until_terminal(await coordinator.start(turn_start("new", session_id)))
+
+        assert agent.histories == [
+            (
+                Message("user", " leading and trailing "),
+                Message("assistant", " reply with spaces "),
+                Message("user", "new"),
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_completed_turn_is_not_blocked_by_an_unrelated_corrupt_summary(
+    tmp_path: Path,
+) -> None:
+    """A post-commit global summary scan could report failure after saving a turn."""
+
+    async def scenario() -> None:
+        store = RecordingConversationStore(tmp_path)
+        corrupt_id = str(uuid4())
+        store.append_turn(corrupt_id, Message("user", "old"), Message("assistant", "reply"))
+        database = tmp_path / ".cdy-agent" / "cdy-agent.sqlite3"
+        import sqlite3
+
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                "UPDATE messages SET role = 'user' WHERE session_id = ? AND sequence = 1",
+                (corrupt_id,),
+            )
+        coordinator = make_coordinator(agent=FakeStreamingAgent(), conversations=store)
+
+        events = await collect_until_terminal(await coordinator.start(turn_start("new")))
+
+        assert events[-1].type == "turn.completed"
+        assert events[-1].conversation.message_count == 2
 
     asyncio.run(scenario())
 
@@ -359,6 +414,27 @@ def test_cancel_keeps_server_busy_until_the_worker_has_terminated(tmp_path: Path
     asyncio.run(scenario())
 
 
+def test_cancelling_the_supervisor_keeps_busy_until_the_worker_exits(tmp_path: Path) -> None:
+    """Cancelling the asyncio supervisor must not abandon its worker thread."""
+
+    async def scenario() -> None:
+        agent = CancellationBlockingAgent()
+        coordinator = make_coordinator(agent=agent, conversations=RecordingConversationStore(tmp_path))
+        turn = await coordinator.start(turn_start())
+        await asyncio.to_thread(agent.started.wait, 1)
+        assert turn._stopped_task is not None
+
+        turn._stopped_task.cancel()
+        await asyncio.sleep(0)
+
+        assert coordinator.busy is True
+        agent.release.set()
+        await turn.wait_stopped()
+        assert coordinator.busy is False
+
+    asyncio.run(scenario())
+
+
 def test_persistence_failure_never_emits_completed_or_saves_partial_turn() -> None:
     """Publishing completion after a failed append would make later reloads inconsistent."""
 
@@ -412,5 +488,26 @@ def test_second_start_is_rejected_while_the_first_turn_is_active(tmp_path: Path)
         first.cancel()
         agent.release.set()
         await first.wait_stopped()
+
+    asyncio.run(scenario())
+
+
+def test_terminal_event_is_delivered_only_after_the_active_turn_is_cleared(
+    tmp_path: Path,
+) -> None:
+    """A terminal event observed before cleanup would make an immediate retry fail."""
+
+    async def scenario() -> None:
+        coordinator = make_coordinator(
+            agent=FakeStreamingAgent(), conversations=RecordingConversationStore(tmp_path)
+        )
+        first = await coordinator.start(turn_start())
+        events = await collect_until_terminal(first)
+
+        assert events[-1].type == "turn.completed"
+        assert coordinator.busy is False
+        second = await coordinator.start(turn_start("second"))
+        second.cancel()
+        await second.wait_stopped()
 
     asyncio.run(scenario())
