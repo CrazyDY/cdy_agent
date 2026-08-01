@@ -17,6 +17,10 @@ from cdy_agent.openai_client import MissingAPIKeyError
 from cdy_agent.run_control import AgentRunCancelled
 
 
+class ServerBusyError(RuntimeError):
+    """Raised when workspace mutation conflicts with an active Web turn."""
+
+
 @dataclass(frozen=True)
 class SafeWebError:
     """A browser-safe domain error with its matching HTTP status."""

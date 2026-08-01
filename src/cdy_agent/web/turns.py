@@ -16,7 +16,7 @@ from cdy_agent.memory import ConversationStore, ConversationSummary
 from cdy_agent.observability import Pricing, TraceRecorder, TraceStore
 from cdy_agent.run_control import AgentRunCancelled, RunControl
 from cdy_agent.tools.base import ConfirmationDecision, ConfirmationRequest
-from cdy_agent.web.errors import map_web_error
+from cdy_agent.web.errors import ServerBusyError, map_web_error
 from cdy_agent.web.schemas import (
     ApprovalRequired,
     ApprovalResolve,
@@ -33,10 +33,6 @@ from cdy_agent.web.schemas import (
 from cdy_agent.web.sessions import summary_response
 
 _SAFE_TOOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,127}\Z")
-
-
-class ServerBusyError(RuntimeError):
-    """Raised when an attempt is made to start a second concurrent Web turn."""
 
 
 class StreamingAgent(Protocol):
@@ -274,7 +270,10 @@ class ActiveTurn:
             assistant = conversation.append("assistant", reply)
             self._run_control.raise_if_cancelled()
             summary = self._dependencies.conversations.append_turn(
-                self.session_id, user, assistant
+                self.session_id,
+                user,
+                assistant,
+                cancellation_check=self._run_control.raise_if_cancelled,
             )
             self._finish_trace(recorder)
             return TurnCompleted(
@@ -387,33 +386,50 @@ class TurnCoordinator:
         self._dependencies = dependencies
         self._active: ActiveTurn | None = None
         self._state_lock = asyncio.Lock()
+        self._coordination_lock = threading.Lock()
         dependencies.confirmations.attach(self)
 
     @property
     def busy(self) -> bool:
         """Whether the one global worker remains live or is still cleaning up."""
-        return self._active is not None
+        with self._coordination_lock:
+            return self._active is not None
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete only while no turn can be active or starting."""
+        with self._coordination_lock:
+            if self._active is not None:
+                raise ServerBusyError("Another turn is already running.")
+            self._dependencies.conversations.delete(session_id)
 
     async def start(self, request: TurnStart) -> ActiveTurn:
         """Accept one request, or reject it while an earlier worker is active."""
         async with self._state_lock:
-            if self._active is not None:
-                raise ServerBusyError("Another turn is already running.")
-            turn = ActiveTurn.create(
-                request, self._dependencies, asyncio.get_running_loop()
-            )
-            self._active = turn
+            await asyncio.to_thread(self._coordination_lock.acquire)
             try:
-                self._dependencies.confirmations.activate(turn)
-                turn.start(self._clear_when_stopped)
-            except Exception:
-                self._dependencies.confirmations.deactivate(turn)
-                self._active = None
-                raise
-            return turn
+                if self._active is not None:
+                    raise ServerBusyError("Another turn is already running.")
+                turn = ActiveTurn.create(
+                    request, self._dependencies, asyncio.get_running_loop()
+                )
+                self._active = turn
+                try:
+                    self._dependencies.confirmations.activate(turn)
+                    turn.start(self._clear_when_stopped)
+                except Exception:
+                    self._dependencies.confirmations.deactivate(turn)
+                    self._active = None
+                    raise
+                return turn
+            finally:
+                self._coordination_lock.release()
 
     async def _clear_when_stopped(self, turn: ActiveTurn) -> None:
         async with self._state_lock:
-            if self._active is turn:
-                self._dependencies.confirmations.deactivate(turn)
-                self._active = None
+            await asyncio.to_thread(self._coordination_lock.acquire)
+            try:
+                if self._active is turn:
+                    self._dependencies.confirmations.deactivate(turn)
+                    self._active = None
+            finally:
+                self._coordination_lock.release()

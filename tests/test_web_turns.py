@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -100,17 +101,47 @@ class RecordingConversationStore(ConversationStore):
         super().__init__(workspace)
         self.actions: list[str] = []
 
-    def append_turn(self, session_id: str, user: Message, assistant: Message) -> object:
-        summary = super().append_turn(session_id, user, assistant)
+    def append_turn(
+        self,
+        session_id: str,
+        user: Message,
+        assistant: Message,
+        **kwargs: object,
+    ) -> object:
+        summary = super().append_turn(session_id, user, assistant, **kwargs)
         self.actions.append("append_turn")
         return summary
+
+
+class BlockingAfterCommitDatabase:
+    def __init__(self, database: object) -> None:
+        self._database = database
+        self.workspace = database.workspace
+        self.committed = threading.Event()
+        self.release = threading.Event()
+
+    def read(self) -> object:
+        return self._database.read()
+
+    @contextmanager
+    def write(self) -> object:
+        with self._database.write() as connection:
+            yield connection
+        self.committed.set()
+        assert self.release.wait(timeout=2)
 
 
 class FailingConversationStore:
     def load(self, session_id: str) -> object:
         raise AssertionError("A new turn must not load history.")
 
-    def append_turn(self, session_id: str, user: Message, assistant: Message) -> None:
+    def append_turn(
+        self,
+        session_id: str,
+        user: Message,
+        assistant: Message,
+        **kwargs: object,
+    ) -> None:
         raise ConversationStoreError("private persistence detail")
 
     def list_summaries(self) -> tuple[object, ...]:
@@ -450,6 +481,37 @@ def test_persistence_failure_never_emits_completed_or_saves_partial_turn() -> No
         assert "private persistence detail" not in events[-1].message
         await turn.wait_stopped()
         assert coordinator.busy is False
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_during_persistence_restores_the_exact_prior_history(
+    tmp_path: Path,
+) -> None:
+    """A cancellation arriving during commit must compensate only the new turn."""
+
+    async def scenario() -> None:
+        store = RecordingConversationStore(tmp_path)
+        session_id = str(uuid4())
+        prior = (Message("user", "old"), Message("assistant", "history"))
+        store.append_turn(session_id, *prior)
+        stored_before = store.load(session_id)
+        database = BlockingAfterCommitDatabase(store._database)
+        store._database = database
+        coordinator = make_coordinator(
+            agent=FakeStreamingAgent(reply="must not persist"), conversations=store
+        )
+        turn = await coordinator.start(turn_start("cancel me", session_id))
+        await asyncio.to_thread(database.committed.wait, 1)
+
+        turn.cancel()
+        database.release.set()
+        events = await collect_until_terminal(turn)
+        await turn.wait_stopped()
+
+        assert events[-1].type == "turn.cancelled"
+        assert not any(event.type == "turn.completed" for event in events)
+        assert store.load(session_id) == stored_before
 
     asyncio.run(scenario())
 

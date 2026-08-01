@@ -91,6 +91,8 @@ class ConversationStore:
         session_id: str,
         user: Message,
         assistant: Message,
+        *,
+        cancellation_check: Callable[[], None] | None = None,
     ) -> ConversationSummary:
         session_id = _canonical_uuid(session_id)
         if user.role != "user" or assistant.role != "assistant":
@@ -100,6 +102,8 @@ class ConversationStore:
         if not user.content.strip() or not assistant.content.strip():
             raise ConversationStoreError("Conversation messages must not be empty.")
         timestamp = _timestamp(self._clock())
+        previous_updated_at: str | None = None
+        sequence = 0
         with self._database.write() as connection:
             existing_session = connection.execute(
                 "SELECT created_at, updated_at FROM sessions WHERE id = ?",
@@ -123,7 +127,7 @@ class ConversationStore:
                 preview = _preview(user.content)
             else:
                 _require_timestamp(existing_session[0])
-                _require_timestamp(existing_session[1])
+                previous_updated_at = _require_timestamp(existing_session[1])
                 existing_messages = self._validated_messages(message_rows)
                 sequence = len(existing_messages)
                 preview = _preview(existing_messages[0].content)
@@ -145,7 +149,64 @@ class ConversationStore:
                 message_count=sequence + 2,
                 preview=preview,
             )
+            if cancellation_check is not None:
+                cancellation_check()
+        if cancellation_check is not None:
+            try:
+                cancellation_check()
+            except BaseException:
+                self._rollback_appended_turn(
+                    summary,
+                    user,
+                    assistant,
+                    previous_updated_at=previous_updated_at,
+                )
+                raise
         return summary
+
+    def _rollback_appended_turn(
+        self,
+        summary: ConversationSummary,
+        user: Message,
+        assistant: Message,
+        *,
+        previous_updated_at: str | None,
+    ) -> None:
+        """Compensate one exact committed append without touching older history."""
+        first_sequence = summary.message_count - 2
+        with self._database.write() as connection:
+            session = connection.execute(
+                "SELECT updated_at FROM sessions WHERE id = ?", (summary.id,)
+            ).fetchone()
+            rows = connection.execute(
+                "SELECT sequence, role, content FROM messages "
+                "WHERE session_id = ? ORDER BY sequence",
+                (summary.id,),
+            ).fetchall()
+            expected_tail = [
+                (first_sequence, user.role, user.content),
+                (first_sequence + 1, assistant.role, assistant.content),
+            ]
+            if (
+                session is None
+                or session[0] != summary.updated_at
+                or len(rows) != summary.message_count
+                or rows[-2:] != expected_tail
+            ):
+                raise ConversationStoreError(
+                    "Could not safely roll back the cancelled conversation turn."
+                )
+            if previous_updated_at is None:
+                connection.execute("DELETE FROM sessions WHERE id = ?", (summary.id,))
+            else:
+                connection.execute(
+                    "DELETE FROM messages WHERE session_id = ? AND sequence >= ?",
+                    (summary.id, first_sequence),
+                )
+                connection.execute(
+                    "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                    (previous_updated_at, summary.id),
+                )
 
     def load(self, session_id: str) -> StoredConversation:
         session_id = _canonical_uuid(session_id)

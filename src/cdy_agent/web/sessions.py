@@ -13,7 +13,7 @@ from cdy_agent.memory import (
     ConversationSummary,
     StoredConversation,
 )
-from cdy_agent.web.errors import SafeWebError, map_web_error
+from cdy_agent.web.errors import SafeWebError, ServerBusyError, map_web_error
 from cdy_agent.web.schemas import (
     BootstrapResponse,
     CanonicalUUID,
@@ -97,10 +97,10 @@ def create_sessions_router(
         canonical_id = _validated_conversation_id(session_id)
         if canonical_id is None:
             return _safe_error_response(_INVALID_CONVERSATION_ID)
-        if dependencies.turn_coordinator.busy:
-            return _safe_error_response(_SERVER_BUSY)
         try:
-            dependencies.conversation_store.delete(canonical_id)
+            dependencies.turn_coordinator.delete_session(canonical_id)
+        except ServerBusyError:
+            return _safe_error_response(_SERVER_BUSY)
         except ConversationStoreError as error:
             return _safe_error_response(map_web_error(error))
         return Response(status_code=204)

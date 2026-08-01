@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,19 +12,49 @@ from cdy_agent.conversation import Message
 from cdy_agent.memory import ConversationNotFoundError, ConversationStore
 from cdy_agent.web.app import WebDependencies, WebSettings, create_web_app
 from cdy_agent.web.auth import BrowserCapability
+from cdy_agent.web.errors import ServerBusyError
+from cdy_agent.web.schemas import TurnStart
+from cdy_agent.web.turns import ConfirmationBroker, TurnCoordinator, TurnDependencies
 
 SESSION_ID = "52c809c6-6e55-4ff1-9220-e4f90a4f6774"
 
 
 @dataclass
 class StubCoordinator:
+    store: ConversationStore
     busy: bool = False
+
+    def delete_session(self, session_id: str) -> None:
+        if self.busy:
+            raise ServerBusyError("Another turn is already running.")
+        self.store.delete(session_id)
+
+
+class BlockingDeleteStore(ConversationStore):
+    def __init__(self, workspace: Path) -> None:
+        super().__init__(workspace)
+        self.delete_started = threading.Event()
+        self.allow_delete = threading.Event()
+
+    def delete(self, session_id: str) -> None:
+        self.delete_started.set()
+        assert self.allow_delete.wait(timeout=2)
+        super().delete(session_id)
+
+
+class RecordingAgent:
+    def __init__(self) -> None:
+        self.called = threading.Event()
+
+    def run_stream(self, *args: object, **kwargs: object) -> str:
+        self.called.set()
+        return "new answer"
 
 
 @pytest.fixture
 def authenticated_client(tmp_path: Path) -> tuple[TestClient, ConversationStore, StubCoordinator]:
     store = ConversationStore(tmp_path)
-    coordinator = StubCoordinator()
+    coordinator = StubCoordinator(store)
     capability = BrowserCapability.from_secret(
         "fixed-secret", host="127.0.0.1", port=8000
     )
@@ -186,3 +218,72 @@ def test_session_delete_rejects_when_turn_is_busy(
         "retryable": True,
     }
     assert store.load(SESSION_ID).id == SESSION_ID
+
+
+def test_session_delete_and_turn_start_share_one_atomic_boundary(tmp_path: Path) -> None:
+    """A resumed turn must not start through a deletion already in progress."""
+
+    async def scenario() -> None:
+        store = BlockingDeleteStore(tmp_path)
+        store.append_turn(
+            SESSION_ID,
+            Message("user", "Question"),
+            Message("assistant", "Answer"),
+        )
+        agent = RecordingAgent()
+        coordinator = TurnCoordinator(
+            TurnDependencies(
+                agent=agent,
+                confirmations=ConfirmationBroker(),
+                conversations=store,
+                traces=None,
+                model="test-model",
+                api_mode="responses",
+                pricing=None,
+            )
+        )
+        capability = BrowserCapability.from_secret(
+            "fixed-secret", host="127.0.0.1", port=8000
+        )
+        app = create_web_app(
+            WebSettings(workspace=tmp_path, model="safe-model", api_mode="responses"),
+            WebDependencies(
+                auth=capability,
+                conversation_store=store,
+                turn_coordinator=coordinator,
+            ),
+        )
+        client = TestClient(app)
+        client.cookies.set("cdy_agent_web", "fixed-secret")
+        delete_task = asyncio.create_task(
+            asyncio.to_thread(request, client, "delete", f"/api/sessions/{SESSION_ID}")
+        )
+        await asyncio.to_thread(store.delete_started.wait, 1)
+
+        start_task = asyncio.create_task(
+            coordinator.start(
+                TurnStart(type="turn.start", prompt="new question", session_id=SESSION_ID)
+            )
+        )
+        probe = asyncio.Event()
+        asyncio.get_running_loop().call_soon(probe.set)
+        await probe.wait()
+        start_crossed_delete = start_task.done()
+
+        store.allow_delete.set()
+        response = await delete_task
+        turn = await start_task
+        events = []
+        while True:
+            event = await turn.next_event()
+            events.append(event)
+            if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
+                break
+        await turn.wait_stopped()
+
+        assert start_crossed_delete is False
+        assert response.status_code == 204
+        assert events[-1].type == "turn.failed"
+        assert agent.called.is_set() is False
+
+    asyncio.run(scenario())
