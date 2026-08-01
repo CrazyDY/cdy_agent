@@ -12,7 +12,7 @@ class FakeWebSocket implements ChatSocket {
   sent: string[] = []
   onopen: ((event: Event) => void) | null = null
   onmessage: ((event: MessageEvent<string>) => void) | null = null
-  onclose: (() => void) | null = null
+  onclose: ((event: CloseEvent) => void) | null = null
 
   constructor(readyState = 1) {
     this.readyState = readyState
@@ -24,7 +24,7 @@ class FakeWebSocket implements ChatSocket {
 
   close(): void {
     this.readyState = 3
-    this.onclose?.()
+    this.onclose?.({} as CloseEvent)
   }
 
   receive(event: ServerEvent): void {
@@ -33,7 +33,7 @@ class FakeWebSocket implements ChatSocket {
 
   closeFromTransport(): void {
     this.readyState = 3
-    this.onclose?.()
+    this.onclose?.({} as CloseEvent)
   }
 
   open(): void {
@@ -266,6 +266,51 @@ describe("useChat", () => {
 
     expect(chat.sessionId.value).toBe(secondSessionId)
     expect(chat.messages.value).toEqual([{ role: "user", content: "B", persisted: true }])
+  })
+
+  it("ignores late close events from a replaced socket", () => {
+    const socketA = new FakeWebSocket()
+    const socketB = new FakeWebSocket()
+    const sockets = [socketA, socketB]
+    const chat = useChat({ socketFactory: () => sockets.shift()! })
+
+    chat.connect()
+    socketA.close()
+    chat.startTurn("hello")
+    socketB.receive({ type: "turn.accepted", turn_id: turnId, session_id: firstSessionId })
+    socketA.onclose?.({} as CloseEvent)
+
+    expect(chat.state.value).toBe("running")
+    expect(chat.cancelTurn()).toBe(true)
+    expect(sentEvents(socketB)).toContainEqual({ type: "turn.cancel", turn_id: turnId })
+  })
+
+  it("invalidates a pending session load when a new turn starts", async () => {
+    const pending = deferred<{
+      id: string
+      created_at: string
+      updated_at: string
+      messages: { role: "user"; content: string }[]
+    }>()
+    const socket = new FakeWebSocket()
+    const chat = useChat({ socketFactory: () => socket, sessionLoader: () => pending.promise })
+
+    const selection = chat.selectSession(firstSessionId)
+    chat.startTurn("new")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: firstSessionId })
+    socket.receive({
+      type: "turn.completed",
+      turn_id: turnId,
+      assistant_message: "done",
+      conversation: { id: firstSessionId, updated_at: "2026-08-01T13:00:00+00:00", message_count: 2, preview: "new" },
+    })
+    pending.resolve({ id: firstSessionId, created_at: "a", updated_at: "a", messages: [{ role: "user", content: "stale" }] })
+
+    await expect(selection).resolves.toBe(false)
+    expect(chat.messages.value).toEqual([
+      { role: "user", content: "new", persisted: true },
+      { role: "assistant", content: "done", persisted: true },
+    ])
   })
 
   it("keeps failed local content out of the retry turn", () => {

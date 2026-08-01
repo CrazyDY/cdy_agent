@@ -100,17 +100,27 @@ export function useChat(options: UseChatOptions = {}) {
     if (socket !== null && socket.readyState !== 3) {
       return
     }
-    socket = (options.socketFactory ?? defaultSocketFactory)(socketUrl())
-    socket.onopen = () => {
+    const candidate = (options.socketFactory ?? defaultSocketFactory)(socketUrl())
+    socket = candidate
+    candidate.onopen = () => {
+      if (socket !== candidate) {
+        return
+      }
       sendStartIfReady()
     }
-    socket.onmessage = (event) => {
+    candidate.onmessage = (event) => {
+      if (socket !== candidate) {
+        return
+      }
       const serverEvent = parseServerEvent(event.data)
       if (serverEvent !== null) {
         applyServerEvent(serverEvent)
       }
     }
-    socket.onclose = () => {
+    candidate.onclose = () => {
+      if (socket !== candidate) {
+        return
+      }
       socket = null
       markTransportCancelled()
     }
@@ -120,6 +130,7 @@ export function useChat(options: UseChatOptions = {}) {
     if (state.value !== "idle" || !prompt.trim()) {
       return false
     }
+    sessionRequestGeneration += 1
     transientTurn.value = {
       prompt,
       reply: "",
