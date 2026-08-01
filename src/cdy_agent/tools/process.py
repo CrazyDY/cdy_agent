@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
+from cdy_agent.run_control import RunControl
+
 MAX_OUTPUT_BYTES = 64 * 1024
 
 
@@ -63,6 +65,7 @@ def run_bounded_process(
     env: Mapping[str, str],
     timeout: int,
     check: bool,
+    run_control: RunControl | None = None,
 ) -> BoundedProcessResult:
     if shell or not capture_output or not text or check:
         raise ValueError("Unsupported bounded process options.")
@@ -78,13 +81,22 @@ def run_bounded_process(
         shell=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
         env=dict(env),
         **popen_options,
     )
     windows_job = _assign_windows_job(process)
+    unregister_cancel = (
+        run_control.add_cancel_callback(
+            lambda: _terminate_process_tree(process, windows_job)
+        )
+        if run_control is not None
+        else lambda: None
+    )
     if process.stdout is None or process.stderr is None:
         _terminate_process_tree(process, windows_job)
         _reap_process(process, deadline)
+        unregister_cancel()
         _close_windows_job(windows_job)
         raise OSError("Could not capture process output.")
 
@@ -104,7 +116,7 @@ def run_bounded_process(
     try:
         for thread in threads:
             thread.start()
-        _wait_for_process(process, argv, timeout, deadline)
+        _wait_for_process(process, argv, timeout, deadline, run_control)
         if not _join_threads(threads, deadline):
             raise subprocess.TimeoutExpired(
                 list(argv),
@@ -123,8 +135,11 @@ def run_bounded_process(
                 cleanup()
             except BaseException:
                 pass
+        if run_control is not None:
+            run_control.raise_if_cancelled()
         raise
     finally:
+        unregister_cancel()
         _close_windows_job(windows_job)
 
     for state in (stdout_state, stderr_state):
@@ -166,13 +181,20 @@ def _wait_for_process(
     argv: Sequence[str],
     timeout: int,
     deadline: float,
+    run_control: RunControl | None,
 ) -> None:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        if process.poll() is None:
+    while process.poll() is None:
+        if run_control is not None:
+            run_control.raise_if_cancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             raise subprocess.TimeoutExpired(list(argv), timeout)
-        return
-    process.wait(timeout=remaining)
+        try:
+            process.wait(timeout=min(remaining, 0.05))
+        except subprocess.TimeoutExpired:
+            continue
+    if run_control is not None:
+        run_control.raise_if_cancelled()
 
 
 def _join_threads(threads: tuple[threading.Thread, ...], deadline: float) -> bool:
