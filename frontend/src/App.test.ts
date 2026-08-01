@@ -391,6 +391,32 @@ describe("App", () => {
     expect(socket.sent).toHaveLength(2)
   })
 
+  it("preserves input after a non-retryable failed turn", async () => {
+    const { wrapper, socket } = mountApp()
+    await flushPromises()
+    await wrapper.get("textarea").setValue("Fail without retry")
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: sessionId })
+    socket.receive({
+      type: "turn.failed",
+      turn_id: turnId,
+      code: "invalid_request",
+      message: "The request cannot be retried.",
+      retryable: false,
+    })
+    await nextTick()
+    const textarea = wrapper.get<HTMLTextAreaElement>("textarea")
+    const inputWasDisabled = textarea.attributes("disabled") !== undefined
+
+    await textarea.setValue("Keep this draft")
+    await wrapper.get("[data-test=composer-form]").trigger("submit")
+
+    expect(socket.sent).toHaveLength(1)
+    expect(textarea.element.value).toBe("Keep this draft")
+    expect(inputWasDisabled).toBe(true)
+    expect(wrapper.get(".send-button").attributes("disabled")).toBeDefined()
+  })
+
   it("offers Retry after a cancelled turn", async () => {
     const { wrapper, socket } = mountApp()
     await flushPromises()

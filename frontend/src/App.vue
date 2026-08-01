@@ -77,12 +77,17 @@ const failure = chat.failure
 const protocolError = chat.protocolError
 
 const active = computed(() => state.value === "running" || state.value === "awaiting_approval")
-const composerDisabled = computed(
+const sessionOperationPending = computed(
+  () => selectingSessionIds.value.size > 0 || deletingSessionIds.value.size > 0,
+)
+const inputDisabled = computed(
   () =>
     loading.value ||
-    active.value ||
-    selectingSessionIds.value.size > 0 ||
-    deletingSessionIds.value.size > 0,
+    state.value !== "idle" ||
+    sessionOperationPending.value,
+)
+const retryDisabled = computed(
+  () => loading.value || active.value || sessionOperationPending.value,
 )
 const canRetry = computed(
   () => state.value === "cancelled" || (state.value === "failed" && failure.value?.retryable === true),
@@ -298,7 +303,8 @@ function updatePendingId(
             <div v-if="failure" class="turn-error" data-test="turn-error" role="alert">{{ failure.message }}</div>
           </div>
           <ChatComposer
-            :disabled="composerDisabled"
+            :input-disabled="inputDisabled"
+            :retry-disabled="retryDisabled"
             :active="active"
             :can-retry="canRetry"
             @send="chat.startTurn"
