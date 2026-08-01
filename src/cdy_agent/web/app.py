@@ -84,7 +84,11 @@ def create_web_app(settings: WebSettings, dependencies: WebDependencies) -> Fast
 
     app.include_router(create_sessions_router(settings, dependencies))
     register_turn_socket(app, dependencies.auth, dependencies.turn_coordinator)  # type: ignore[arg-type]
-    app.mount("/assets", StaticFiles(directory=_STATIC_DIRECTORY, check_dir=False), name="assets")
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_STATIC_DIRECTORY / "assets", check_dir=False),
+        name="assets",
+    )
     return app
 
 

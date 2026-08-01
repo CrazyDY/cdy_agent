@@ -73,6 +73,39 @@ def test_root_requires_cookie_and_returns_safe_missing_asset_error(
     }
 
 
+def test_authenticated_assets_are_served_from_the_static_assets_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Mounting the static root would make Vite's /assets URLs resolve one level high."""
+    static_directory = tmp_path / "static"
+    assets_directory = static_directory / "assets"
+    assets_directory.mkdir(parents=True)
+    (static_directory / "index.html").write_text("<html></html>", encoding="utf-8")
+    (assets_directory / "app.js").write_text("window.cdyAgent = true", encoding="utf-8")
+    monkeypatch.setattr(web_app, "_STATIC_DIRECTORY", static_directory)
+    capability = BrowserCapability.from_secret(
+        "fixed-secret", host="127.0.0.1", port=8000
+    )
+    app = create_web_app(
+        WebSettings(workspace=tmp_path, model="safe-model", api_mode="responses"),
+        WebDependencies(
+            auth=capability,
+            conversation_store=ConversationStore(tmp_path),
+            turn_coordinator=StubCoordinator(),
+        ),
+    )
+    client = TestClient(app)
+
+    forbidden = client.get("/assets/app.js", headers={"host": "127.0.0.1:8000"})
+    client.cookies.set("cdy_agent_web", "fixed-secret")
+    asset = client.get("/assets/app.js", headers={"host": "127.0.0.1:8000"})
+
+    assert forbidden.status_code == 403
+    assert asset.status_code == 200
+    assert asset.text == "window.cdyAgent = true"
+
+
 @pytest.mark.parametrize("path", ["/api/bootstrap", "/assets/app.js"])
 def test_api_and_assets_require_exact_host_and_cookie(
     app_client: TestClient, path: str
