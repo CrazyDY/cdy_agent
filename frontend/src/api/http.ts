@@ -28,17 +28,38 @@ export async function loadBootstrap(): Promise<BootstrapResponse> {
 }
 
 export async function loadSession(id: string): Promise<StoredConversation> {
-  return requestJson<StoredConversation>(`/api/sessions/${id}`, sameOriginOptions)
+  return requestJson<StoredConversation>(
+    `/api/sessions/${validatedSessionId(id)}`,
+    sameOriginOptions,
+  )
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  const response = await fetch(`/api/sessions/${id}`, {
+  const response = await fetch(`/api/sessions/${validatedSessionId(id)}`, {
     method: "DELETE",
     credentials: "same-origin",
   })
   if (!response.ok) {
     throw await responseError(response)
   }
+}
+
+function validatedSessionId(id: string): string {
+  if (!isCanonicalUuid(id)) {
+    throw new ApiError(
+      "invalid_conversation_id",
+      "Conversation ID must be a complete canonical UUID.",
+      false,
+      400,
+    )
+  }
+  return encodeURIComponent(id)
+}
+
+function isCanonicalUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    value,
+  )
 }
 
 async function requestJson<T>(path: string, options: RequestInit): Promise<T> {

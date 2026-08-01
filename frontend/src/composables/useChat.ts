@@ -12,6 +12,7 @@ import type {
   TurnCompleted,
   TurnFailed,
 } from "../api/protocol"
+import { loadSession } from "../api/http"
 
 export type ChatState =
   | "idle"
@@ -42,6 +43,7 @@ export interface ChatSocket {
 
 export interface UseChatOptions {
   socketFactory?: (url: string) => ChatSocket
+  sessionLoader?: (id: string) => Promise<StoredConversation>
 }
 
 interface TransientTurn {
@@ -49,6 +51,9 @@ interface TransientTurn {
   reply: string
   turnId: string | null
   status: Exclude<ChatState, "idle" | "awaiting_approval">
+  startSent: boolean
+  cancelRequested: boolean
+  cancelSent: boolean
 }
 
 interface ChatFailure {
@@ -69,7 +74,9 @@ export function useChat(options: UseChatOptions = {}) {
   const toolStatus = ref<ToolDisplayStatus | null>(null)
   const approval = ref<ApprovalRequired | null>(null)
   const failure = ref<ChatFailure | null>(null)
+  const protocolError = ref<string | null>(null)
   let socket: ChatSocket | null = null
+  let sessionRequestGeneration = 0
 
   const messages = computed<ChatMessage[]>(() => {
     const saved = persistedMessages.value
@@ -118,10 +125,14 @@ export function useChat(options: UseChatOptions = {}) {
       reply: "",
       turnId: null,
       status: "running",
+      startSent: false,
+      cancelRequested: false,
+      cancelSent: false,
     }
     failure.value = null
     toolStatus.value = null
     approval.value = null
+    protocolError.value = null
     state.value = "running"
     connect()
     sendStartIfReady()
@@ -130,14 +141,17 @@ export function useChat(options: UseChatOptions = {}) {
 
   function cancelTurn(): boolean {
     const turn = transientTurn.value
-    if (turn === null || state.value === "idle") {
+    if (turn === null || (state.value !== "running" && state.value !== "awaiting_approval")) {
       return false
     }
     approval.value = null
-    state.value = "running"
-    if (turn.turnId !== null) {
-      send({ type: "turn.cancel", turn_id: turn.turnId })
+    turn.cancelRequested = true
+    if (!turn.startSent) {
+      cancelActiveTurn()
+      return true
     }
+    state.value = "running"
+    sendCancelIfReady(turn)
     return true
   }
 
@@ -175,7 +189,9 @@ export function useChat(options: UseChatOptions = {}) {
   }
 
   function disconnect(): void {
-    cancelTurn()
+    if (state.value === "running" || state.value === "awaiting_approval") {
+      cancelTurn()
+    }
     socket?.close()
   }
 
@@ -185,6 +201,31 @@ export function useChat(options: UseChatOptions = {}) {
   }
 
   function setSession(value: StoredConversation | null): void {
+    sessionRequestGeneration += 1
+    applySession(value)
+  }
+
+  async function selectSession(id: string): Promise<boolean> {
+    if (isTurnActive()) {
+      return false
+    }
+    const generation = ++sessionRequestGeneration
+    try {
+      const session = await (options.sessionLoader ?? loadSession)(id)
+      if (
+        generation !== sessionRequestGeneration ||
+        isTurnActive()
+      ) {
+        return false
+      }
+      applySession(session)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function applySession(value: StoredConversation | null): void {
     sessionId.value = value?.id ?? null
     persistedMessages.value = (value?.messages ?? []).map((message) => ({
       ...message,
@@ -194,6 +235,7 @@ export function useChat(options: UseChatOptions = {}) {
     approval.value = null
     toolStatus.value = null
     failure.value = null
+    protocolError.value = null
     state.value = "idle"
   }
 
@@ -203,10 +245,19 @@ export function useChat(options: UseChatOptions = {}) {
 
   function sendStartIfReady(): void {
     const turn = transientTurn.value
-    if (turn === null || turn.turnId !== null || socket?.readyState !== OPEN) {
+    if (turn === null || turn.startSent || turn.cancelRequested || socket?.readyState !== OPEN) {
       return
     }
     send({ type: "turn.start", prompt: turn.prompt, session_id: sessionId.value })
+    turn.startSent = true
+  }
+
+  function sendCancelIfReady(turn: TransientTurn): void {
+    if (turn.turnId === null || turn.cancelSent) {
+      return
+    }
+    send({ type: "turn.cancel", turn_id: turn.turnId })
+    turn.cancelSent = true
   }
 
   function send(event: ClientEvent): void {
@@ -221,7 +272,7 @@ export function useChat(options: UseChatOptions = {}) {
       return
     }
     if (event.type === "protocol.error") {
-      failActiveTurn({ ...event, retryable: false })
+      protocolError.value = event.message
       return
     }
 
@@ -231,6 +282,9 @@ export function useChat(options: UseChatOptions = {}) {
     }
     if (event.type === "turn.accepted") {
       turn.turnId = event.turn_id
+      if (turn.cancelRequested) {
+        sendCancelIfReady(turn)
+      }
       return
     }
     if (turn.turnId === null || event.turn_id !== turn.turnId) {
@@ -310,9 +364,13 @@ export function useChat(options: UseChatOptions = {}) {
   }
 
   function markTransportCancelled(): void {
-    if (transientTurn.value !== null && state.value !== "idle") {
+    if (isTurnActive()) {
       cancelActiveTurn()
     }
+  }
+
+  function isTurnActive(): boolean {
+    return state.value === "running" || state.value === "awaiting_approval"
   }
 
   window.addEventListener("beforeunload", disconnect)
@@ -328,6 +386,7 @@ export function useChat(options: UseChatOptions = {}) {
     toolStatus,
     approval,
     failure,
+    protocolError,
     connect,
     startTurn,
     cancelTurn,
@@ -336,6 +395,7 @@ export function useChat(options: UseChatOptions = {}) {
     disconnect,
     setBootstrap,
     setSession,
+    selectSession,
     setSummaries,
   }
 }
@@ -364,19 +424,27 @@ function parseServerEvent(payload: string): ServerEvent | null {
     if (value.type === "turn.cancelled" && isTurnCancelled(value)) {
       return { type: "turn.cancelled", turn_id: value.turn_id }
     }
-    if (value.type === "turn.accepted" && hasStrings(value, "turn_id", "session_id")) {
+    if (
+      value.type === "turn.accepted" &&
+      hasCanonicalIds(value, "turn_id", "session_id")
+    ) {
       return {
         type: "turn.accepted",
         turn_id: value.turn_id,
         session_id: value.session_id,
       }
     }
-    if (value.type === "assistant.delta" && hasStrings(value, "turn_id", "delta")) {
+    if (
+      value.type === "assistant.delta" &&
+      hasCanonicalIds(value, "turn_id") &&
+      hasNonEmptyStrings(value, "delta")
+    ) {
       return { type: "assistant.delta", turn_id: value.turn_id, delta: value.delta }
     }
     if (
       value.type === "tool.status" &&
-      hasStrings(value, "turn_id", "name", "phase", "label") &&
+      hasCanonicalIds(value, "turn_id") &&
+      hasNonEmptyStrings(value, "name", "phase", "label") &&
       (value.phase === "started" || value.phase === "finished")
     ) {
       return {
@@ -389,7 +457,8 @@ function parseServerEvent(payload: string): ServerEvent | null {
     }
     if (
       value.type === "approval.required" &&
-      hasStrings(value, "turn_id", "approval_id", "description") &&
+      hasCanonicalIds(value, "turn_id", "approval_id") &&
+      hasNonEmptyStrings(value, "description") &&
       typeof value.allow_always === "boolean"
     ) {
       return {
@@ -403,7 +472,7 @@ function parseServerEvent(payload: string): ServerEvent | null {
     if (
       value.type === "server.busy" &&
       value.code === "server_busy" &&
-      hasStrings(value, "message") &&
+      hasNonEmptyStrings(value, "message") &&
       value.retryable === true
     ) {
       return {
@@ -416,7 +485,7 @@ function parseServerEvent(payload: string): ServerEvent | null {
     if (
       value.type === "protocol.error" &&
       value.code === "protocol_error" &&
-      hasStrings(value, "message")
+      hasNonEmptyStrings(value, "message")
     ) {
       return {
         type: "protocol.error",
@@ -433,7 +502,8 @@ function parseServerEvent(payload: string): ServerEvent | null {
 function isTurnCompleted(value: object): value is TurnCompleted {
   const record = value as Record<string, unknown>
   return (
-    hasStrings(record, "turn_id", "assistant_message") &&
+    hasCanonicalIds(record, "turn_id") &&
+    hasNonEmptyStrings(record, "assistant_message") &&
     isConversationSummary(record.conversation)
   )
 }
@@ -441,20 +511,24 @@ function isTurnCompleted(value: object): value is TurnCompleted {
 function isTurnFailed(value: object): value is TurnFailed {
   const record = value as Record<string, unknown>
   return (
-    hasStrings(record, "turn_id", "code", "message") &&
+    hasCanonicalIds(record, "turn_id") &&
+    hasNonEmptyStrings(record, "code", "message") &&
     typeof record.retryable === "boolean"
   )
 }
 
 function isTurnCancelled(value: Record<string, unknown>): value is { turn_id: string } {
-  return hasStrings(value, "turn_id")
+  return hasCanonicalIds(value, "turn_id")
 }
 
 function isConversationSummary(value: unknown): value is ConversationSummary {
   return (
     isRecord(value) &&
-    hasStrings(value, "id", "updated_at", "preview") &&
-    typeof value.message_count === "number"
+    hasCanonicalIds(value, "id") &&
+    hasNonEmptyStrings(value, "updated_at", "preview") &&
+    typeof value.message_count === "number" &&
+    Number.isInteger(value.message_count) &&
+    value.message_count >= 0
   )
 }
 
@@ -463,6 +537,26 @@ function hasStrings<Key extends string>(
   ...keys: Key[]
 ): value is Record<string, unknown> & Record<Key, string> {
   return keys.every((key) => typeof value[key] === "string")
+}
+
+function hasNonEmptyStrings<Key extends string>(
+  value: Record<string, unknown>,
+  ...keys: Key[]
+): value is Record<string, unknown> & Record<Key, string> {
+  return hasStrings(value, ...keys) && keys.every((key) => value[key].length > 0)
+}
+
+function hasCanonicalIds<Key extends string>(
+  value: Record<string, unknown>,
+  ...keys: Key[]
+): value is Record<string, unknown> & Record<Key, string> {
+  return hasStrings(value, ...keys) && keys.every((key) => isCanonicalUuid(value[key]))
+}
+
+function isCanonicalUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    value,
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

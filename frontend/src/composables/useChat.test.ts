@@ -8,11 +8,15 @@ const turnId = "7b4c48ea-ddba-4c41-a755-b5222e4d122a"
 const approvalId = "3e1a2ebb-95e2-4b9a-86de-849555043088"
 
 class FakeWebSocket implements ChatSocket {
-  readyState = 1
+  readyState: number
   sent: string[] = []
-  onopen: (() => void) | null = null
+  onopen: ((event: Event) => void) | null = null
   onmessage: ((event: MessageEvent<string>) => void) | null = null
   onclose: (() => void) | null = null
+
+  constructor(readyState = 1) {
+    this.readyState = readyState
+  }
 
   send(data: string): void {
     this.sent.push(data)
@@ -31,6 +35,23 @@ class FakeWebSocket implements ChatSocket {
     this.readyState = 3
     this.onclose?.()
   }
+
+  open(): void {
+    this.readyState = 1
+    this.onopen?.({} as Event)
+  }
+
+  receiveRaw(payload: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent<string>)
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((next) => {
+    resolve = next
+  })
+  return { promise, resolve }
 }
 
 function sentEvents(socket: FakeWebSocket): unknown[] {
@@ -107,6 +128,32 @@ describe("useChat", () => {
     expect(chat.messages.value.at(-1)).toMatchObject({ status: "cancelled" })
   })
 
+  it("does not start a connecting turn after Stop", () => {
+    const socket = new FakeWebSocket(0)
+    const chat = useChat({ socketFactory: () => socket })
+
+    chat.startTurn("hello")
+    chat.cancelTurn()
+    socket.open()
+
+    expect(sentEvents(socket)).toEqual([])
+    expect(chat.state.value).toBe("cancelled")
+  })
+
+  it("sends one cancellation after an already-started turn is accepted", () => {
+    const socket = new FakeWebSocket()
+    const chat = useChat({ socketFactory: () => socket })
+
+    chat.startTurn("hello")
+    chat.cancelTurn()
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: firstSessionId })
+
+    expect(sentEvents(socket)).toEqual([
+      { type: "turn.start", prompt: "hello", session_id: null },
+      { type: "turn.cancel", turn_id: turnId },
+    ])
+  })
+
   it("marks an in-flight turn cancelled when the transport disconnects", () => {
     const socket = new FakeWebSocket()
     const chat = useChat({ socketFactory: () => socket })
@@ -117,6 +164,108 @@ describe("useChat", () => {
 
     expect(chat.state.value).toBe("cancelled")
     expect(chat.messages.value.at(-1)).toMatchObject({ status: "cancelled" })
+  })
+
+  it("keeps a retryable failure when its socket closes", () => {
+    const socket = new FakeWebSocket()
+    const chat = useChat({ socketFactory: () => socket })
+
+    chat.startTurn("hello")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: firstSessionId })
+    socket.receive({
+      type: "turn.failed",
+      turn_id: turnId,
+      code: "provider_unavailable",
+      message: "The provider is unavailable.",
+      retryable: true,
+    })
+    socket.closeFromTransport()
+
+    expect(chat.state.value).toBe("failed")
+    expect(chat.retry()).toBe(true)
+  })
+
+  it("keeps an active turn running after a protocol error", () => {
+    const socket = new FakeWebSocket()
+    const chat = useChat({ socketFactory: () => socket })
+
+    chat.startTurn("hello")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: firstSessionId })
+    socket.receive({
+      type: "protocol.error",
+      code: "protocol_error",
+      message: "Invalid WebSocket event.",
+    })
+    socket.receive({ type: "assistant.delta", turn_id: turnId, delta: "Hi" })
+
+    expect(chat.state.value).toBe("running")
+    expect(chat.protocolError.value).toBe("Invalid WebSocket event.")
+    expect(chat.messages.value.at(-1)).toMatchObject({ content: "Hi", status: "running" })
+  })
+
+  it("ignores malformed terminal events before changing state", () => {
+    const socket = new FakeWebSocket()
+    const chat = useChat({ socketFactory: () => socket })
+
+    chat.startTurn("hello")
+    socket.receive({ type: "turn.accepted", turn_id: turnId, session_id: firstSessionId })
+    socket.receiveRaw({
+      type: "turn.completed",
+      turn_id: "not-a-uuid",
+      assistant_message: "Hi",
+      conversation: {
+        id: firstSessionId,
+        updated_at: "2026-08-01T13:00:00+00:00",
+        message_count: 1.5,
+        preview: "hello",
+      },
+    })
+
+    expect(chat.state.value).toBe("running")
+    expect(chat.messages.value.at(-1)).toMatchObject({ persisted: false, status: "running" })
+  })
+
+  it("refuses to change sessions while a turn is active", async () => {
+    const socket = new FakeWebSocket()
+    const loader = async () => ({
+      id: firstSessionId,
+      created_at: "2026-08-01T11:00:00+00:00",
+      updated_at: "2026-08-01T12:00:00+00:00",
+      messages: [{ role: "user" as const, content: "other" }],
+    })
+    const chat = useChat({ socketFactory: () => socket, sessionLoader: loader })
+    chat.startTurn("hello")
+
+    await expect(chat.selectSession(firstSessionId)).resolves.toBe(false)
+    expect(chat.messages.value[0]).toMatchObject({ content: "hello", persisted: false })
+  })
+
+  it("keeps the newest asynchronous session selection when an older load arrives late", async () => {
+    const pendingA = deferred<{
+      id: string
+      created_at: string
+      updated_at: string
+      messages: { role: "user"; content: string }[]
+    }>()
+    const pendingB = deferred<{
+      id: string
+      created_at: string
+      updated_at: string
+      messages: { role: "user"; content: string }[]
+    }>()
+    const secondSessionId = "74e94a48-5a15-426f-9cb1-638acd5c7b99"
+    const loader = (id: string) => (id === firstSessionId ? pendingA.promise : pendingB.promise)
+    const chat = useChat({ sessionLoader: loader })
+
+    const selectA = chat.selectSession(firstSessionId)
+    const selectB = chat.selectSession(secondSessionId)
+    pendingB.resolve({ id: secondSessionId, created_at: "b", updated_at: "b", messages: [{ role: "user", content: "B" }] })
+    await selectB
+    pendingA.resolve({ id: firstSessionId, created_at: "a", updated_at: "a", messages: [{ role: "user", content: "A" }] })
+    await selectA
+
+    expect(chat.sessionId.value).toBe(secondSessionId)
+    expect(chat.messages.value).toEqual([{ role: "user", content: "B", persisted: true }])
   })
 
   it("keeps failed local content out of the retry turn", () => {

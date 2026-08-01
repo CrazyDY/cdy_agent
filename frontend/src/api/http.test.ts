@@ -97,4 +97,31 @@ describe("HTTP session client", () => {
       new ApiError("server_busy", "Another turn is already running.", true, 409),
     )
   })
+
+  it("rejects non-canonical session IDs before issuing HTTP requests", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(loadSession("../?/#")).rejects.toMatchObject({
+      code: "invalid_conversation_id",
+      retryable: false,
+    })
+    await expect(deleteSession("8D7AF6DC-32C8-4B2B-9890-C3CAA938390C")).rejects.toMatchObject({
+      code: "invalid_conversation_id",
+      retryable: false,
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("accepts every lowercase canonical UUID the backend accepts", async () => {
+    const nonRfcVariant = "00000000-0000-0000-0000-000000000000"
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(storedSession))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await loadSession(nonRfcVariant)
+
+    expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/${nonRfcVariant}`, {
+      credentials: "same-origin",
+    })
+  })
 })
