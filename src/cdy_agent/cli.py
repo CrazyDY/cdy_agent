@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, NoReturn
 from uuid import uuid4
 
 import typer
+import uvicorn
 from openai import (
     APIConnectionError,
     APIError,
@@ -50,6 +52,9 @@ from .openai_client import MissingAPIKeyError
 from .runtime import create_agent_runtime
 from .tools.base import ConfirmationDecision, ConfirmationRequest
 from .tools.filesystem import resolve_workspace
+from .web.app import WebDependencies, WebSettings, create_web_app
+from .web.auth import BrowserCapability
+from .web.turns import ConfirmationBroker, TurnCoordinator, TurnDependencies
 
 app = typer.Typer(help="Run the CDY local personal AI assistant.")
 sessions_app = typer.Typer(help="List and delete saved conversations.")
@@ -643,6 +648,75 @@ def main() -> None:
         configure_structured_logging(resolve_log_level())
     except ValueError as exc:
         _fail_for_exception(exc)
+
+
+@app.command()
+def web(
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Directory available to the local Web server."),
+    ] = None,
+    port: Annotated[
+        int,
+        typer.Option(help="Loopback port for the local Web server."),
+    ] = 8000,
+    open_browser: Annotated[
+        bool,
+        typer.Option("--open/--no-open", help="Open the local UI in a browser."),
+    ] = True,
+) -> None:
+    """Start the authenticated local Web interface on IPv4 loopback."""
+    try:
+        if not 1 <= port <= 65535:
+            raise ValueError("Port must be between 1 and 65535.")
+        active_workspace, workspace_config = _load_configured_workspace(workspace)
+        _configure_logging_for_workspace(workspace_config)
+        active_model = resolve_model(workspace_config=workspace_config)
+        api_mode = resolve_api_mode(workspace_config)
+        system_prompt = resolve_system_prompt(workspace_config)
+        pricing = resolve_pricing(workspace_config)
+
+        auth = BrowserCapability.create("127.0.0.1", port)
+        broker = ConfirmationBroker()
+        agent = create_agent_runtime(
+            model=active_model,
+            api_mode=api_mode,
+            workspace=active_workspace,
+            confirm=broker.confirm,
+            system_prompt=system_prompt,
+        )
+        conversations = ConversationStore(active_workspace)
+        coordinator = TurnCoordinator(
+            TurnDependencies(
+                agent=agent,
+                confirmations=broker,
+                conversations=conversations,
+                traces=TraceStore(active_workspace),
+                model=active_model,
+                api_mode=api_mode,
+                pricing=pricing,
+            )
+        )
+        server = create_web_app(
+            WebSettings(
+                workspace=active_workspace,
+                model=active_model,
+                api_mode=api_mode,
+            ),
+            WebDependencies(
+                auth=auth,
+                conversation_store=conversations,
+                turn_coordinator=coordinator,
+            ),
+        )
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+
+    if open_browser:
+        webbrowser.open(auth.launch_url)
+    else:
+        typer.echo(auth.launch_url)
+    uvicorn.run(server, host="127.0.0.1", port=port, log_config=None)
 
 
 @app.command()

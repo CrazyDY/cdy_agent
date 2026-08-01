@@ -45,6 +45,13 @@ def test_root_exchanges_capability_before_asset_lookup(app_client: TestClient) -
     assert "HttpOnly" in response.headers["set-cookie"]
 
 
+def test_app_registers_the_authenticated_turn_socket(app_client: TestClient) -> None:
+    """Omitting socket composition would leave the UI unable to run turns."""
+    assert any(
+        getattr(route, "path", None) == "/api/turns" for route in app_client.app.routes
+    )
+
+
 def test_root_requires_cookie_and_returns_safe_missing_asset_error(
     app_client: TestClient,
 ) -> None:

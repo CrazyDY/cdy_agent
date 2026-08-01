@@ -2,6 +2,7 @@ import builtins
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -1942,3 +1943,71 @@ def test_ask_and_chat_offer_memory_tools_without_automatic_injection(
         for message in gateway.calls[0]["messages"]
     )
     assert searches == []
+
+
+def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changing the host or printing more capability data would expose local control."""
+    calls: list[dict[str, object]] = []
+    opened: list[str] = []
+    order: list[str] = []
+
+    class FakeCapability:
+        launch_url = "http://127.0.0.1:8000/?access_token=brief-secret"
+
+        @classmethod
+        def create(cls, host: str, port: int) -> object:
+            assert (host, port) == ("127.0.0.1", 8000)
+            order.append("auth")
+            return cls()
+
+    class FakeBroker:
+        def __init__(self) -> None:
+            self.confirm = object()
+            order.append("broker")
+
+    class FakeCoordinator:
+        def __init__(self, dependencies: object) -> None:
+            order.append("coordinator")
+
+    monkeypatch.setattr(cli, "BrowserCapability", FakeCapability, raising=False)
+    monkeypatch.setattr(cli, "ConfirmationBroker", FakeBroker, raising=False)
+    monkeypatch.setattr(cli, "create_agent_runtime", lambda **kwargs: order.append("agent") or object())
+    monkeypatch.setattr(cli, "TurnCoordinator", FakeCoordinator, raising=False)
+    monkeypatch.setattr(cli, "TurnDependencies", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(cli, "WebSettings", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(cli, "WebDependencies", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(cli, "create_web_app", lambda settings, dependencies: order.append("app") or object(), raising=False)
+    monkeypatch.setattr(cli, "uvicorn", SimpleNamespace(run=lambda app, **kwargs: calls.append(kwargs)), raising=False)
+    monkeypatch.setattr(cli, "webbrowser", SimpleNamespace(open=lambda url: opened.append(url)), raising=False)
+
+    result = runner.invoke(app, ["web", "--workspace", str(tmp_path), "--no-open"])
+
+    assert result.exit_code == 0
+    assert order == ["auth", "broker", "agent", "coordinator", "app"]
+    assert calls == [{"host": "127.0.0.1", "port": 8000, "log_config": None}]
+    assert opened == []
+    assert result.output == "http://127.0.0.1:8000/?access_token=brief-secret\n"
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536])
+def test_web_rejects_an_invalid_port_before_startup(
+    port: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Binding an invalid port must fail before constructing or running the server."""
+    started: list[object] = []
+    monkeypatch.setattr(
+        cli,
+        "uvicorn",
+        SimpleNamespace(run=lambda *args, **kwargs: started.append(args)),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app, ["web", "--workspace", str(tmp_path), "--port", str(port), "--no-open"]
+    )
+
+    assert result.exit_code == 1
+    assert "port" in result.stderr.lower()
+    assert started == []

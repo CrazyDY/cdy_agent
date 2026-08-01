@@ -14,6 +14,7 @@ from starlette.staticfiles import StaticFiles
 from cdy_agent.memory import ConversationStore
 from cdy_agent.web.auth import BrowserCapability
 from cdy_agent.web.sessions import create_sessions_router
+from cdy_agent.web.socket import register_turn_socket
 
 _STATIC_DIRECTORY = Path(__file__).with_name("static")
 _MISSING_ASSETS = {
@@ -82,6 +83,7 @@ def create_web_app(settings: WebSettings, dependencies: WebDependencies) -> Fast
         return FileResponse(index)
 
     app.include_router(create_sessions_router(settings, dependencies))
+    register_turn_socket(app, dependencies.auth, dependencies.turn_coordinator)  # type: ignore[arg-type]
     app.mount("/assets", StaticFiles(directory=_STATIC_DIRECTORY, check_dir=False), name="assets")
     return app
 
