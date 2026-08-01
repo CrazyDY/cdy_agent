@@ -1,4 +1,5 @@
 import builtins
+import socket
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1949,9 +1950,29 @@ def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Changing the host or printing more capability data would expose local control."""
-    calls: list[dict[str, object]] = []
+    calls: list[tuple[object, list[object]]] = []
     opened: list[str] = []
     order: list[str] = []
+    web_app = object()
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def bind(self, address: tuple[str, int]) -> None:
+            assert address == ("127.0.0.1", 8000)
+            order.append("bind")
+
+        def close(self) -> None:
+            self.closed = True
+            order.append("close")
+
+    listener = FakeSocket()
+
+    def create_socket(family: int, kind: int) -> FakeSocket:
+        assert (family, kind) == (socket.AF_INET, socket.SOCK_STREAM)
+        order.append("socket")
+        return listener
 
     class FakeCapability:
         launch_url = "http://127.0.0.1:8000/?access_token=brief-secret"
@@ -1971,6 +1992,13 @@ def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
         def __init__(self, dependencies: object) -> None:
             order.append("coordinator")
 
+    class FakeServer:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        def run(self, *, sockets: list[object]) -> None:
+            calls.append((self.config, sockets))
+
     monkeypatch.setattr(cli, "BrowserCapability", FakeCapability, raising=False)
     monkeypatch.setattr(cli, "ConfirmationBroker", FakeBroker, raising=False)
     monkeypatch.setattr(cli, "create_agent_runtime", lambda **kwargs: order.append("agent") or object())
@@ -1978,17 +2006,85 @@ def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
     monkeypatch.setattr(cli, "TurnDependencies", lambda **kwargs: kwargs, raising=False)
     monkeypatch.setattr(cli, "WebSettings", lambda **kwargs: kwargs, raising=False)
     monkeypatch.setattr(cli, "WebDependencies", lambda **kwargs: kwargs, raising=False)
-    monkeypatch.setattr(cli, "create_web_app", lambda settings, dependencies: order.append("app") or object(), raising=False)
-    monkeypatch.setattr(cli, "uvicorn", SimpleNamespace(run=lambda app, **kwargs: calls.append(kwargs)), raising=False)
+    monkeypatch.setattr(
+        cli,
+        "create_web_app",
+        lambda settings, dependencies: order.append("app") or web_app,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "socket",
+        SimpleNamespace(
+            AF_INET=socket.AF_INET,
+            SOCK_STREAM=socket.SOCK_STREAM,
+            socket=create_socket,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "uvicorn",
+        SimpleNamespace(Config=lambda app, **kwargs: (app, kwargs), Server=FakeServer),
+        raising=False,
+    )
     monkeypatch.setattr(cli, "webbrowser", SimpleNamespace(open=lambda url: opened.append(url)), raising=False)
 
     result = runner.invoke(app, ["web", "--workspace", str(tmp_path), "--no-open"])
 
     assert result.exit_code == 0
-    assert order == ["auth", "broker", "agent", "coordinator", "app"]
-    assert calls == [{"host": "127.0.0.1", "port": 8000, "log_config": None}]
+    assert order == [
+        "socket",
+        "bind",
+        "auth",
+        "broker",
+        "agent",
+        "coordinator",
+        "app",
+        "close",
+    ]
+    assert calls == [
+        ((web_app, {"host": "127.0.0.1", "port": 8000, "log_config": None}), [listener])
+    ]
+    assert listener.closed is True
     assert opened == []
     assert result.output == "http://127.0.0.1:8000/?access_token=brief-secret\n"
+
+
+def test_web_command_maps_occupied_port_without_disclosing_or_opening_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publishing a capability before reserving its port could send it to another process."""
+    opened: list[str] = []
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        port = occupied.getsockname()[1]
+        monkeypatch.setattr(
+            cli,
+            "BrowserCapability",
+            SimpleNamespace(
+                create=lambda *args: pytest.fail("capability created before bind")
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            cli,
+            "webbrowser",
+            SimpleNamespace(open=lambda url: opened.append(url)),
+            raising=False,
+        )
+
+        result = runner.invoke(
+            app, ["web", "--workspace", str(tmp_path), "--port", str(port)]
+        )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert f"127.0.0.1:{port}" in result.stderr
+    assert "unable to start local web server" in result.stderr.lower()
+    assert "access_token" not in result.stderr
+    assert opened == []
 
 
 @pytest.mark.parametrize("port", [0, -1, 65536])

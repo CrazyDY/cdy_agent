@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
@@ -666,9 +667,21 @@ def web(
     ] = True,
 ) -> None:
     """Start the authenticated local Web interface on IPv4 loopback."""
+    listener: socket.socket | None = None
     try:
         if not 1 <= port <= 65535:
             raise ValueError("Port must be between 1 and 65535.")
+        try:
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("127.0.0.1", port))
+        except OSError as exc:
+            if listener is not None:
+                listener.close()
+                listener = None
+            raise RuntimeError(
+                f"Unable to start local Web server on 127.0.0.1:{port}."
+            ) from exc
+
         active_workspace, workspace_config = _load_configured_workspace(workspace)
         _configure_logging_for_workspace(workspace_config)
         active_model = resolve_model(workspace_config=workspace_config)
@@ -709,14 +722,25 @@ def web(
                 turn_coordinator=coordinator,
             ),
         )
+
+        uvicorn_server = uvicorn.Server(
+            uvicorn.Config(
+                server,
+                host="127.0.0.1",
+                port=port,
+                log_config=None,
+            )
+        )
+        if open_browser:
+            webbrowser.open(auth.launch_url)
+        else:
+            typer.echo(auth.launch_url)
+        uvicorn_server.run(sockets=[listener])
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
-
-    if open_browser:
-        webbrowser.open(auth.launch_url)
-    else:
-        typer.echo(auth.launch_url)
-    uvicorn.run(server, host="127.0.0.1", port=port, log_config=None)
+    finally:
+        if listener is not None:
+            listener.close()
 
 
 @app.command()
