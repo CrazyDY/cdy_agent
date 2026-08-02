@@ -278,6 +278,37 @@ Markdown 正文也必须非空，未知字段和重复 YAML 键会使 Skill 无�
 
 根目录中的额外条目不会成为资源；尤其 `tools.py` 和 `create_tools(workspace)` 均不受支持、会被忽略，且绝不会执行。
 
+### MCP 客户端
+
+工作区可在 `<workspace>/.cdy-agent/mcp.yaml` 配置最多 16 个 MCP Server。CDY 支持本地 stdio 与远程 Streamable HTTP，并可使用 Tools、Resources、Resource Templates 和 Prompts。Server 不会在程序启动时自动连接；模型必须先调用 `connect_mcp_server`，且连接和每次远程 Tool 调用都需要用户确认。
+
+```yaml
+version: 1
+servers:
+  local_docs:
+    description: Search local documentation
+    transport: stdio
+    command: python
+    args: [mcp_server.py]
+    env_from:
+      API_TOKEN: LOCAL_DOCS_TOKEN
+  remote_docs:
+    description: Query remote documentation
+    transport: streamable_http
+    url: https://example.com/mcp
+    headers_from:
+      Authorization: REMOTE_DOCS_AUTHORIZATION
+```
+
+`env_from` 与 `headers_from` 的值是宿主环境变量名称，不是凭据字面值。远程地址必须使用 HTTPS；不携带 Header 时允许 `localhost`、`127.0.0.1` 或 `::1` 的 HTTP 地址。stdio 固定以 workspace 为 cwd、使用参数数组启动，不经过 shell。
+
+```powershell
+uv run cdy-agent mcp servers --workspace .
+uv run cdy-agent mcp check local_docs --workspace .
+```
+
+`mcp servers` 只做离线校验并显示安全摘要；`mcp check` 在确认后连接、显示协商版本和能力，然后关闭连接。远程工具会映射为 `mcp_<server>_<tool>` 形式的模型工具；非法或冲突名称会附加稳定摘要。单个 Server 最多加载 64 个工具，全局最多 256 个；单次 MCP 结果限制为 1 MiB，非文本内容以 MCP JSON 内容块和有界 base64 返回。
+
 ### 评估用例
 
 `evals run` 从 YAML 或 JSON 文件逐条运行单轮提示，并使用本地、确定性的 `exact` 和 `contains` 断言检查最终回复。仓库提供一个基础用例集：

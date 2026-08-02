@@ -6,9 +6,7 @@ from cdy_agent import runtime
 from cdy_agent.tools.base import ToolResult
 
 
-def test_runtime_registers_skill_tools_and_catalog(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_runtime_registers_skill_tools_and_catalog(monkeypatch, tmp_path: Path) -> None:
     """Omitting Skill composition would hide available Skills from the model."""
     gateway = object()
     skill_tools = object()
@@ -30,7 +28,9 @@ def test_runtime_registers_skill_tools_and_catalog(
     monkeypatch.setattr(runtime, "ModelGateway", lambda **kwargs: gateway)
     monkeypatch.setattr(runtime, "create_builtin_registry", lambda path: registry)
     monkeypatch.setattr(runtime, "SkillManager", lambda path: manager)
-    monkeypatch.setattr(runtime, "create_skill_tools", lambda built_manager: skill_tools)
+    monkeypatch.setattr(
+        runtime, "create_skill_tools", lambda built_manager: skill_tools
+    )
 
     agent = runtime.create_agent_runtime(
         model="test-model",
@@ -53,3 +53,37 @@ def test_runtime_registers_skill_tools_and_catalog(
         "When a Skill matches the task, activate it with activate_skill and "
         "follow its instructions."
     )
+
+
+def test_runtime_registers_mcp_management_tools_when_configured(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(runtime, "ModelGateway", lambda **kwargs: object())
+    directory = tmp_path / ".cdy-agent"
+    directory.mkdir()
+    (directory / "mcp.yaml").write_text(
+        """
+version: 1
+servers:
+  demo:
+    description: Demo MCP server
+    transport: stdio
+    command: demo
+""",
+        encoding="utf-8",
+    )
+    agent = runtime.create_agent_runtime(
+        model="test-model",
+        api_mode="responses",
+        workspace=tmp_path,
+        confirm=lambda request: False,
+        max_model_calls=2,
+        system_prompt="Base",
+    )
+    try:
+        names = [definition["name"] for definition in agent._registry.definitions]
+        assert "connect_mcp_server" in names
+        assert "get_mcp_prompt" in names
+        assert "Configured MCP servers" in agent._system_message.content
+    finally:
+        agent.close()

@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Iterable
 from copy import deepcopy
+from threading import RLock
 
 from ..run_control import AgentRunCancelled, RunControl
 from .base import (
@@ -22,18 +23,21 @@ TOOL_NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 class ToolRegistry:
     def __init__(self, tools: Iterable[Tool]) -> None:
         self._tools = {tool.name: tool for tool in tools}
+        self._groups: dict[str, set[str]] = {}
+        self._lock = RLock()
 
     @property
     def definitions(self) -> tuple[dict[str, object], ...]:
-        return tuple(
-            {
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-            }
-            for tool in self._tools.values()
-        )
+        with self._lock:
+            return tuple(
+                {
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                }
+                for tool in self._tools.values()
+            )
 
     def register_many(self, tools: Iterable[Tool]) -> ToolResult:
         try:
@@ -51,13 +55,57 @@ class ToolRegistry:
                     "Skill returned an invalid tool.",
                 )
             names.append(tool.name)
-        if len(names) != len(set(names)) or any(name in self._tools for name in names):
-            return ToolResult.failure(
-                "tool_name_conflict",
-                "Tool name conflicts with an existing tool.",
-            )
-        self._tools.update(zip(names, candidates))
+        with self._lock:
+            if len(names) != len(set(names)) or any(
+                name in self._tools for name in names
+            ):
+                return ToolResult.failure(
+                    "tool_name_conflict",
+                    "Tool name conflicts with an existing tool.",
+                )
+            self._tools.update(zip(names, candidates))
         return ToolResult.success({"names": names})
+
+    def replace_group(self, group: str, tools: Iterable[Tool]) -> ToolResult:
+        """Atomically replace one dynamic group without disturbing built-ins."""
+        try:
+            candidates = tuple(tools)
+        except (TypeError, RuntimeError):
+            return ToolResult.failure(
+                "invalid_tools", "Tool factory must return an iterable."
+            )
+        names = [getattr(tool, "name", None) for tool in candidates]
+        if any(not _valid_tool(tool) for tool in candidates):
+            return ToolResult.failure(
+                "invalid_tools", "Dynamic source returned an invalid tool."
+            )
+        if len(names) != len(set(names)):
+            return ToolResult.failure(
+                "tool_name_conflict", "Tool names conflict within the dynamic group."
+            )
+        with self._lock:
+            old_names = self._groups.get(group, set())
+            conflicts = set(names) & (set(self._tools) - old_names)
+            if conflicts:
+                return ToolResult.failure(
+                    "tool_name_conflict", "Tool name conflicts with an existing tool."
+                )
+            updated = dict(self._tools)
+            for name in old_names:
+                updated.pop(name, None)
+            updated.update(zip(names, candidates))
+            self._tools = updated
+            self._groups[group] = set(names)
+        return ToolResult.success({"names": names})
+
+    def remove_group(self, group: str) -> None:
+        with self._lock:
+            names = self._groups.pop(group, set())
+            if not names:
+                return
+            self._tools = {
+                name: tool for name, tool in self._tools.items() if name not in names
+            }
 
     def execute(
         self,
@@ -68,7 +116,8 @@ class ToolRegistry:
     ) -> ToolResult:
         if run_control is not None:
             run_control.raise_if_cancelled()
-        tool = self._tools.get(call.name)
+        with self._lock:
+            tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult.failure(
                 "unknown_tool",

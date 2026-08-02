@@ -36,6 +36,7 @@ from .config import (
 )
 from .conversation import Conversation, Message
 from .evals import EvalFileError, run_eval_file
+from .mcp import McpManager, load_mcp_config
 from .memory import (
     ConversationStore,
     ConversationStoreError,
@@ -55,8 +56,9 @@ from .observability import (
 from .observability.logging import configure_structured_logging, resolve_log_level
 from .openai_client import MissingAPIKeyError
 from .runtime import create_agent_runtime
-from .tools.base import ConfirmationDecision, ConfirmationRequest
+from .tools.base import ConfirmationDecision, ConfirmationRequest, ToolResult
 from .tools.filesystem import resolve_workspace
+from .tools.registry import ToolRegistry
 from .web.app import WebDependencies, WebSettings, create_web_app
 from .web.auth import BrowserCapability
 from .web.turns import ConfirmationBroker, TurnCoordinator, TurnDependencies
@@ -67,11 +69,13 @@ memories_app = typer.Typer(help="Manage explicit long-term memories.")
 traces_app = typer.Typer(help="List and inspect saved call traces.")
 config_app = typer.Typer(help="Inspect effective non-secret configuration.")
 evals_app = typer.Typer(help="Run offline evaluation cases.")
+mcp_app = typer.Typer(help="Inspect and check workspace MCP servers.")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memories_app, name="memories")
 app.add_typer(traces_app, name="traces")
 app.add_typer(config_app, name="config")
 app.add_typer(evals_app, name="evals")
+app.add_typer(mcp_app, name="mcp")
 
 _SOURCE_FRONTEND_DIRECTORY = Path(__file__).resolve().parents[2] / "frontend"
 _PACKAGED_FRONTEND_DIRECTORY = Path(__file__).with_name("frontend")
@@ -120,6 +124,12 @@ def _fail_for_exception(exc: Exception) -> NoReturn:
     if isinstance(exc, OpenAIError):
         _fail(f"OpenAI client error: {exc}")
     _fail(str(exc))
+
+
+def _close_agent(agent: object) -> None:
+    close = getattr(agent, "close", None)
+    if callable(close):
+        close()
 
 
 def _confirm_tool(request: ConfirmationRequest) -> ConfirmationDecision:
@@ -608,6 +618,7 @@ def show_config(
         max_model_calls = resolve_max_model_calls(workspace_config=workspace_config)
         pricing = resolve_pricing(workspace_config)
         resolve_log_level(workspace_config)
+        mcp_config = load_mcp_config(active_workspace)
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
 
@@ -620,6 +631,9 @@ def show_config(
     typer.echo(f"max_model_calls: {max_model_calls}")
     typer.echo(f"system_prompt: {system_prompt}")
     typer.echo(f"log_level: {_effective_log_level_name(workspace_config)}")
+    typer.echo(
+        f"mcp_servers: {', '.join(server.name for server in mcp_config.servers) or '-'}"
+    )
     if pricing is None:
         typer.echo("input_cost_per_million: -")
         typer.echo("output_cost_per_million: -")
@@ -653,13 +667,13 @@ def run_evals(
         _configure_logging_for_workspace(workspace_config)
         active_model = resolve_model(model, workspace_config)
         api_mode = resolve_api_mode(workspace_config)
-        agent = _create_agent(
-            active_model, api_mode, active_workspace, max_model_calls
-        )
+        agent = _create_agent(active_model, api_mode, active_workspace, max_model_calls)
         report = run_eval_file(eval_file, agent)
     except REQUEST_ERRORS as exc:
+        if "agent" in locals():
+            _close_agent(agent)
         _fail_for_exception(exc)
-
+    _close_agent(agent)
     for result in report.results:
         status = "PASS" if result.passed else "FAIL"
         typer.echo(f"{status} {result.name}")
@@ -668,6 +682,72 @@ def run_evals(
     typer.echo(f"{report.passed} passed, {report.failed} failed, {report.total} total")
     if report.failed:
         raise typer.Exit(code=1)
+
+
+@mcp_app.command("servers")
+def list_mcp_server_configs(
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing optional mcp.yaml."),
+    ] = None,
+) -> None:
+    """Validate and list configured MCP servers without connecting."""
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        mcp_config = load_mcp_config(active_workspace)
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    if not mcp_config.servers:
+        typer.echo("No MCP servers configured.")
+        return
+    for server in mcp_config.servers:
+        references = sorted((*server.env_from.values(), *server.headers_from.values()))
+        typer.echo(
+            f"{server.name}  {server.transport}  credentials="
+            f"{','.join(references) if references else '-'}"
+        )
+
+
+@mcp_app.command("check")
+def check_mcp_server(
+    name: Annotated[str, typer.Argument(help="Configured MCP server name.")],
+    workspace: Annotated[
+        Path | None,
+        typer.Option(help="Workspace containing optional mcp.yaml."),
+    ] = None,
+) -> None:
+    """Connect to one MCP server after confirmation and show a safe summary."""
+    manager: McpManager | None = None
+    try:
+        active_workspace = resolve_workspace(workspace or Path.cwd())
+        mcp_config = load_mcp_config(active_workspace)
+        manager = McpManager(active_workspace, mcp_config, ToolRegistry([]))
+        prepared = manager.prepare_connection(name)
+        if isinstance(prepared, ToolResult):
+            raise ValueError(prepared.message or "Unknown MCP server.")
+        decision = _confirm_tool(
+            ConfirmationRequest(
+                "connect_mcp_server",
+                {"server": name},
+                prepared.confirmation_description,
+            )
+        )
+        if decision is ConfirmationDecision.DENY:
+            raise ValueError("MCP connection was declined.")
+        result = prepared.execute()
+        if not result.ok:
+            raise RuntimeError(result.message or "Could not connect to MCP server.")
+        payload = result.data
+        typer.echo(f"name: {payload['name']}")
+        typer.echo(f"status: {payload['status']}")
+        typer.echo(f"protocol_version: {payload.get('protocol_version') or '-'}")
+        typer.echo(f"capabilities: {','.join(payload.get('capabilities', [])) or '-'}")
+        typer.echo(f"tools: {len(payload.get('tools', []))}")
+    except REQUEST_ERRORS as exc:
+        _fail_for_exception(exc)
+    finally:
+        if manager is not None:
+            manager.close()
 
 
 @app.callback()
@@ -760,6 +840,7 @@ def web(
 ) -> None:
     """Start the authenticated local Web interface on IPv4 loopback."""
     listener: socket.socket | None = None
+    agent: Agent | None = None
     try:
         if not 1 <= port <= 65535:
             raise ValueError("Port must be between 1 and 65535.")
@@ -835,6 +916,8 @@ def web(
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
     finally:
+        if agent is not None:
+            _close_agent(agent)
         if listener is not None:
             listener.close()
 
@@ -876,9 +959,7 @@ def ask(
         api_mode = resolve_api_mode(workspace_config)
         stream_output = resolve_streaming(stream, workspace_config)
         pricing = resolve_pricing(workspace_config)
-        agent = _create_agent(
-            active_model, api_mode, active_workspace, max_model_calls
-        )
+        agent = _create_agent(active_model, api_mode, active_workspace, max_model_calls)
         conversation = Conversation()
         conversation.append("user", normalized_prompt)
         if stream_output:
@@ -902,7 +983,11 @@ def ask(
                 pricing=pricing,
             )
     except REQUEST_ERRORS as exc:
+        if "agent" in locals():
+            _close_agent(agent)
         _fail_for_exception(exc)
+
+    _close_agent(agent)
 
     if stream_output:
         typer.echo()
@@ -945,9 +1030,7 @@ def chat(
         stream_output = resolve_streaming(stream, workspace_config)
         pricing = resolve_pricing(workspace_config)
         store = ConversationStore(active_workspace)
-        agent = _create_agent(
-            active_model, api_mode, active_workspace, max_model_calls
-        )
+        agent = _create_agent(active_model, api_mode, active_workspace, max_model_calls)
         conversation = Conversation()
         if resume is None:
             session_id = str(uuid4())
@@ -957,18 +1040,22 @@ def chat(
             for message in stored.messages:
                 conversation.append(message.role, message.content)
     except REQUEST_ERRORS as exc:
+        if "agent" in locals():
+            _close_agent(agent)
         _fail_for_exception(exc)
 
     while True:
         try:
             prompt = input("You: ")
         except (EOFError, KeyboardInterrupt):
+            _close_agent(agent)
             return
 
         normalized_prompt = prompt.strip()
         if not normalized_prompt:
             continue
         if normalized_prompt.lower() in {"/exit", "/quit"}:
+            _close_agent(agent)
             return
 
         user_message = conversation.append("user", normalized_prompt)
@@ -1003,4 +1090,5 @@ def chat(
             if not stream_output:
                 typer.echo(f"Assistant: {assistant_message.content}")
         except REQUEST_ERRORS as exc:
+            _close_agent(agent)
             _fail_for_exception(exc)

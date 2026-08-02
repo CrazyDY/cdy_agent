@@ -47,6 +47,7 @@ class Agent:
         confirm: ConfirmationCallback,
         max_model_calls: int = 8,
         system_prompt: str | None = None,
+        close_callback: Callable[[], None] | None = None,
     ) -> None:
         if max_model_calls < 1:
             raise ValueError("max_model_calls must be at least 1.")
@@ -55,6 +56,16 @@ class Agent:
         self._confirm = confirm
         self._max_model_calls = max_model_calls
         self._system_message = _normalize_system_message(system_prompt)
+        self._close_callback = close_callback
+        self._closed = False
+
+    def close(self) -> None:
+        """Release optional runtime resources exactly once."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._close_callback is not None:
+            self._close_callback()
 
     def run(
         self,

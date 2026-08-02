@@ -830,3 +830,18 @@ def test_agent_keeps_fixed_skill_definitions_after_activation(
         "read_skill_resource",
         "run_skill_script",
     }
+
+
+def test_agent_close_releases_runtime_once() -> None:
+    closed: list[bool] = []
+    agent = Agent(
+        object(),
+        object(),
+        lambda request: False,
+        close_callback=lambda: closed.append(True),
+    )
+
+    agent.close()
+    agent.close()
+
+    assert closed == [True]

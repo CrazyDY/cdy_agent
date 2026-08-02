@@ -1087,7 +1087,7 @@ def _windows_system_directories() -> tuple[Path, ...]:
             length = function(buffer, len(buffer))
         except (AttributeError, OSError, TypeError, ValueError):
             continue
-        if 0 < length < len(buffer):
+        if 0 < length < len(buffer) and buffer.value:
             directories.append(Path(buffer.value))
     return tuple(directories)
 
