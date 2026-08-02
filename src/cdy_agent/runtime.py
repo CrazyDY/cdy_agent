@@ -17,6 +17,7 @@ def create_agent_runtime(
     api_mode: str,
     workspace: Path,
     confirm: ConfirmationCallback,
+    max_model_calls: int,
     system_prompt: str | None = None,
 ) -> Agent:
     """Compose the model gateway, local tools, Skills, and Agent loop."""
@@ -28,7 +29,13 @@ def create_agent_runtime(
     registered = registry.register_many(create_skill_tools(manager))
     if not registered.ok:
         raise RuntimeError(registered.message or "Could not register Skill tools.")
-    return Agent(gateway, registry, confirm, system_prompt=effective_prompt)
+    return Agent(
+        gateway,
+        registry,
+        confirm,
+        max_model_calls=max_model_calls,
+        system_prompt=effective_prompt,
+    )
 
 
 def _system_prompt_with_skills(base_prompt: str, catalog: dict[str, object]) -> str:

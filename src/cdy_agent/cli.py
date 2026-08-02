@@ -28,6 +28,7 @@ from .config import (
     WorkspaceConfig,
     load_workspace_config,
     resolve_api_mode,
+    resolve_max_model_calls,
     resolve_model,
     resolve_rebuild_frontend,
     resolve_streaming,
@@ -136,14 +137,21 @@ def _confirm_tool(request: ConfirmationRequest) -> ConfirmationDecision:
     return ConfirmationDecision.DENY
 
 
-def _create_agent(model: str, api_mode: str, workspace: Path) -> Agent:
+def _create_agent(
+    model: str,
+    api_mode: str,
+    workspace: Path,
+    max_model_calls: int | None = None,
+) -> Agent:
     """Construct the CLI's shared model-and-local-tools boundary."""
+    workspace_config = load_workspace_config(workspace)
     return create_agent_runtime(
         model=model,
         api_mode=api_mode,
         workspace=workspace,
         confirm=_confirm_tool,
-        system_prompt=resolve_system_prompt(load_workspace_config(workspace)),
+        max_model_calls=resolve_max_model_calls(max_model_calls, workspace_config),
+        system_prompt=resolve_system_prompt(workspace_config),
     )
 
 
@@ -597,6 +605,7 @@ def show_config(
         api_mode = resolve_api_mode(workspace_config)
         system_prompt = resolve_system_prompt(workspace_config)
         stream = resolve_streaming(workspace_config=workspace_config)
+        max_model_calls = resolve_max_model_calls(workspace_config=workspace_config)
         pricing = resolve_pricing(workspace_config)
         resolve_log_level(workspace_config)
     except REQUEST_ERRORS as exc:
@@ -608,6 +617,7 @@ def show_config(
     typer.echo(f"model: {model}")
     typer.echo(f"api_mode: {api_mode}")
     typer.echo(f"stream: {str(stream).lower()}")
+    typer.echo(f"max_model_calls: {max_model_calls}")
     typer.echo(f"system_prompt: {system_prompt}")
     typer.echo(f"log_level: {_effective_log_level_name(workspace_config)}")
     if pricing is None:
@@ -628,6 +638,10 @@ def run_evals(
         str | None,
         typer.Option(help="Model override for this eval run."),
     ] = None,
+    max_model_calls: Annotated[
+        int | None,
+        typer.Option(help="Maximum model calls allowed per eval case."),
+    ] = None,
     workspace: Annotated[
         Path | None,
         typer.Option(help="Directory available to local tools."),
@@ -639,7 +653,9 @@ def run_evals(
         _configure_logging_for_workspace(workspace_config)
         active_model = resolve_model(model, workspace_config)
         api_mode = resolve_api_mode(workspace_config)
-        agent = _create_agent(active_model, api_mode, active_workspace)
+        agent = _create_agent(
+            active_model, api_mode, active_workspace, max_model_calls
+        )
         report = run_eval_file(eval_file, agent)
     except REQUEST_ERRORS as exc:
         _fail_for_exception(exc)
@@ -737,6 +753,10 @@ def web(
             "By default built assets are reused and the build only runs when missing.",
         ),
     ] = None,
+    max_model_calls: Annotated[
+        int | None,
+        typer.Option(help="Maximum model calls allowed per Web turn."),
+    ] = None,
 ) -> None:
     """Start the authenticated local Web interface on IPv4 loopback."""
     listener: socket.socket | None = None
@@ -761,6 +781,7 @@ def web(
         active_model = resolve_model(workspace_config=workspace_config)
         api_mode = resolve_api_mode(workspace_config)
         system_prompt = resolve_system_prompt(workspace_config)
+        model_call_limit = resolve_max_model_calls(max_model_calls, workspace_config)
         pricing = resolve_pricing(workspace_config)
 
         auth = BrowserCapability.create("127.0.0.1", port)
@@ -770,6 +791,7 @@ def web(
             api_mode=api_mode,
             workspace=active_workspace,
             confirm=broker.confirm,
+            max_model_calls=model_call_limit,
             system_prompt=system_prompt,
         )
         conversations = ConversationStore(active_workspace)
@@ -838,6 +860,10 @@ def ask(
             help="Override streamed output for this request.",
         ),
     ] = None,
+    max_model_calls: Annotated[
+        int | None,
+        typer.Option(help="Maximum model calls allowed for this request."),
+    ] = None,
 ) -> None:
     """Send one prompt and print one model reply."""
     try:
@@ -850,7 +876,9 @@ def ask(
         api_mode = resolve_api_mode(workspace_config)
         stream_output = resolve_streaming(stream, workspace_config)
         pricing = resolve_pricing(workspace_config)
-        agent = _create_agent(active_model, api_mode, active_workspace)
+        agent = _create_agent(
+            active_model, api_mode, active_workspace, max_model_calls
+        )
         conversation = Conversation()
         conversation.append("user", normalized_prompt)
         if stream_output:
@@ -903,6 +931,10 @@ def chat(
             help="Override streamed output for this conversation.",
         ),
     ] = None,
+    max_model_calls: Annotated[
+        int | None,
+        typer.Option(help="Maximum model calls allowed per conversation turn."),
+    ] = None,
 ) -> None:
     """Start a new conversation or explicitly resume a saved one."""
     try:
@@ -913,7 +945,9 @@ def chat(
         stream_output = resolve_streaming(stream, workspace_config)
         pricing = resolve_pricing(workspace_config)
         store = ConversationStore(active_workspace)
-        agent = _create_agent(active_model, api_mode, active_workspace)
+        agent = _create_agent(
+            active_model, api_mode, active_workspace, max_model_calls
+        )
         conversation = Conversation()
         if resume is None:
             session_id = str(uuid4())

@@ -19,6 +19,7 @@ $env:OPENAI_API_KEY = "your-openai-key"
 $env:OPENAI_BASE_URL = "https://api.openai.com/v1"
 $env:CDY_AGENT_MODEL = "gpt-5.6-terra"
 $env:CDY_AGENT_API_MODE = "responses"
+$env:CDY_AGENT_MAX_MODEL_CALLS = "8"
 
 # 或 DeepSeek Chat Completions API
 $env:OPENAI_API_KEY = "your-deepseek-key"
@@ -35,6 +36,7 @@ $env:CDY_AGENT_API_MODE = "chat_completions"
 model: deepseek-v4-flash
 api_mode: chat_completions
 stream: false
+max_model_calls: 8
 log_level: INFO
 observability:
   input_cost_per_million: "1.25"
@@ -42,6 +44,8 @@ observability:
 ```
 
 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL` 不属于工作区配置，仍通过环境变量提供。流式输出的优先级为命令行 `--stream/--no-stream`、`CDY_AGENT_STREAM`、工作区 `stream`、默认关闭；环境变量接受 `1/true/yes/on` 和 `0/false/no/off`。
+
+每个 Agent 回合允许的最大模型调用次数按 `--max-model-calls`、`CDY_AGENT_MAX_MODEL_CALLS`、工作区 `max_model_calls`、默认值 `8` 的优先级解析。该值必须是正整数；`ask`、`chat`、`evals run` 和 `web` 都支持此命令行选项。
 可以查看当前 workspace 的有效非敏感配置：
 
 ```powershell
@@ -58,6 +62,7 @@ uv run cdy-agent ask "解释 Agent Loop" --model gpt-5.6-luna
 uv run cdy-agent ask "读取 README.md 并总结"
 uv run cdy-agent ask "检查仓库状态" --workspace .
 uv run cdy-agent ask "流式介绍这个项目" --stream
+uv run cdy-agent ask "检查仓库状态" --max-model-calls 12
 ```
 
 启动多轮会话：

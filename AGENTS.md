@@ -86,7 +86,7 @@ committed, overwritten casually, or used by tests outside a temporary workspace.
 Configuration precedence is CLI override, environment variable, workspace
 configuration, then built-in default where that setting supports all four layers.
 The workspace file accepts only `model`, `api_mode`, `system_prompt`, `stream`,
-`log_level`, `rebuild_frontend`, and an `observability` mapping containing
+`max_model_calls`, `log_level`, `rebuild_frontend`, and an `observability` mapping containing
 `input_cost_per_million`/`output_cost_per_million`.
 
 Supported environment variables are:
@@ -97,6 +97,8 @@ Supported environment variables are:
 - `CDY_AGENT_API_MODE` — exactly `responses` or `chat_completions`; defaults to
   `responses`.
 - `CDY_AGENT_STREAM` — boolean streaming default.
+- `CDY_AGENT_MAX_MODEL_CALLS` — positive integer model-call limit; defaults to
+  `8`, and `--max-model-calls` takes precedence where an Agent is created.
 - `CDY_AGENT_LOG_LEVEL` — `DEBUG`, `INFO`, `WARNING`, or `ERROR`.
 - `CDY_AGENT_REBUILD_FRONTEND` — boolean; when true the `web` command rebuilds the
   Vue production assets on every start. Defaults to false, which reuses an existing
@@ -195,7 +197,7 @@ new behavior and regression tests for fixes.
 - Use `tmp_path`; never read or mutate contributor workspace state.
 - Explicitly isolate all relevant provider/configuration environment variables,
   especially `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CDY_AGENT_API_MODE`, model,
-  streaming, logging, and pricing variables.
+  model-call limit, streaming, logging, and pricing variables.
 - Use the shared `make_symlink` fixture for tests that require symlink creation; it
   skips only when the current platform/account lacks that capability.
 - Test both `responses` and `chat_completions`, and both streaming and

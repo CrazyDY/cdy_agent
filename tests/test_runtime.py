@@ -37,11 +37,13 @@ def test_runtime_registers_skill_tools_and_catalog(
         api_mode="responses",
         workspace=tmp_path,
         confirm=lambda request: False,
+        max_model_calls=13,
         system_prompt="Base prompt",
     )
 
     assert agent._gateway is gateway
     assert agent._registry is registry
+    assert agent._max_model_calls == 13
     assert registry.registered == [skill_tools]
     assert agent._system_message is not None
     assert agent._system_message.content == (

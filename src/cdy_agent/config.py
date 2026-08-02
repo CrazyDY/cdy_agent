@@ -12,6 +12,7 @@ import yaml
 
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_API_MODE = "responses"
+DEFAULT_MAX_MODEL_CALLS = 8
 DEFAULT_SYSTEM_PROMPT = (
     "You are CDY Agent, a local personal AI assistant. Follow the user's "
     "instructions, use local tools only when useful, and avoid exposing secrets."
@@ -27,6 +28,7 @@ class WorkspaceConfig:
     api_mode: str | None = None
     system_prompt: str | None = None
     stream: bool | None = None
+    max_model_calls: int | None = None
     log_level: str | None = None
     rebuild_frontend: bool | None = None
     input_cost_per_million: str | None = None
@@ -52,6 +54,7 @@ def load_workspace_config(workspace: Path) -> WorkspaceConfig:
         "api_mode",
         "system_prompt",
         "stream",
+        "max_model_calls",
         "log_level",
         "rebuild_frontend",
         "observability",
@@ -82,6 +85,9 @@ def load_workspace_config(workspace: Path) -> WorkspaceConfig:
             raw_config.get("system_prompt"), "system_prompt"
         ),
         stream=_optional_bool(raw_config.get("stream"), "stream"),
+        max_model_calls=_optional_positive_int(
+            raw_config.get("max_model_calls"), "max_model_calls"
+        ),
         log_level=_optional_string(raw_config.get("log_level"), "log_level"),
         rebuild_frontend=_optional_bool(
             raw_config.get("rebuild_frontend"), "rebuild_frontend"
@@ -162,6 +168,30 @@ def resolve_streaming(
     return False
 
 
+def resolve_max_model_calls(
+    max_model_calls_override: int | None = None,
+    workspace_config: WorkspaceConfig | None = None,
+) -> int:
+    """Resolve the model-call limit from CLI, environment, config, or default."""
+    if max_model_calls_override is not None:
+        return _positive_int(max_model_calls_override, "--max-model-calls")
+
+    environment_value = os.getenv("CDY_AGENT_MAX_MODEL_CALLS")
+    if environment_value is not None:
+        try:
+            parsed_environment = int(environment_value.strip())
+        except ValueError:
+            raise ValueError(
+                "CDY_AGENT_MAX_MODEL_CALLS must be a positive integer."
+            ) from None
+        return _positive_int(parsed_environment, "CDY_AGENT_MAX_MODEL_CALLS")
+
+    if workspace_config and workspace_config.max_model_calls is not None:
+        return _positive_int(workspace_config.max_model_calls, "max_model_calls")
+
+    return DEFAULT_MAX_MODEL_CALLS
+
+
 def resolve_rebuild_frontend(
     rebuild_override: bool | None = None,
     workspace_config: WorkspaceConfig | None = None,
@@ -197,6 +227,20 @@ def _optional_bool(value: Any, name: str) -> bool | None:
         return None
     if not isinstance(value, bool):
         raise ValueError(f"Workspace config {name} must be true or false.")
+    return value
+
+
+def _optional_positive_int(value: Any, name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"Workspace config {name} must be a positive integer.")
+    return value
+
+
+def _positive_int(value: int, name: str) -> int:
+    if isinstance(value, bool) or value < 1:
+        raise ValueError(f"{name} must be a positive integer.")
     return value
 
 

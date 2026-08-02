@@ -274,6 +274,7 @@ def default_model_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "CDY_AGENT_OUTPUT_COST_PER_MILLION",
         "CDY_AGENT_LOG_LEVEL",
         "CDY_AGENT_STREAM",
+        "CDY_AGENT_MAX_MODEL_CALLS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -291,7 +292,13 @@ def test_ask_passes_normalized_user_message_to_agent(
     agent = FakeAgent()
     calls: list[tuple[str, str, Path]] = []
 
-    def fake_create_agent(model: str, api_mode: str, workspace: Path) -> FakeAgent:
+    def fake_create_agent(
+        model: str,
+        api_mode: str,
+        workspace: Path,
+        max_model_calls: int | None,
+    ) -> FakeAgent:
+        assert max_model_calls is None
         calls.append((model, api_mode, workspace))
         return agent
 
@@ -308,22 +315,32 @@ def test_ask_passes_normalized_user_message_to_agent(
 def test_ask_model_and_api_mode_are_resolved(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    seen: list[tuple[str, str, Path]] = []
+    seen: list[tuple[str, str, Path, int | None]] = []
     monkeypatch.setenv("CDY_AGENT_API_MODE", "chat_completions")
     monkeypatch.setattr(
         cli,
         "_create_agent",
-        lambda model, api_mode, workspace: (
-            seen.append((model, api_mode, workspace)) or FakeAgent()
+        lambda model, api_mode, workspace, max_model_calls: (
+            seen.append((model, api_mode, workspace, max_model_calls)) or FakeAgent()
         ),
     )
 
     result = runner.invoke(
-        app, ["ask", "Hello", "--model", "  cli-model  ", "--workspace", str(tmp_path)]
+        app,
+        [
+            "ask",
+            "Hello",
+            "--model",
+            "  cli-model  ",
+            "--max-model-calls",
+            "12",
+            "--workspace",
+            str(tmp_path),
+        ],
     )
 
     assert result.exit_code == 0
-    assert seen == [("cli-model", "chat_completions", tmp_path.resolve())]
+    assert seen == [("cli-model", "chat_completions", tmp_path.resolve(), 12)]
 
 
 def test_ask_uses_workspace_config_when_environment_is_absent(
@@ -340,7 +357,7 @@ def test_ask_uses_workspace_config_when_environment_is_absent(
     monkeypatch.setattr(
         cli,
         "_create_agent",
-        lambda model, api_mode, workspace: (
+        lambda model, api_mode, workspace, max_model_calls: (
             seen.append((model, api_mode, workspace)) or FakeAgent()
         ),
     )
@@ -399,7 +416,9 @@ def test_ask_defaults_workspace_to_invocation_directory(
     monkeypatch.setattr(
         cli,
         "_create_agent",
-        lambda model, api_mode, workspace: seen.append(workspace) or FakeAgent("ok"),
+        lambda model, api_mode, workspace, max_model_calls: (
+            seen.append(workspace) or FakeAgent("ok")
+        ),
     )
 
     result = runner.invoke(app, ["ask", "hello"])
@@ -852,7 +871,9 @@ def test_resumed_history_is_api_mode_neutral(
     monkeypatch.setattr(
         cli,
         "_create_agent",
-        lambda model, mode, workspace: seen_modes.append(mode) or agent,
+        lambda model, mode, workspace, max_model_calls: (
+            seen_modes.append(mode) or agent
+        ),
     )
 
     result = runner.invoke(
@@ -933,7 +954,9 @@ def test_chat_defaults_workspace_to_invocation_directory(
     monkeypatch.setattr(
         cli,
         "_create_agent",
-        lambda model, api_mode, workspace: seen.append(workspace) or FakeAgent(),
+        lambda model, api_mode, workspace, max_model_calls: (
+            seen.append(workspace) or FakeAgent()
+        ),
     )
 
     result = runner.invoke(app, ["chat"], input="/exit\n")
@@ -983,7 +1006,7 @@ def test_create_agent_delegates_runtime_and_keeps_cli_configuration(
         lambda **kwargs: seen.append(kwargs) or "agent",
     )
 
-    result = cli._create_agent("model", "responses", tmp_path)
+    result = cli._create_agent("model", "responses", tmp_path, 12)
 
     assert result == "agent"
     assert seen == [{
@@ -991,6 +1014,7 @@ def test_create_agent_delegates_runtime_and_keeps_cli_configuration(
         "api_mode": "responses",
         "workspace": tmp_path,
         "confirm": cli._confirm_tool,
+        "max_model_calls": 12,
         "system_prompt": cli.resolve_system_prompt(cli.WorkspaceConfig()),
     }]
 
@@ -1212,6 +1236,7 @@ def test_config_show_renders_effective_non_secret_configuration(
                 "model: workspace-model",
                 "api_mode: chat_completions",
                 "stream: true",
+                "max_model_calls: 12",
                 "log_level: INFO",
                 "observability:",
                 "  input_cost_per_million: '1.25'",
@@ -1229,6 +1254,7 @@ def test_config_show_renders_effective_non_secret_configuration(
     assert "model: workspace-model" in result.stdout
     assert "api_mode: responses" in result.stdout
     assert "stream: true" in result.stdout
+    assert "max_model_calls: 12" in result.stdout
     assert "log_level: INFO" in result.stdout
     assert "input_cost_per_million: 1.25" in result.stdout
     assert "output_cost_per_million: 2.50" in result.stdout

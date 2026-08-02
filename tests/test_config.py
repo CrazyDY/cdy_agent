@@ -1,15 +1,18 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from cdy_agent.config import (
     DEFAULT_API_MODE,
+    DEFAULT_MAX_MODEL_CALLS,
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
     SUPPORTED_API_MODES,
     WorkspaceConfig,
     load_workspace_config,
     resolve_api_mode,
+    resolve_max_model_calls,
     resolve_model,
     resolve_rebuild_frontend,
     resolve_streaming,
@@ -133,6 +136,52 @@ def test_streaming_defaults_to_false(
     monkeypatch.delenv("CDY_AGENT_STREAM", raising=False)
 
     assert resolve_streaming() is False
+
+
+def test_max_model_calls_defaults_to_agent_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_MAX_MODEL_CALLS", raising=False)
+
+    assert resolve_max_model_calls() == DEFAULT_MAX_MODEL_CALLS == 8
+
+
+def test_max_model_calls_respects_full_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_MAX_MODEL_CALLS", " 10 ")
+    config = WorkspaceConfig(max_model_calls=9)
+
+    assert resolve_max_model_calls(11, config) == 11
+    assert resolve_max_model_calls(workspace_config=config) == 10
+    monkeypatch.delenv("CDY_AGENT_MAX_MODEL_CALLS")
+    assert resolve_max_model_calls(workspace_config=config) == 9
+
+
+@pytest.mark.parametrize("configured", ["0", "-1", "abc", "", "1.5"])
+def test_invalid_max_model_calls_environment_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+) -> None:
+    monkeypatch.setenv("CDY_AGENT_MAX_MODEL_CALLS", configured)
+
+    with pytest.raises(ValueError, match="CDY_AGENT_MAX_MODEL_CALLS"):
+        resolve_max_model_calls()
+
+
+@pytest.mark.parametrize("configured", [0, -1, True, "8", 1.5])
+def test_workspace_config_rejects_invalid_max_model_calls(
+    tmp_path: Path,
+    configured: object,
+) -> None:
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        yaml.safe_dump({"max_model_calls": configured}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="max_model_calls"):
+        load_workspace_config(tmp_path)
 
 
 def test_workspace_config_supplies_streaming(
