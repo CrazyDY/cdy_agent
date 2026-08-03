@@ -180,7 +180,10 @@ class McpManager:
                     "mcp_executable_not_found",
                     f"Could not resolve MCP executable for server {name!r}.",
                 )
-            server = replace(server, command=str(Path(resolved).resolve()))
+            # Keep virtual-environment launcher symlinks intact. Resolving a venv's
+            # ``python`` symlink selects the base interpreter and drops the venv's
+            # site-packages, so Python-based MCP servers can no longer import MCP.
+            server = replace(server, command=os.path.abspath(resolved))
         return server, environment, headers
 
     def disconnect(self, name: str) -> ToolResult:
