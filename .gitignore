@@ -9,3 +9,8 @@ __pycache__/
 .cdy-agent/
 frontend/node_modules/
 src/cdy_agent/web/static/
+.idea
+.codegraph
+.claude
+.codebuddy
+.opencode
