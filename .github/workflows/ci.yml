@@ -57,10 +57,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
-        run: npm --prefix frontend ci
+        run: npm --prefix frontend install
 
       - name: Run frontend tests
         run: npm --prefix frontend test

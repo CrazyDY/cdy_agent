@@ -29,6 +29,7 @@ FRONTMATTER_FIELDS = {
     "compatibility",
     "metadata",
     "allowed-tools",
+    "version"
 }
 
 
@@ -318,11 +319,11 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
             "Skill allowed-tools must use single ASCII spaces between tokens."
         )
     metadata = values.get("metadata", {})
-    if not isinstance(metadata, dict) or not all(
-        isinstance(key, str) and isinstance(value, str)
-        for key, value in metadata.items()
-    ):
-        raise InvalidSkillError("Skill metadata must map strings to strings.")
+    # if not isinstance(metadata, dict) or not all(
+    #     isinstance(key, str) and isinstance(value, str)
+    #     for key, value in metadata.items()
+    # ):
+    #     raise InvalidSkillError("Skill metadata must map strings to strings.")
 
     instructions = "\n".join(lines[closing + 1 :]).strip()
     if not instructions:

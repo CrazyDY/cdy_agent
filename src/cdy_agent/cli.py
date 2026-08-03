@@ -780,7 +780,7 @@ def _build_web_frontend(*, rebuild: bool = False) -> None:
     if not (_FRONTEND_DIRECTORY / "node_modules").is_dir():
         _run_frontend_npm(
             npm,
-            ["ci"],
+            ["install"],
             environment,
             "Web interface dependency installation failed.",
         )
