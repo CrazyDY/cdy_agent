@@ -1,11 +1,16 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-.worktrees/
-.superpowers/sdd/
-.superpowers/brainstorm/
-.env
-.cdy-agent/
+# Ignore local IDE, tooling and temporary files
+.idea/
+.claude/
+.codebuddy/
+.codegraph/
+.mcp.json
+debug_cli.py
+frontend/.idea/
+*.iml
+# Node/npm build artifacts
 frontend/node_modules/
-src/cdy_agent/web/static/
+frontend/dist/
+
+# Optional local workspace state
+.cdy-agent/
+
