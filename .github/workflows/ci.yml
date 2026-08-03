@@ -56,7 +56,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "22"
-          cache: npm
 
       - name: Install frontend dependencies
         run: npm --prefix frontend install
