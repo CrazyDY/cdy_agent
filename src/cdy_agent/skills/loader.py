@@ -22,15 +22,6 @@ MAX_SKILL_BYTES = 256 * 1024
 MAX_RESOURCES = 512
 RESOURCE_CATEGORIES = ("scripts", "references", "assets")
 NAME_PATTERN = re.compile(r"(?=.{1,64}\Z)[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-FRONTMATTER_FIELDS = {
-    "name",
-    "description",
-    "license",
-    "compatibility",
-    "metadata",
-    "allowed-tools",
-    "version"
-}
 
 
 class InvalidSkillError(ValueError):
@@ -292,13 +283,10 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
         )
     except yaml.YAMLError as error:
         raise InvalidSkillError("SKILL.md metadata is invalid YAML.") from error
-    if not isinstance(values, dict) or not all(isinstance(key, str) for key in values):
+    if not isinstance(values, dict):
         raise InvalidSkillError("name and description are required.")
-    fields = set(values)
-    if not {"name", "description"}.issubset(fields):
+    if not {"name", "description"}.issubset(values):
         raise InvalidSkillError("name and description are required.")
-    if not fields.issubset(FRONTMATTER_FIELDS):
-        raise InvalidSkillError("Unknown Skill metadata fields are not allowed.")
     name = values["name"]
     description = values["description"]
     if not isinstance(name, str) or not isinstance(description, str):
@@ -311,19 +299,10 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
 
     license_value = _optional_string(values, "license")
     compatibility = _optional_string(values, "compatibility")
-    if compatibility is not None and len(compatibility) > 500:
-        raise InvalidSkillError("Skill compatibility must be 1 to 500 characters.")
     allowed_tools = _optional_string(values, "allowed-tools", strip=False)
-    if allowed_tools is not None and not _valid_allowed_tools(allowed_tools):
-        raise InvalidSkillError(
-            "Skill allowed-tools must use single ASCII spaces between tokens."
-        )
     metadata = values.get("metadata", {})
-    # if not isinstance(metadata, dict) or not all(
-    #     isinstance(key, str) and isinstance(value, str)
-    #     for key, value in metadata.items()
-    # ):
-    #     raise InvalidSkillError("Skill metadata must map strings to strings.")
+    if not isinstance(metadata, dict):
+        metadata = {}
 
     instructions = "\n".join(lines[closing + 1 :]).strip()
     if not instructions:
@@ -344,20 +323,9 @@ def _parse_skill(text: str) -> tuple[SkillMetadata, str]:
 def _optional_string(
     values: dict[object, object], field: str, *, strip: bool = True
 ) -> str | None:
-    if field not in values:
-        return None
-    value = values[field]
+    value = values.get(field)
     if not isinstance(value, str):
-        raise InvalidSkillError(f"Skill {field} must be a string.")
+        return None
     if strip:
         value = value.strip()
-    if not value:
-        raise InvalidSkillError(f"Skill {field} must not be empty.")
-    return value
-
-
-def _valid_allowed_tools(value: str) -> bool:
-    tokens = value.split(" ")
-    return all(tokens) and all(
-        character == " " or not character.isspace() for character in value
-    )
+    return value or None

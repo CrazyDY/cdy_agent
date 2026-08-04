@@ -2114,7 +2114,7 @@ def test_web_frontend_build_uses_npm_in_the_frontend_directory(
     assert environment["CDY_AGENT_WEB_STATIC_DIRECTORY"] == str(static)
 
 
-def test_web_frontend_build_installs_locked_dependencies_when_missing(
+def test_web_frontend_build_installs_dependencies_when_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     frontend = tmp_path / "frontend"
@@ -2139,7 +2139,7 @@ def test_web_frontend_build_installs_locked_dependencies_when_missing(
 
     cli._build_web_frontend()
 
-    assert calls == [["npm", "ci"], ["npm", "run", "build"]]
+    assert calls == [["npm", "install"], ["npm", "run", "build"]]
 
 
 def test_web_frontend_build_uses_packaged_assets_without_sources(

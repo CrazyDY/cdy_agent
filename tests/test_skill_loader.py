@@ -80,32 +80,30 @@ def test_rejects_quoted_skill_name_whitespace(tmp_path: Path, raw_name: str) -> 
     assert discovery.diagnostics[0].code == "invalid_skill"
 
 
-@pytest.mark.parametrize(
-    "raw_allowed_tools",
-    [
-        '" Read"',
-        '"Read "',
-        '"Read  Bash(git:*)"',
-        '"Read\\tBash(git:*)"',
-        '"Read\\nBash(git:*)"',
-    ],
-)
-def test_rejects_non_ascii_or_empty_allowed_tools_separators(
-    tmp_path: Path, raw_allowed_tools: str
-) -> None:
+def test_accepts_unknown_and_nonstandard_optional_metadata(tmp_path: Path) -> None:
     write_skill(
         tmp_path,
         frontmatter=(
             "name: sample-skill\n"
             "description: valid\n"
-            f"allowed-tools: {raw_allowed_tools}\n"
+            "license: 1\n"
+            "compatibility: false\n"
+            "metadata: metadata need not be a mapping\n"
+            'allowed-tools: "Read  Bash(git:*)"\n'
+            "version: 1\n"
+            "custom-field:\n"
+            "  nested: value\n"
         ),
     )
 
     discovery = discover_skills(tmp_path)
 
-    assert discovery.skills == ()
-    assert discovery.diagnostics[0].code == "invalid_skill"
+    assert discovery.diagnostics == ()
+    skill = discovery.skills[0]
+    assert skill.metadata.license is None
+    assert skill.metadata.compatibility is None
+    assert skill.metadata.metadata == {}
+    assert skill.metadata.allowed_tools == "Read  Bash(git:*)"
 
 
 @pytest.mark.parametrize(
@@ -114,7 +112,7 @@ def test_rejects_non_ascii_or_empty_allowed_tools_separators(
         (64, 1024, 500, True),
         (65, 1024, 500, False),
         (64, 1025, 500, False),
-        (64, 1024, 501, False),
+        (64, 1024, 501, True),
     ],
 )
 def test_metadata_length_boundaries(
@@ -151,18 +149,6 @@ def test_metadata_length_boundaries(
         ("bad--name", "name: bad--name\ndescription: valid\n"),
         ("sample-skill", "name: other-name\ndescription: valid\n"),
         ("sample-skill", "name: sample-skill\ndescription: ''\n"),
-        (
-            "sample-skill",
-            "name: sample-skill\ndescription: valid\nunknown: value\n",
-        ),
-        (
-            "sample-skill",
-            "name: sample-skill\ndescription: valid\nmetadata:\n  version: 1\n",
-        ),
-        (
-            "sample-skill",
-            "name: sample-skill\ndescription: valid\nallowed-tools: 1\n",
-        ),
     ],
 )
 def test_rejects_nonstandard_frontmatter(
@@ -271,7 +257,6 @@ def test_rejects_oversized_skill_file(tmp_path: Path) -> None:
         "# no metadata\n",
         "---\nname: Bad-Name\ndescription: bad\n---\nbody\n",
         "---\nname: sample-skill\ndescription:\n---\nbody\n",
-        "---\nname: sample-skill\ndescription: ok\nextra: no\n---\nbody\n",
         "---\nname: sample-skill\ndescription: ok\n---\n   \n",
     ],
 )

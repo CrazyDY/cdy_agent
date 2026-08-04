@@ -8,6 +8,7 @@ __pycache__/
 .env
 .cdy-agent/
 frontend/node_modules/
+frontend/package-lock.json
 src/cdy_agent/web/static/
 .idea
 .codegraph
