@@ -31,11 +31,11 @@ cdy-agent = "cdy_agent.cli:app"
 pythonpath = ["src"]
 testpaths = ["tests"]
 
+[tool.hatch.build]
+artifacts = ["/src/cdy_agent/web/static/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/cdy_agent"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/cdy_agent/web/static" = "cdy_agent/web/static"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -44,9 +44,6 @@ include = [
   "/pyproject.toml",
   "/uv.lock",
 ]
-
-[tool.hatch.build.targets.sdist.force-include]
-"src/cdy_agent/web/static" = "src/cdy_agent/web/static"
 
 [dependency-groups]
 dev = [
