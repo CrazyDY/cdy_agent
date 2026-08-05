@@ -85,14 +85,15 @@ committed, overwritten casually, or used by tests outside a temporary workspace.
 
 Configuration precedence is CLI override, environment variable, workspace
 configuration, then built-in default where that setting supports all four layers.
-The workspace file accepts only `model`, `api_mode`, `system_prompt`, `stream`,
+The workspace file accepts only `model`, `api_mode`, `base_url`, `system_prompt`, `stream`,
 `max_model_calls`, `log_level`, `rebuild_frontend`, and an `observability` mapping containing
 `input_cost_per_million`/`output_cost_per_million`.
 
 Supported environment variables are:
 
 - `OPENAI_API_KEY` — provider credential; required for real calls and never stored.
-- `OPENAI_BASE_URL` — OpenAI-compatible provider or gateway URL.
+- `OPENAI_BASE_URL` — OpenAI-compatible provider or gateway URL; overrides the
+  workspace `base_url` setting.
 - `CDY_AGENT_MODEL` — default model unless `--model` overrides it.
 - `CDY_AGENT_API_MODE` — exactly `responses` or `chat_completions`; defaults to
   `responses`.

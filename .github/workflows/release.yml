@@ -65,13 +65,10 @@ jobs:
       - name: Build frontend assets
         run: npm --prefix frontend run build
 
-      - name: Remove generated frontend assets from distributions
-        run: rm -rf src/cdy_agent/web/static
-
       - name: Build Python distributions
         run: uv build --no-sources
 
-      - name: Verify distributions exclude generated frontend assets
+      - name: Verify distributions contain only compiled frontend assets
         run: |
           uv run --frozen python - <<'PY'
           import tarfile
@@ -82,11 +79,16 @@ jobs:
           sdist = next(Path("dist").glob("*.tar.gz"))
           wheel_files = zipfile.ZipFile(wheel).namelist()
           sdist_files = tarfile.open(sdist).getnames()
-          generated_path = "cdy_agent/web/static/"
-          assert not any(generated_path in name for name in wheel_files)
-          assert not any(generated_path in name for name in sdist_files)
-          assert "cdy_agent/frontend/package.json" in wheel_files
-          assert any(name.endswith("/frontend/package.json") for name in sdist_files)
+          assert "cdy_agent/web/static/index.html" in wheel_files
+          assert any(
+              name.endswith("/src/cdy_agent/web/static/index.html")
+              for name in sdist_files
+          )
+
+          assert not any(
+              "/frontend/" in name or name.startswith("frontend/")
+              for name in wheel_files + sdist_files
+          )
           PY
 
       - name: Smoke test wheel

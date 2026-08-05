@@ -1959,6 +1959,29 @@ def test_generate_reply_creates_default_sdk_client(
     assert factory_calls == [True]
 
 
+def test_model_gateway_passes_configured_base_url_to_sdk_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
+    client = FakeClient()
+    factory_calls: list[dict[str, object]] = []
+
+    def fake_openai_factory(**kwargs: object) -> FakeClient:
+        factory_calls.append(kwargs)
+        return client
+
+    monkeypatch.setattr(openai_client, "OpenAI", fake_openai_factory)
+
+    gateway = openai_client.ModelGateway(
+        model="test-model",
+        api_mode="responses",
+        base_url="https://provider.example/v1",
+    )
+
+    assert gateway.client is client
+    assert factory_calls == [{"base_url": "https://provider.example/v1"}]
+
+
 @pytest.mark.parametrize("api_key", [None, "   "])
 def test_generate_reply_rejects_missing_api_key_before_sdk_factory(
     monkeypatch: pytest.MonkeyPatch,

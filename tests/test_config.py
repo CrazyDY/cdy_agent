@@ -12,6 +12,7 @@ from cdy_agent.config import (
     WorkspaceConfig,
     load_workspace_config,
     resolve_api_mode,
+    resolve_base_url,
     resolve_max_model_calls,
     resolve_model,
     resolve_rebuild_frontend,
@@ -128,6 +129,37 @@ def test_workspace_config_supplies_model_and_api_mode(
 
     assert resolve_model(workspace_config=config) == "workspace-model"
     assert resolve_api_mode(workspace_config=config) == "chat_completions"
+
+
+def test_base_url_respects_environment_and_workspace_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    config_dir = tmp_path / ".cdy-agent"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        "base_url: https://workspace.example/v1\n",
+        encoding="utf-8",
+    )
+    config = load_workspace_config(tmp_path)
+
+    assert config.base_url == "https://workspace.example/v1"
+    assert resolve_base_url(config) == "https://workspace.example/v1"
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "  https://environment.example/v1  ")
+    assert resolve_base_url(config) == "https://environment.example/v1"
+
+
+def test_blank_base_url_falls_back_to_workspace_or_sdk_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "   ")
+
+    assert resolve_base_url(WorkspaceConfig(base_url=" workspace-url ")) == (
+        "workspace-url"
+    )
+    assert resolve_base_url(WorkspaceConfig(base_url="   ")) is None
 
 
 def test_streaming_defaults_to_false(

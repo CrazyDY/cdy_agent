@@ -65,6 +65,7 @@ class ModelGateway:
         *,
         model: str,
         api_mode: str,
+        base_url: str | None = None,
         client: OpenAI | None = None,
     ) -> None:
         if api_mode not in {"responses", "chat_completions"}:
@@ -73,7 +74,7 @@ class ModelGateway:
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key or not api_key.strip():
                 raise MissingAPIKeyError("OPENAI_API_KEY is required.")
-            client = OpenAI()
+            client = OpenAI(base_url=base_url) if base_url is not None else OpenAI()
         self.model = model
         self.api_mode = api_mode
         self.client = client

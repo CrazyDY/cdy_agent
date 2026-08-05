@@ -1016,6 +1016,7 @@ def test_create_agent_delegates_runtime_and_keeps_cli_configuration(
         "confirm": cli._confirm_tool,
         "max_model_calls": 12,
         "system_prompt": cli.resolve_system_prompt(cli.WorkspaceConfig()),
+        "base_url": None,
     }]
 
 
@@ -1228,6 +1229,7 @@ def test_config_show_renders_effective_non_secret_configuration(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("CDY_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.setenv("CDY_AGENT_API_MODE", "responses")
     (tmp_path / ".cdy-agent").mkdir()
     (tmp_path / ".cdy-agent" / "config.yaml").write_text(
@@ -1235,6 +1237,7 @@ def test_config_show_renders_effective_non_secret_configuration(
             [
                 "model: workspace-model",
                 "api_mode: chat_completions",
+                "base_url: https://workspace.example/v1",
                 "stream: true",
                 "max_model_calls: 12",
                 "log_level: INFO",
@@ -1253,6 +1256,7 @@ def test_config_show_renders_effective_non_secret_configuration(
     assert "Workspace config:" in result.stdout
     assert "model: workspace-model" in result.stdout
     assert "api_mode: responses" in result.stdout
+    assert "base_url: https://workspace.example/v1" in result.stdout
     assert "stream: true" in result.stdout
     assert "max_model_calls: 12" in result.stdout
     assert "log_level: INFO" in result.stdout
@@ -1390,16 +1394,25 @@ def test_create_agent_registers_five_standard_skill_tools(
 def test_create_agent_loads_system_prompt_from_workspace_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(runtime, "ModelGateway", lambda **kwargs: object())
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    gateway_options: list[dict[str, object]] = []
+
+    def create_gateway(**kwargs: object) -> object:
+        gateway_options.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(runtime, "ModelGateway", create_gateway)
     (tmp_path / ".cdy-agent").mkdir()
     (tmp_path / ".cdy-agent" / "config.yaml").write_text(
-        "system_prompt: Workspace instructions.\n",
+        "system_prompt: Workspace instructions.\n"
+        "base_url: https://workspace.example/v1\n",
         encoding="utf-8",
     )
 
     agent = cli._create_agent("model", "responses", tmp_path)
 
     assert agent._system_message == Message("system", "Workspace instructions.")
+    assert gateway_options[0]["base_url"] == "https://workspace.example/v1"
 
 
 def test_ask_reports_management_tool_registration_failure_without_model_execution(
@@ -2074,7 +2087,18 @@ def test_web_command_binds_loopback_and_prints_only_the_intentional_launch_url(
         "close",
     ]
     assert calls == [
-        ((web_app, {"host": "127.0.0.1", "port": 8000, "log_config": None}), [listener])
+        (
+            (
+                web_app,
+                {
+                    "host": "127.0.0.1",
+                    "port": 8000,
+                    "log_level": "info",
+                    "access_log": False,
+                },
+            ),
+            [listener],
+        )
     ]
     assert listener.closed is True
     assert opened == []

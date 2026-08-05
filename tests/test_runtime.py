@@ -9,6 +9,7 @@ from cdy_agent.tools.base import ToolResult
 def test_runtime_registers_skill_tools_and_catalog(monkeypatch, tmp_path: Path) -> None:
     """Omitting Skill composition would hide available Skills from the model."""
     gateway = object()
+    gateway_options: list[dict[str, object]] = []
     skill_tools = object()
 
     class RecordingRegistry:
@@ -25,7 +26,11 @@ def test_runtime_registers_skill_tools_and_catalog(monkeypatch, tmp_path: Path) 
 
     registry = RecordingRegistry()
     manager = FakeSkillManager()
-    monkeypatch.setattr(runtime, "ModelGateway", lambda **kwargs: gateway)
+    def create_gateway(**kwargs: object) -> object:
+        gateway_options.append(kwargs)
+        return gateway
+
+    monkeypatch.setattr(runtime, "ModelGateway", create_gateway)
     monkeypatch.setattr(runtime, "create_builtin_registry", lambda path: registry)
     monkeypatch.setattr(runtime, "SkillManager", lambda path: manager)
     monkeypatch.setattr(
@@ -39,9 +44,17 @@ def test_runtime_registers_skill_tools_and_catalog(monkeypatch, tmp_path: Path) 
         confirm=lambda request: False,
         max_model_calls=13,
         system_prompt="Base prompt",
+        base_url="https://provider.example/v1",
     )
 
     assert agent._gateway is gateway
+    assert gateway_options == [
+        {
+            "model": "test-model",
+            "api_mode": "responses",
+            "base_url": "https://provider.example/v1",
+        }
+    ]
     assert agent._registry is registry
     assert agent._max_model_calls == 13
     assert registry.registered == [skill_tools]

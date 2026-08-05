@@ -101,7 +101,7 @@ recorder 不负责文件 IO，也不接触 prompt、回复或工具载荷。
 ### `observability/logging.py`
 
 配置标准库 `logging` 向 stderr 输出单行 JSON。`CDY_AGENT_LOG_LEVEL` 只接受
-`DEBUG`、`INFO`、`WARNING`、`ERROR`，默认 `WARNING`；无效值属于启动阶段配置错误。
+`DEBUG`、`INFO`、`WARNING`、`ERROR`，普通 CLI 命令默认 `WARNING`，Web 服务默认 `INFO`；无效值属于启动阶段配置错误。Web 服务保留 Uvicorn 启动、关闭和错误日志，但关闭可能包含一次性能力参数的原始 HTTP access log。
 
 `INFO` 记录 trace 开始和结束，`DEBUG` 记录模型与工具 span 完成。固定字段包括
 时间、级别、事件名、trace ID、可选 span ID、状态和耗时。不得包含 prompt、回复、

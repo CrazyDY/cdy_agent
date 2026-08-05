@@ -26,6 +26,7 @@ CONFIG_RELATIVE_PATH = Path(".cdy-agent") / "config.yaml"
 class WorkspaceConfig:
     model: str | None = None
     api_mode: str | None = None
+    base_url: str | None = None
     system_prompt: str | None = None
     stream: bool | None = None
     max_model_calls: int | None = None
@@ -52,6 +53,7 @@ def load_workspace_config(workspace: Path) -> WorkspaceConfig:
     allowed_top_level = {
         "model",
         "api_mode",
+        "base_url",
         "system_prompt",
         "stream",
         "max_model_calls",
@@ -81,6 +83,7 @@ def load_workspace_config(workspace: Path) -> WorkspaceConfig:
     return WorkspaceConfig(
         model=_optional_string(raw_config.get("model"), "model"),
         api_mode=_optional_string(raw_config.get("api_mode"), "api_mode"),
+        base_url=_optional_string(raw_config.get("base_url"), "base_url"),
         system_prompt=_optional_string(
             raw_config.get("system_prompt"), "system_prompt"
         ),
@@ -137,6 +140,20 @@ def resolve_api_mode(workspace_config: WorkspaceConfig | None = None) -> str:
             f"Choose one of: {supported}."
         )
     return normalized_mode
+
+
+def resolve_base_url(workspace_config: WorkspaceConfig | None = None) -> str | None:
+    """Resolve the provider base URL from environment or workspace config."""
+    environment_base_url = os.getenv("OPENAI_BASE_URL")
+    if environment_base_url and environment_base_url.strip():
+        return environment_base_url.strip()
+
+    if workspace_config and workspace_config.base_url:
+        configured_base_url = workspace_config.base_url.strip()
+        if configured_base_url:
+            return configured_base_url
+
+    return None
 
 
 def resolve_system_prompt(workspace_config: WorkspaceConfig | None = None) -> str:

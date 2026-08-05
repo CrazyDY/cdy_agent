@@ -59,6 +59,15 @@ def resolve_log_level(workspace_config: WorkspaceConfig | None = None) -> int:
     return LEVELS[configured]
 
 
+def resolve_web_log_level(workspace_config: WorkspaceConfig | None = None) -> int:
+    """Default Web monitoring to INFO while respecting explicit log settings."""
+    if os.getenv("CDY_AGENT_LOG_LEVEL") is None and (
+        workspace_config is None or workspace_config.log_level is None
+    ):
+        return logging.INFO
+    return resolve_log_level(workspace_config)
+
+
 def configure_structured_logging(level: int) -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())

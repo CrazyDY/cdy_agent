@@ -156,8 +156,9 @@ Behavior:
 - Startup errors are rendered by the CLI using its existing user-facing error
   conventions.
 
-`OPENAI_API_KEY` and `OPENAI_BASE_URL` remain environment-only. No secret is sent
-to the browser or written to workspace configuration.
+`OPENAI_API_KEY` remains environment-only. The non-secret provider Base URL may
+come from `OPENAI_BASE_URL` or workspace `base_url`, with the environment taking
+precedence. No secret is sent to the browser or written to workspace configuration.
 
 ## Architecture
 

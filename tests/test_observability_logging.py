@@ -8,6 +8,7 @@ from cdy_agent.observability.logging import (
     configure_structured_logging,
     log_event,
     resolve_log_level,
+    resolve_web_log_level,
 )
 
 TRACE_ID = "f8605a17-cf86-46ce-87ad-7db57533e5dc"
@@ -30,6 +31,18 @@ def test_workspace_config_supplies_log_level_when_environment_is_absent(
     monkeypatch.delenv("CDY_AGENT_LOG_LEVEL", raising=False)
 
     assert resolve_log_level(WorkspaceConfig(log_level="INFO")) == logging.INFO
+
+
+def test_web_logging_defaults_to_info_and_respects_explicit_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CDY_AGENT_LOG_LEVEL", raising=False)
+
+    assert resolve_web_log_level() == logging.INFO
+    assert resolve_web_log_level(WorkspaceConfig(log_level="ERROR")) == logging.ERROR
+
+    monkeypatch.setenv("CDY_AGENT_LOG_LEVEL", "DEBUG")
+    assert resolve_web_log_level(WorkspaceConfig(log_level="ERROR")) == logging.DEBUG
 
 
 def test_environment_log_level_wins_over_workspace_config(

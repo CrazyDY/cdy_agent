@@ -28,6 +28,18 @@ def test_empty_store_reads_without_creating_data_directory(tmp_path: Path) -> No
     assert not (tmp_path / ".cdy-agent").exists()
 
 
+def test_missing_store_files_read_as_empty_when_data_directory_exists(
+    tmp_path: Path,
+) -> None:
+    data_directory = tmp_path / ".cdy-agent"
+    data_directory.mkdir()
+    store = PersonalStore(tmp_path)
+
+    assert store.load_notes().data == []
+    assert store.load_todos().data == []
+    assert list(data_directory.iterdir()) == []
+
+
 def test_store_persists_versioned_note_and_todo_documents(tmp_path: Path) -> None:
     store = PersonalStore(tmp_path)
 

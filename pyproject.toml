@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cdy-agent"
-version = "0.1.4"
+version = "0.1.5"
 description = "A small OpenAI Python SDK based personal AI agent with local skill support."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,26 +35,18 @@ testpaths = ["tests"]
 packages = ["src/cdy_agent"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"frontend/index.html" = "cdy_agent/frontend/index.html"
-"frontend/package.json" = "cdy_agent/frontend/package.json"
-"frontend/src" = "cdy_agent/frontend/src"
-"frontend/tsconfig.app.json" = "cdy_agent/frontend/tsconfig.app.json"
-"frontend/tsconfig.json" = "cdy_agent/frontend/tsconfig.json"
-"frontend/tsconfig.node.json" = "cdy_agent/frontend/tsconfig.node.json"
-"frontend/vite.config.ts" = "cdy_agent/frontend/vite.config.ts"
+"src/cdy_agent/web/static" = "cdy_agent/web/static"
 
 [tool.hatch.build.targets.sdist]
 include = [
   "/src",
-  "/frontend",
   "/README.md",
   "/pyproject.toml",
   "/uv.lock",
 ]
-exclude = [
-  "/frontend/node_modules",
-  "/frontend/node_modules/**",
-]
+
+[tool.hatch.build.targets.sdist.force-include]
+"src/cdy_agent/web/static" = "src/cdy_agent/web/static"
 
 [dependency-groups]
 dev = [

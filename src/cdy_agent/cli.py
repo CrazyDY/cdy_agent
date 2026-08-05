@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import socket
@@ -28,6 +29,7 @@ from .config import (
     WorkspaceConfig,
     load_workspace_config,
     resolve_api_mode,
+    resolve_base_url,
     resolve_max_model_calls,
     resolve_model,
     resolve_rebuild_frontend,
@@ -53,7 +55,11 @@ from .observability import (
     TraceStoreError,
     resolve_pricing,
 )
-from .observability.logging import configure_structured_logging, resolve_log_level
+from .observability.logging import (
+    configure_structured_logging,
+    resolve_log_level,
+    resolve_web_log_level,
+)
 from .openai_client import MissingAPIKeyError
 from .runtime import create_agent_runtime
 from .tools.base import ConfirmationDecision, ConfirmationRequest, ToolResult
@@ -162,6 +168,7 @@ def _create_agent(
         confirm=_confirm_tool,
         max_model_calls=resolve_max_model_calls(max_model_calls, workspace_config),
         system_prompt=resolve_system_prompt(workspace_config),
+        base_url=resolve_base_url(workspace_config),
     )
 
 
@@ -613,6 +620,7 @@ def show_config(
         active_workspace, workspace_config = _load_configured_workspace(workspace)
         model = resolve_model(workspace_config=workspace_config)
         api_mode = resolve_api_mode(workspace_config)
+        base_url = resolve_base_url(workspace_config)
         system_prompt = resolve_system_prompt(workspace_config)
         stream = resolve_streaming(workspace_config=workspace_config)
         max_model_calls = resolve_max_model_calls(workspace_config=workspace_config)
@@ -627,6 +635,7 @@ def show_config(
     typer.echo(f"Workspace config: {config_path if config_path.exists() else '-'}")
     typer.echo(f"model: {model}")
     typer.echo(f"api_mode: {api_mode}")
+    typer.echo(f"base_url: {base_url or '-'}")
     typer.echo(f"stream: {str(stream).lower()}")
     typer.echo(f"max_model_calls: {max_model_calls}")
     typer.echo(f"system_prompt: {system_prompt}")
@@ -858,9 +867,11 @@ def web(
         active_workspace, workspace_config = _load_configured_workspace(workspace)
         rebuild = resolve_rebuild_frontend(rebuild_frontend, workspace_config)
         _build_web_frontend(rebuild=rebuild)
-        _configure_logging_for_workspace(workspace_config)
+        log_level = resolve_web_log_level(workspace_config)
+        configure_structured_logging(log_level)
         active_model = resolve_model(workspace_config=workspace_config)
         api_mode = resolve_api_mode(workspace_config)
+        base_url = resolve_base_url(workspace_config)
         system_prompt = resolve_system_prompt(workspace_config)
         model_call_limit = resolve_max_model_calls(max_model_calls, workspace_config)
         pricing = resolve_pricing(workspace_config)
@@ -874,6 +885,7 @@ def web(
             confirm=broker.confirm,
             max_model_calls=model_call_limit,
             system_prompt=system_prompt,
+            base_url=base_url,
         )
         conversations = ConversationStore(active_workspace)
         coordinator = TurnCoordinator(
@@ -905,7 +917,8 @@ def web(
                 server,
                 host="127.0.0.1",
                 port=port,
-                log_config=None,
+                log_level=logging.getLevelName(log_level).lower(),
+                access_log=False,
             )
         )
         if open_browser:

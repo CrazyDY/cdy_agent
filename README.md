@@ -9,7 +9,7 @@ CDY Agent 是一个本地个人 AI 助理项目，通过渐进式开发学习实
 ## 配置
 
 配置按以下顺序分层解析：命令行选项、环境变量、工作区配置文件、内置默认值。
-API 凭证仍只从环境变量读取，不写入配置文件。
+API 凭证仍只从环境变量读取，不写入配置文件；非敏感的 provider Base URL 可以写入工作区配置。
 
 在当前 PowerShell 会话中选择 API 模式并配置相应的提供商：
 
@@ -35,6 +35,7 @@ $env:CDY_AGENT_API_MODE = "chat_completions"
 ```yaml
 model: deepseek-v4-flash
 api_mode: chat_completions
+base_url: https://api.deepseek.com
 stream: false
 max_model_calls: 8
 log_level: INFO
@@ -43,7 +44,7 @@ observability:
   output_cost_per_million: "2.50"
 ```
 
-`OPENAI_API_KEY` 和 `OPENAI_BASE_URL` 不属于工作区配置，仍通过环境变量提供。流式输出的优先级为命令行 `--stream/--no-stream`、`CDY_AGENT_STREAM`、工作区 `stream`、默认关闭；环境变量接受 `1/true/yes/on` 和 `0/false/no/off`。
+`OPENAI_API_KEY` 仍只通过环境变量提供，不会写入工作区配置。Provider Base URL 的优先级为环境变量 `OPENAI_BASE_URL`、工作区 `base_url`、OpenAI SDK 默认地址。流式输出的优先级为命令行 `--stream/--no-stream`、`CDY_AGENT_STREAM`、工作区 `stream`、默认关闭；环境变量接受 `1/true/yes/on` 和 `0/false/no/off`。
 
 每个 Agent 回合允许的最大模型调用次数按 `--max-model-calls`、`CDY_AGENT_MAX_MODEL_CALLS`、工作区 `max_model_calls`、默认值 `8` 的优先级解析。该值必须是正整数；`ask`、`chat`、`evals run` 和 `web` 都支持此命令行选项。
 可以查看当前 workspace 的有效非敏感配置：
@@ -165,7 +166,7 @@ uv run cdy-agent traces list --workspace .
 uv run cdy-agent traces show <trace-id> --workspace .
 ```
 
-两个价格变量都是可选项；一旦配置，就必须成对设置，且都必须是非负十进制数。它们也可以写入工作区配置文件的 `observability` 区块。`CDY_AGENT_LOG_LEVEL` 只接受 `DEBUG`、`INFO`、`WARNING`、`ERROR`，默认值为 `WARNING`；单行 JSON 日志写入 stderr。
+两个价格变量都是可选项；一旦配置，就必须成对设置，且都必须是非负十进制数。它们也可以写入工作区配置文件的 `observability` 区块。`CDY_AGENT_LOG_LEVEL` 只接受 `DEBUG`、`INFO`、`WARNING`、`ERROR`；普通 CLI 命令默认 `WARNING`，Web 服务为便于监控默认 `INFO`。单行 JSON 应用日志写入 stderr，Web 还会输出 Uvicorn 的启动、关闭和错误日志；原始 HTTP access log 保持关闭，避免一次性浏览器能力参数出现在终端。Web 的 `INFO` 日志可监控 Agent 回合的开始、完成和耗时，`DEBUG` 还会显示经过脱敏的模型及工具调用完成事件。
 
 每次实际执行 `ask` 都会创建一条轨迹；`chat` 中每个非空且不是退出命令的用户回合都会创建一条轨迹，并关联当前会话。空输入、`/exit`、`/quit` 和 EOF 不会创建轨迹。
 
@@ -340,7 +341,7 @@ cases:
 
 ## 开发
 
-非 Web 命令只需要 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/)。从源码运行 Web UI 还需要 Node.js/npm；前端使用 `frontend/package-lock.json` 锁定依赖。生产构建写入 `src/cdy_agent/web/static/`，该目录是被 Git 忽略的生成物，不提交 source map 或其他构建产物。
+非 Web 命令只需要 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/)。从源码运行 Web UI 还需要 Node.js/npm；前端使用 `frontend/package-lock.json` 锁定依赖。生产构建写入 `src/cdy_agent/web/static/`，该目录是被 Git 忽略的生成物，不提交 source map。发布工作流会先生成该目录，再将编译后的资源包含在 wheel 和 sdist 中。
 
 ```powershell
 uv sync --extra dev --default-index https://pypi.org/simple
@@ -366,7 +367,7 @@ npm --prefix frontend test
 npm --prefix frontend run build
 ```
 
-构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。哈希化的 `index.html`、CSS 和 JavaScript 都是本地生成物，不由 Git 管理，也不进入 wheel 或 sdist。wheel 会在 `cdy_agent/frontend/` 中携带前端源码、锁文件和构建配置，但不包含 `node_modules`；从 wheel 安装后首次启动 Web 服务会先执行 `npm ci` 安装锁定依赖，再把生产资源构建到已安装包的 `cdy_agent/web/static/`。发布流程运行前端构建作为质量检查，并在执行 `uv build` 前删除生成目录。
+构建会先执行 `vue-tsc`，再清空并写入 `src/cdy_agent/web/static/`。哈希化的 `index.html`、CSS 和 JavaScript 都是本地生成物，不由 Git 管理。发布流程会将这些编译后的资源打入 wheel 和 sdist，并验证分发包不包含 `frontend/src/`、npm 清单、锁文件或 TypeScript/Vite 构建配置；安装后的 Web 服务直接使用包内静态资源，不需要 Node.js/npm。
 
 ## 发布
 

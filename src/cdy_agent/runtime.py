@@ -20,9 +20,10 @@ def create_agent_runtime(
     confirm: ConfirmationCallback,
     max_model_calls: int,
     system_prompt: str | None = None,
+    base_url: str | None = None,
 ) -> Agent:
     """Compose the model gateway, local tools, Skills, and Agent loop."""
-    gateway = ModelGateway(model=model, api_mode=api_mode)
+    gateway = ModelGateway(model=model, api_mode=api_mode, base_url=base_url)
     registry = create_builtin_registry(workspace)
     manager = SkillManager(workspace)
     catalog = manager.list_skills()

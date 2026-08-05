@@ -145,7 +145,7 @@ src/cdy_agent/
 
 本阶段已经完成，并由独立 MCP 客户端设计约束。项目通过官方 Python MCP SDK v2 支持 stdio 与 Streamable HTTP Server，按需连接后把远程 Tools 动态加入原有 `ToolRegistry`，并通过固定代理工具读取 Resources、Resource Templates 和 Prompts。连接和每次远程 Tool 调用都复用现有审批流；凭据仅通过环境变量引用，所有连接在 CLI、评估和 Web 生命周期结束时关闭。OAuth、旧 SSE transport、MCP Tasks、Roots、Sampling、Elicitation 以及把 CDY 暴露为 MCP Server 仍不属于本阶段目标。
 
-Web UI 支持新建、列出、恢复和确认删除会话、流式助手文本、通用工具状态、完整工具确认选择、Stop 与 Retry。Shell 的持久允许继续严格绑定准备后的完整可执行文件和精确 argv。Stop、页面刷新、断开和服务器关闭会协作取消模型流、确认等待与可取消子进程；失败或取消的轮次不持久化，已经完成的副作用不自动回滚。从源码树运行 `cdy-agent web` 时会先执行 Vue 生产构建，构建失败则不启动服务；`src/cdy_agent/web/static/` 是 Git 忽略的生成目录，不进入 wheel 或 sdist。wheel 携带前端源码、锁文件与构建配置但不携带 `node_modules`，安装后的首次 Web 启动会安装锁定依赖并在包内生成静态资源。GitHub Actions 验证 Python 与前端、构建并检查分发包，再通过 PyPI Trusted Publishing 发布标签版本。
+Web UI 支持新建、列出、恢复和确认删除会话、流式助手文本、通用工具状态、完整工具确认选择、Stop 与 Retry。Shell 的持久允许继续严格绑定准备后的完整可执行文件和精确 argv。Stop、页面刷新、断开和服务器关闭会协作取消模型流、确认等待与可取消子进程；失败或取消的轮次不持久化，已经完成的副作用不自动回滚。从源码树运行 `cdy-agent web` 时会按配置执行 Vue 生产构建，构建失败则不启动服务；`src/cdy_agent/web/static/` 是 Git 忽略的生成目录。发布工作流生成该目录并将编译后的静态资源打入 wheel 和 sdist，不携带前端源码、npm 清单、锁文件或 TypeScript/Vite 构建配置，因此安装后的 Web 服务不依赖 Node.js/npm。Web 终端默认输出 Uvicorn 生命周期以及脱敏的 Agent 回合日志，同时关闭可能泄漏一次性能力参数的原始 HTTP access log。Provider Base URL 可由 `OPENAI_BASE_URL` 或工作区 `base_url` 提供，环境变量优先；API Key 仍不进入工作区配置。GitHub Actions 验证 Python 与前端、构建并检查分发包，再通过 PyPI Trusted Publishing 发布标签版本。
 
 ## 错误处理
 

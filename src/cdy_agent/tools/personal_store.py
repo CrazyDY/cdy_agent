@@ -139,7 +139,7 @@ class PersonalStore:
                         "store_error", "Personal data path is not a file."
                     )
                 return resolved_target
-            return target
+            return target if create_directory else None
         except ValueError:
             return ToolResult.failure(
                 "path_outside_workspace", "Personal data is outside the workspace."
